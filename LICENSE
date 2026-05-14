@@ -1,13 +1,3 @@
-A few important notes before I provide this:
-
-1. **You cannot legally modify the GPL text and still call it "the GPL"** — the license itself prohibits that. What you're creating is a new custom license inspired by GPL.
-2. This resulting license will **not be OSI-certified open source** or FSF-approved free software, since those definitions prohibit discrimination against specific users/groups.
-3. The new license is incompatible with the actual GPL v3, meaning GPL-licensed code cannot be incorporated into projects using this license.
-
-This is similar to other "ethical source" licenses (Hippocratic License, Anti-Capitalist Software License, etc.). Here's the modified license:
-
----
-
 ```
               RESTRICTED USE GENERAL PUBLIC LICENSE (RUGPL)
                 Based on the GNU General Public License v3
