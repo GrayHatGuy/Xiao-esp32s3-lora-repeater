@@ -62,6 +62,12 @@ bool WioSX1262::begin()
         return false;
     }
 
+    Serial.printf("[%s] ready — %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x%02X\n",
+                  _name,
+                  LORA_FREQUENCY, LORA_BANDWIDTH,
+                  LORA_SPREAD_FACTOR, LORA_CODING_RATE,
+                  LORA_TX_POWER, LORA_SYNC_WORD);
+
     // DIO2 drives the Wio SX1262 module's internal RF switch.
     _radio->setDio2AsRfSwitch(true);
 

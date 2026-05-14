@@ -99,12 +99,17 @@ void radio1Task(void *pvParameters)
             int16_t state = radio1->read(buf, len, &rssi, &snr);
 
             if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[R1→R2] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              (unsigned)len, rssi, snr);
+                Serial.printf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                              millis(), (unsigned)len, rssi, snr);
+
+                Serial.printf("[%8lu ms][R1→R2 TX] sending %u bytes\n",
+                              millis(), (unsigned)len);
 
                 int16_t txState = radio2->transmit(buf, len);
-                if (txState != RADIOLIB_ERR_NONE) {
-                    Serial.printf("[R1→R2] TX error %d\n", txState);
+                if (txState == RADIOLIB_ERR_NONE) {
+                    Serial.printf("[%8lu ms][R1→R2 TX] OK\n", millis());
+                } else {
+                    Serial.printf("[%8lu ms][R1→R2 TX] ERROR %d\n", millis(), txState);
                 }
 
                 // RadioLib exits RX mode on packet receipt;
@@ -112,7 +117,7 @@ void radio1Task(void *pvParameters)
                 radio1->startReceive();
 
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[R1] RX error %d\n", state);
+                Serial.printf("[%8lu ms][R1 RX] ERROR %d\n", millis(), state);
                 radio1->startReceive();
             }
         }
@@ -137,18 +142,23 @@ void radio2Task(void *pvParameters)
             int16_t state = radio2->read(buf, len, &rssi, &snr);
 
             if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[R2→R1] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              (unsigned)len, rssi, snr);
+                Serial.printf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                              millis(), (unsigned)len, rssi, snr);
+
+                Serial.printf("[%8lu ms][R2→R1 TX] sending %u bytes\n",
+                              millis(), (unsigned)len);
 
                 int16_t txState = radio1->transmit(buf, len);
-                if (txState != RADIOLIB_ERR_NONE) {
-                    Serial.printf("[R2→R1] TX error %d\n", txState);
+                if (txState == RADIOLIB_ERR_NONE) {
+                    Serial.printf("[%8lu ms][R2→R1 TX] OK\n", millis());
+                } else {
+                    Serial.printf("[%8lu ms][R2→R1 TX] ERROR %d\n", millis(), txState);
                 }
 
                 radio2->startReceive();
 
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[R2] RX error %d\n", state);
+                Serial.printf("[%8lu ms][R2 RX] ERROR %d\n", millis(), state);
                 radio2->startReceive();
             }
         }
