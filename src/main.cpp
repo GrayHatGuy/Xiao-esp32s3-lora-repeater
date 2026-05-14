@@ -26,6 +26,80 @@
 #include <SPI.h>
 #include "WioSX1262.h"
 
+// Per-radio LoRa settings — fall back to the generic LORA_* defaults
+// from WioSX1262.h for any value not defined in platformio.ini.
+#ifndef LORA_RADIO1_FREQUENCY
+  #define LORA_RADIO1_FREQUENCY    LORA_FREQUENCY
+#endif
+#ifndef LORA_RADIO1_BANDWIDTH
+  #define LORA_RADIO1_BANDWIDTH    LORA_BANDWIDTH
+#endif
+#ifndef LORA_RADIO1_SPREAD_FACTOR
+  #define LORA_RADIO1_SPREAD_FACTOR LORA_SPREAD_FACTOR
+#endif
+#ifndef LORA_RADIO1_CODING_RATE
+  #define LORA_RADIO1_CODING_RATE  LORA_CODING_RATE
+#endif
+#ifndef LORA_RADIO1_SYNC_WORD
+  #define LORA_RADIO1_SYNC_WORD    LORA_SYNC_WORD
+#endif
+#ifndef LORA_RADIO1_TX_POWER
+  #define LORA_RADIO1_TX_POWER     LORA_TX_POWER
+#endif
+#ifndef LORA_RADIO1_PREAMBLE_LEN
+  #define LORA_RADIO1_PREAMBLE_LEN LORA_PREAMBLE_LEN
+#endif
+#ifndef LORA_RADIO1_TCXO_VOLTAGE
+  #define LORA_RADIO1_TCXO_VOLTAGE LORA_TCXO_VOLTAGE
+#endif
+
+#ifndef LORA_RADIO2_FREQUENCY
+  #define LORA_RADIO2_FREQUENCY    LORA_FREQUENCY
+#endif
+#ifndef LORA_RADIO2_BANDWIDTH
+  #define LORA_RADIO2_BANDWIDTH    LORA_BANDWIDTH
+#endif
+#ifndef LORA_RADIO2_SPREAD_FACTOR
+  #define LORA_RADIO2_SPREAD_FACTOR LORA_SPREAD_FACTOR
+#endif
+#ifndef LORA_RADIO2_CODING_RATE
+  #define LORA_RADIO2_CODING_RATE  LORA_CODING_RATE
+#endif
+#ifndef LORA_RADIO2_SYNC_WORD
+  #define LORA_RADIO2_SYNC_WORD    LORA_SYNC_WORD
+#endif
+#ifndef LORA_RADIO2_TX_POWER
+  #define LORA_RADIO2_TX_POWER     LORA_TX_POWER
+#endif
+#ifndef LORA_RADIO2_PREAMBLE_LEN
+  #define LORA_RADIO2_PREAMBLE_LEN LORA_PREAMBLE_LEN
+#endif
+#ifndef LORA_RADIO2_TCXO_VOLTAGE
+  #define LORA_RADIO2_TCXO_VOLTAGE LORA_TCXO_VOLTAGE
+#endif
+
+static const LoraConfig radio1Config = {
+    LORA_RADIO1_FREQUENCY,
+    LORA_RADIO1_BANDWIDTH,
+    LORA_RADIO1_SPREAD_FACTOR,
+    LORA_RADIO1_CODING_RATE,
+    LORA_RADIO1_SYNC_WORD,
+    LORA_RADIO1_TX_POWER,
+    LORA_RADIO1_PREAMBLE_LEN,
+    LORA_RADIO1_TCXO_VOLTAGE
+};
+
+static const LoraConfig radio2Config = {
+    LORA_RADIO2_FREQUENCY,
+    LORA_RADIO2_BANDWIDTH,
+    LORA_RADIO2_SPREAD_FACTOR,
+    LORA_RADIO2_CODING_RATE,
+    LORA_RADIO2_SYNC_WORD,
+    LORA_RADIO2_TX_POWER,
+    LORA_RADIO2_PREAMBLE_LEN,
+    LORA_RADIO2_TCXO_VOLTAGE
+};
+
 // ============================================================
 //  Shared SPI bus
 //  XIAO ESP32S3 default SPI: SCK=GPIO7(D8), MOSI=GPIO9(D10),
@@ -35,7 +109,11 @@
 #define SPI_MOSI  9   // D10
 #define SPI_MISO  8   // D9
 
-SPIClass spi(HSPI);
+// Use the board-level SPI object so XIAO's variant pin mapping is
+// already in effect.  A separate SPIClass(HSPI) instance re-enters
+// spi_bus_initialize with default ESP32-S3 pins until begin() is
+// called, introducing a window where both MOSI/MISO are wrong.
+#define spi SPI
 
 // ============================================================
 //  Radio 1 — Wio SX1262 via 40-pin B2B header
@@ -49,14 +127,14 @@ SPIClass spi(HSPI);
 
 // ============================================================
 //  Radio 2 — Wio SX1262 via perimeter (edge) header pins
-//  Adjust if D0–D3 are needed elsewhere in your project.
+//  Pin order on module left side (top → bottom): D0, DIO1, RST, BUSY, NSS, RF_SW
+//  XIAO ESP32S3: D0=GPIO1, D1=GPIO2, D2=GPIO3, D3=GPIO4, D4=GPIO5, D5=GPIO6
 // ============================================================
-#define R2_NSS      4   // SPI chip-select  (D3 / GPIO4)
+#define R2_NSS      5   // SPI chip-select  (D4 / GPIO5)
 #define R2_DIO1     2   // IRQ              (D1 / GPIO2)
 #define R2_RESET    3   // Reset            (D2 / GPIO3)
-#define R2_BUSY     1   // Busy             (D0 / GPIO1)
-//  No dedicated antenna-switch on the standalone shield:
-#define R2_ANT_SW  -1
+#define R2_BUSY     4   // Busy             (D3 / GPIO4)
+#define R2_ANT_SW   6   // RF switch        (D5 / GPIO6)
 
 // ============================================================
 //  FreeRTOS configuration
@@ -185,18 +263,80 @@ void setup()
 
     // Construct radio objects now the mutex and SPI bus are ready
     radio1 = new WioSX1262(R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
-                            R1_ANT_SW, spi, spiMutex, "Radio1-B2B");
+                            R1_ANT_SW, spi, spiMutex, "Radio1-B2B", radio1Config);
 
     radio2 = new WioSX1262(R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
-                            R2_ANT_SW, spi, spiMutex, "Radio2-Edge");
+                            R2_ANT_SW, spi, spiMutex, "Radio2-Edge", radio2Config);
+
+    // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
+    delay(150);
+
+    // Pre-flight: manually pulse each RESET and watch BUSY drain to LOW.
+    // If BUSY stays HIGH for 50 ms after reset that radio's module is absent
+    // or unpowered — wiring problem, not a software bug.
+    auto busyWait = [](int resetPin, int busyPin, const char *label) {
+        pinMode(resetPin, OUTPUT);
+        digitalWrite(resetPin, LOW);
+        delay(2);
+        digitalWrite(resetPin, HIGH);
+        uint32_t t0 = millis();
+        while (digitalRead(busyPin) && millis() - t0 < 50);
+        Serial.printf("[diag] %s  BUSY after reset = %d  (%lu ms)  %s\n",
+                      label, digitalRead(busyPin), millis() - t0,
+                      digitalRead(busyPin) ? "STUCK-HIGH -> module absent/unpowered!" : "OK");
+    };
+    busyWait(R1_RESET, R1_BUSY, "R1");
+    busyWait(R2_RESET, R2_BUSY, "R2");
+
+    // Raw SPI probe on R1: send SX1262 GetStatus opcode (0xC0) and read
+    // the response byte.  This bypasses RadioLib entirely so we can see
+    // what MISO actually carries.
+    //   0x00 or 0xFF → MISO not connected to this chip
+    //   0x20..0x2E   → valid chip status byte (SPI path works)
+    {
+        SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+        digitalWrite(R1_NSS, LOW);
+        delayMicroseconds(2);
+        SPI.transfer(0xC0);           // GetStatus opcode
+        uint8_t r1Status = SPI.transfer(0x00);  // read status byte
+        digitalWrite(R1_NSS, HIGH);
+        SPI.endTransaction();
+        Serial.printf("[diag] R1 raw SPI GetStatus = 0x%02X  "
+                      "(0x00/0xFF = MISO open; 0x20-0x2E = chip alive)\n", r1Status);
+    }
+
+    // Raw ReadRegister 0x0320 — read 6 bytes of the version string.
+    // RadioLib's findChip() compares this to "SX1261".
+    // Format: opcode 0x1D + addr 0x0320 + 1 NOP + data bytes.
+    {
+        uint8_t ver[6] = {};
+        SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+        digitalWrite(R1_NSS, LOW);
+        delayMicroseconds(2);
+        SPI.transfer(0x1D);   // ReadRegister opcode
+        SPI.transfer(0x03);   // address MSB
+        SPI.transfer(0x20);   // address LSB
+        SPI.transfer(0x00);   // NOP transition byte (required before data)
+        for (int n = 0; n < 6; n++) { ver[n] = SPI.transfer(0x00); }
+        digitalWrite(R1_NSS, HIGH);
+        SPI.endTransaction();
+        Serial.printf("[diag] R1 reg 0x0320 raw: "
+                      "%02X %02X %02X %02X %02X %02X  = '%.6s'\n",
+                      ver[0], ver[1], ver[2], ver[3], ver[4], ver[5],
+                      (char*)ver);
+        Serial.printf("[diag] RadioLib expects '%.6s' at 0x0320\n", "SX1261");
+    }
 
     // Initialise — applies all LORA_* settings from WioSX1262.h
     bool r1ok = radio1->begin();
     bool r2ok = radio2->begin();
 
-    if (!r1ok || !r2ok) {
-        Serial.println("\nFATAL: radio init failed. Check wiring. Halting.");
+    if (!r1ok) {
+        Serial.println("\nFATAL: Radio1 init failed. Check wiring. Halting.");
         while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    if (!r2ok) {
+        Serial.println("\n[WARN] Radio2 init failed — running Radio1 only.\n");
     }
 
     // Start both radios listening

@@ -4,7 +4,7 @@
 #include <SPI.h>
 #include <RadioLib.h>
 
-// LoRa RF defaults — override any via platformio.ini build_flags
+// Global defaults — used as fallbacks in main.cpp for any per-radio value not explicitly set
 #ifndef LORA_FREQUENCY
   #define LORA_FREQUENCY     915.0f
 #endif
@@ -33,11 +33,22 @@
   #define LORA_MAX_PACKET    256
 #endif
 
+struct LoraConfig {
+    float    frequency;
+    float    bandwidth;
+    uint8_t  spreadFactor;
+    uint8_t  codingRate;
+    uint8_t  syncWord;
+    int8_t   txPower;
+    uint16_t preambleLen;
+    float    tcxoVoltage;
+};
+
 class WioSX1262 {
 public:
     WioSX1262(int nss, int dio1, int reset, int busy,
               int antSw, SPIClass &spi, SemaphoreHandle_t mutex,
-              const char *name);
+              const char *name, const LoraConfig &config);
     ~WioSX1262();
 
     bool    begin();
@@ -55,6 +66,7 @@ private:
     SemaphoreHandle_t _mutex;
     int               _antSw;
     const char       *_name;
+    LoraConfig        _config;
 
     void _setAnt(bool tx);
 };

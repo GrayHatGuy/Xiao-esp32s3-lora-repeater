@@ -14,10 +14,15 @@ static void (* const _isrs[2])() = { _isr0, _isr1 };
 
 WioSX1262::WioSX1262(int nss, int dio1, int reset, int busy,
                      int antSw, SPIClass &spi, SemaphoreHandle_t mutex,
-                     const char *name)
-    : _mutex(mutex), _antSw(antSw), _name(name)
+                     const char *name, const LoraConfig &config)
+    : _mutex(mutex), _antSw(antSw), _name(name), _config(config)
 {
-    _mod   = new Module(nss, dio1, reset, busy, spi);
+    // Deassert CS immediately so this chip doesn't corrupt the bus
+    // while the other radio's begin() runs its SPI init sequence.
+    pinMode(nss, OUTPUT);
+    digitalWrite(nss, HIGH);
+
+    _mod   = new Module(nss, dio1, reset, busy, spi, SPISettings(1000000, MSBFIRST, SPI_MODE0));
     _radio = new SX1262(_mod);
     if (_instCount < 2) {
         _inst[_instCount++] = this;
@@ -46,14 +51,14 @@ bool WioSX1262::begin()
     xSemaphoreTake(_mutex, portMAX_DELAY);
 
     int16_t state = _radio->begin(
-        LORA_FREQUENCY,
-        LORA_BANDWIDTH,
-        LORA_SPREAD_FACTOR,
-        LORA_CODING_RATE,
-        LORA_SYNC_WORD,
-        LORA_TX_POWER,
-        LORA_PREAMBLE_LEN,
-        LORA_TCXO_VOLTAGE
+        _config.frequency,
+        _config.bandwidth,
+        _config.spreadFactor,
+        _config.codingRate,
+        _config.syncWord,
+        _config.txPower,
+        _config.preambleLen,
+        _config.tcxoVoltage
     );
 
     if (state != RADIOLIB_ERR_NONE) {
@@ -64,9 +69,9 @@ bool WioSX1262::begin()
 
     Serial.printf("[%s] ready — %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x%02X\n",
                   _name,
-                  LORA_FREQUENCY, LORA_BANDWIDTH,
-                  LORA_SPREAD_FACTOR, LORA_CODING_RATE,
-                  LORA_TX_POWER, LORA_SYNC_WORD);
+                  _config.frequency, _config.bandwidth,
+                  _config.spreadFactor, _config.codingRate,
+                  _config.txPower, _config.syncWord);
 
     // DIO2 drives the Wio SX1262 module's internal RF switch.
     _radio->setDio2AsRfSwitch(true);
