@@ -25,7 +25,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include "WioSX1262.h"
-
+#include "MeshDecoderDebug.h"
 // Per-radio LoRa settings — fall back to the generic LORA_* defaults
 // from WioSX1262.h for any value not defined in platformio.ini.
 #ifndef LORA_RADIO1_FREQUENCY
@@ -185,7 +185,8 @@ void radio1Task(void *pvParameters)
 
                 Serial.printf("[%8lu ms][R1→R2 TX] sending %u bytes\n",
                               millis(), (unsigned)len);
-
+                MeshDecoderDebug::print(buf, len,
+                    LORA_RADIO1_SYNC_WORD, "R1");    
                 int16_t txState = radio2->transmit(buf, len);
                 if (txState == RADIOLIB_ERR_NONE) {
                     Serial.printf("[%8lu ms][R1→R2 TX] OK\n", millis());
@@ -231,7 +232,8 @@ void radio2Task(void *pvParameters)
 
                 Serial.printf("[%8lu ms][R2→R1 TX] sending %u bytes\n",
                               millis(), (unsigned)len);
-
+                MeshDecoderDebug::print(buf, len,
+                    LORA_RADIO2_SYNC_WORD, "R2");
                 int16_t txState = radio1->transmit(buf, len);
                 if (txState == RADIOLIB_ERR_NONE) {
                     Serial.printf("[%8lu ms][R2→R1 TX] OK\n", millis());
