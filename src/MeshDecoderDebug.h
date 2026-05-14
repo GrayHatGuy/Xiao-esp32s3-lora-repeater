@@ -38,6 +38,60 @@ static const uint8_t MESHCORE_PUBLIC_KEY[16] = {
 };
 static constexpr uint8_t MESHCORE_PUBLIC_CHANNEL_HASH = 0x11;
 
+// --- Meshtastic default channel ---------------------------------------------
+// AES-128 key for the Meshtastic default LongFast channel ("AQ==").
+// Derivation (firmware: CryptoEngine::setKey + defaultpsk):
+//   defaultpsk = d4 f1 bb 3a 20 29 07 59 f0 bc ff ab cf 4e 69 01
+//   short PSK 0x01 from "AQ==" replaces the last byte, which is already 0x01,
+//   so the expanded key equals defaultpsk verbatim.
+//   Equivalently the base64 string "1PG7OiApB1nwvP+rz05pAQ==".
+static const uint8_t MESHTASTIC_DEFAULT_KEY[16] = {
+    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
+    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
+};
+
+// Meshtastic PortNum values we name in output; everything else prints as "?".
+static const char *meshtasticPortName(uint32_t n) {
+    switch (n) {
+        case 1:  return "TEXT_MESSAGE_APP";
+        case 3:  return "POSITION_APP";
+        case 4:  return "NODEINFO_APP";
+        case 5:  return "ROUTING_APP";
+        case 6:  return "ADMIN_APP";
+        case 67: return "TELEMETRY_APP";
+        case 70: return "AUDIO_APP";
+        case 71: return "TRACEROUTE_APP";
+        default: return "?";
+    }
+}
+
+// --- Minimal protobuf varint walker (only what Meshtastic Data needs) -------
+static inline bool pbVarint(const uint8_t *b, size_t n, size_t &p, uint64_t &v) {
+    v = 0;
+    int shift = 0;
+    while (p < n) {
+        uint8_t byte = b[p++];
+        v |= (uint64_t)(byte & 0x7F) << shift;
+        if (!(byte & 0x80)) return true;
+        shift += 7;
+        if (shift >= 64) return false;   // varint too long, malformed
+    }
+    return false;
+}
+
+static inline bool pbSkip(const uint8_t *b, size_t n, size_t &p, int wt) {
+    uint64_t v;
+    switch (wt) {
+        case 0:  return pbVarint(b, n, p, v);                       // varint
+        case 1:  if (p + 8 > n) return false; p += 8; return true;  // 64-bit
+        case 2:                                                     // length-delim
+            if (!pbVarint(b, n, p, v) || p + v > n) return false;
+            p += (size_t)v; return true;
+        case 5:  if (p + 4 > n) return false; p += 4; return true;  // 32-bit
+        default: return false;                                       // unknown
+    }
+}
+
 
 // --- MeshCore public-channel GRP_TXT decoder --------------------------------
 // Returns true iff a public-channel GRP_TXT was decoded and printed.
@@ -128,27 +182,120 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
 }
 
 
-// --- Meshtastic decoder (stub: header parse only) ---------------------------
-// AES-CTR decryption + protobuf parsing are TODO. For now, emit the
-// 16-byte transport header so you can see who's talking on the mesh.
+// --- Meshtastic decoder -----------------------------------------------------
+// Header (16 B):
+//   [dest:4 LE][src:4 LE][packet_id:4 LE][flags:1][channel_hash:1]
+//   [next_hop:1][relay_node:1]
+// Body: AES-128-CTR ciphertext, encrypting a protobuf-encoded Data message.
+// Nonce: [packet_id:4 LE][00 00 00 00][src:4 LE][00 00 00 00].
+// We try the default LongFast channel key. If the channel_hash doesn't match
+// the LongFast hash 0x08 the plaintext will be garbage; the protobuf walker
+// will simply fail and we'll print "(no decodable protobuf)".
 inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
-    if (len < 16) return false;
+    if (len < 17) return false;   // 16-byte header + at least 1 byte ciphertext
+
     uint32_t dest = (uint32_t)buf[0]  | ((uint32_t)buf[1]  << 8)
                   | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
     uint32_t src  = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                   | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
     uint32_t pid  = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
                   | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
-    uint8_t flags        = buf[12];
-    uint8_t channelHash  = buf[13];
+    uint8_t flags       = buf[12];
+    uint8_t channelHash = buf[13];
+    uint8_t nextHop     = buf[14];
+    uint8_t relayNode   = buf[15];
+
+    const uint8_t *ct = buf + 16;
+    size_t ctLen      = len - 16;
+
     Serial.printf("[%8lu ms][%s decoded] Meshtastic "
                   "src=0x%08lX dest=0x%08lX id=0x%08lX "
-                  "flags=0x%02X ch=0x%02X payload=%u B "
-                  "(crypto/protobuf TODO)\n",
+                  "flags=0x%02X ch=0x%02X next=0x%02X relay=0x%02X ct=%u B\n",
                   millis(), tag,
-                  (unsigned long)src, (unsigned long)dest,
-                  (unsigned long)pid, flags, channelHash,
-                  (unsigned)(len - 16));
+                  (unsigned long)src, (unsigned long)dest, (unsigned long)pid,
+                  flags, channelHash, nextHop, relayNode, (unsigned)ctLen);
+
+    if (ctLen > 240) {
+        Serial.printf("[%8lu ms][%s decoded] ciphertext too long, skip\n",
+                      millis(), tag);
+        return true;
+    }
+
+    // Build AES-CTR initial counter block.
+    uint8_t nonce[16] = {
+        (uint8_t)(pid >>  0), (uint8_t)(pid >>  8),
+        (uint8_t)(pid >> 16), (uint8_t)(pid >> 24),
+        0, 0, 0, 0,
+        (uint8_t)(src >>  0), (uint8_t)(src >>  8),
+        (uint8_t)(src >> 16), (uint8_t)(src >> 24),
+        0, 0, 0, 0
+    };
+
+    // AES-128-CTR: setkey_enc is correct here — CTR encrypts the counter,
+    // XORs against data, so decrypt and encrypt use the same direction.
+    uint8_t pt[240];
+    {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        uint8_t stream[16] = {};
+        size_t  nc_off = 0;
+        mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
+        mbedtls_aes_free(&aes);
+    }
+
+    // Walk the protobuf Data message — just field 1 (portnum, varint) and
+    // field 2 (payload, length-delimited bytes). Skip unknown fields.
+    size_t   pos          = 0;
+    bool     gotPortnum   = false;
+    uint32_t portnum      = 0;
+    const uint8_t *payload = nullptr;
+    size_t   payloadLen   = 0;
+    bool     parseOk      = true;
+
+    while (pos < ctLen) {
+        uint64_t tagv;
+        if (!pbVarint(pt, ctLen, pos, tagv)) { parseOk = false; break; }
+        int fieldNum = (int)(tagv >> 3);
+        int wireType = (int)(tagv & 0x07);
+
+        if (fieldNum == 1 && wireType == 0) {
+            uint64_t v;
+            if (!pbVarint(pt, ctLen, pos, v)) { parseOk = false; break; }
+            portnum    = (uint32_t)v;
+            gotPortnum = true;
+        } else if (fieldNum == 2 && wireType == 2) {
+            uint64_t plen;
+            if (!pbVarint(pt, ctLen, pos, plen) || pos + plen > ctLen) {
+                parseOk = false; break;
+            }
+            payload    = pt + pos;
+            payloadLen = (size_t)plen;
+            pos       += payloadLen;
+        } else {
+            if (!pbSkip(pt, ctLen, pos, wireType)) { parseOk = false; break; }
+        }
+    }
+
+    if (!parseOk && !gotPortnum) {
+        Serial.printf("[%8lu ms][%s decoded] (no decodable protobuf — "
+                      "wrong key/channel?)\n", millis(), tag);
+        return true;
+    }
+
+    Serial.printf("[%8lu ms][%s decoded] portnum=%lu(%s) payload=%u B\n",
+                  millis(), tag,
+                  (unsigned long)portnum, meshtasticPortName(portnum),
+                  (unsigned)payloadLen);
+
+    if (portnum == 1 /*TEXT_MESSAGE_APP*/ && payload && payloadLen > 0) {
+        Serial.printf("[%8lu ms][%s decoded] text: \"", millis(), tag);
+        for (size_t i = 0; i < payloadLen; i++) {
+            uint8_t c = payload[i];
+            Serial.write((c >= 0x20 && c < 0x7F) ? c : '?');
+        }
+        Serial.println("\"");
+    }
     return true;
 }
 
