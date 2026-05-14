@@ -179,6 +179,9 @@ void radio1Task(void *pvParameters)
             if (state == RADIOLIB_ERR_NONE && len > 0) {
                 Serial.printf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
+                Serial.printf("[%8lu ms][R1 RX] data: ", millis());
+                for (size_t i = 0; i < len; i++) { Serial.printf("%02X ", buf[i]); }
+                Serial.println();
 
                 Serial.printf("[%8lu ms][R1→R2 TX] sending %u bytes\n",
                               millis(), (unsigned)len);
@@ -222,6 +225,9 @@ void radio2Task(void *pvParameters)
             if (state == RADIOLIB_ERR_NONE && len > 0) {
                 Serial.printf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
+                Serial.printf("[%8lu ms][R2 RX] data: ", millis());
+                for (size_t i = 0; i < len; i++) { Serial.printf("%02X ", buf[i]); }
+                Serial.println();
 
                 Serial.printf("[%8lu ms][R2→R1 TX] sending %u bytes\n",
                               millis(), (unsigned)len);
