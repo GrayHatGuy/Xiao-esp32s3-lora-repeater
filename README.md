@@ -5,6 +5,7 @@ Xiao esp32s3 with dual SX1262 radio SPI crossband repeater.
 # Parts
 - [Xiao esp32s3 with B2B 40 pin Wio sx1262 shield](https://www.seeedstudio.com/Wio-SX1262-with-XIAO-ESP32S3-p-5982.html)
 - [Wio sx1262 edge pin shield](https://www.seeedstudio.com/Wio-SX1262-for-XIAO-p-6379.html)
+
 *some assembly required*
 
 # Instructions 
