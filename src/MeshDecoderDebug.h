@@ -49,6 +49,9 @@ static const uint8_t MESHTASTIC_DEFAULT_KEY[16] = {
     0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
     0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
 };
+// XOR of the channel name "LongFast" with each byte of MESHTASTIC_DEFAULT_KEY.
+// Used as a coarse gate before attempting decryption with the default key.
+static constexpr uint8_t MESHTASTIC_LONGFAST_CHANNEL_HASH = 0x08;
 
 // Meshtastic PortNum values we name in output; everything else prints as "?".
 static const char *meshtasticPortName(uint32_t n) {
@@ -296,6 +299,138 @@ inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
         }
         Serial.println("\"");
     }
+    return true;
+}
+
+
+// --- Body-only extractors (no Serial output) --------------------------------
+// Used by the cross-protocol bridge to re-encode text into the other protocol.
+// Each fills bodyOut with a null-terminated UTF-8 string (truncated if needed)
+// and returns true iff a text body was successfully extracted. Non-text
+// portnums, wrong-channel packets, and decrypt failures return false.
+
+inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
+                                char *bodyOut, size_t bodyOutCap) {
+    if (!bodyOut || bodyOutCap < 2) return false;
+    bodyOut[0] = 0;
+    if (len < 6) return false;
+
+    uint8_t header      = buf[0];
+    uint8_t version     = (header >> 6) & 0x03;
+    uint8_t payloadType = (header >> 2) & 0x0F;
+    uint8_t routeType   =  header       & 0x03;
+    if (version != 0)        return false;
+    if (payloadType != 0x05) return false;  // not GRP_TXT
+
+    size_t off = 1;
+    if (routeType == 0x00 || routeType == 0x03) {
+        if (len < off + 4) return false;
+        off += 4;
+    }
+    if (len < off + 1) return false;
+    uint8_t pathLen = buf[off++];
+    if (pathLen > 64 || len < off + pathLen) return false;
+    off += pathLen;
+
+    if (len < off + 3) return false;
+    uint8_t channelHash = buf[off];
+    const uint8_t *ct   = &buf[off + 3];
+    size_t ctLen        = len - (off + 3);
+
+    if (channelHash != MESHCORE_PUBLIC_CHANNEL_HASH) return false;
+    if (ctLen == 0 || (ctLen % 16) != 0 || ctLen > 224) return false;
+
+    uint8_t pt[224];
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_dec(&aes, MESHCORE_PUBLIC_KEY, 128);
+    for (size_t i = 0; i < ctLen; i += 16) {
+        mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, ct + i, pt + i);
+    }
+    mbedtls_aes_free(&aes);
+
+    if (ctLen < 6) return false;
+    size_t bodyMax = ctLen - 5;
+    size_t bodyLen = 0;
+    while (bodyLen < bodyMax && pt[5 + bodyLen] != 0) bodyLen++;
+    if (bodyLen == 0) return false;
+
+    size_t copyLen = (bodyLen < bodyOutCap - 1) ? bodyLen : bodyOutCap - 1;
+    memcpy(bodyOut, pt + 5, copyLen);
+    bodyOut[copyLen] = 0;
+    return true;
+}
+
+inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
+                                   char *bodyOut, size_t bodyOutCap) {
+    if (!bodyOut || bodyOutCap < 2) return false;
+    bodyOut[0] = 0;
+    if (len < 17) return false;
+
+    uint8_t channelHash = buf[13];
+    if (channelHash != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+
+    uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                 | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+    uint32_t pid = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
+                 | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
+
+    const uint8_t *ct = buf + 16;
+    size_t ctLen      = len - 16;
+    if (ctLen > 240) return false;
+
+    uint8_t nonce[16] = {
+        (uint8_t)(pid >>  0), (uint8_t)(pid >>  8),
+        (uint8_t)(pid >> 16), (uint8_t)(pid >> 24),
+        0, 0, 0, 0,
+        (uint8_t)(src >>  0), (uint8_t)(src >>  8),
+        (uint8_t)(src >> 16), (uint8_t)(src >> 24),
+        0, 0, 0, 0
+    };
+
+    uint8_t pt[240];
+    {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        uint8_t stream[16] = {};
+        size_t  nc_off = 0;
+        mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
+        mbedtls_aes_free(&aes);
+    }
+
+    size_t   pos        = 0;
+    uint32_t portnum    = 0;
+    const uint8_t *payload = nullptr;
+    size_t   payloadLen = 0;
+
+    while (pos < ctLen) {
+        uint64_t tagv;
+        if (!pbVarint(pt, ctLen, pos, tagv)) break;
+        int fieldNum = (int)(tagv >> 3);
+        int wireType = (int)(tagv & 0x07);
+
+        if (fieldNum == 1 && wireType == 0) {
+            uint64_t v;
+            if (!pbVarint(pt, ctLen, pos, v)) break;
+            portnum = (uint32_t)v;
+        } else if (fieldNum == 2 && wireType == 2) {
+            uint64_t plen;
+            if (!pbVarint(pt, ctLen, pos, plen) || pos + plen > ctLen) break;
+            payload    = pt + pos;
+            payloadLen = (size_t)plen;
+            pos       += payloadLen;
+        } else {
+            if (!pbSkip(pt, ctLen, pos, wireType)) break;
+        }
+    }
+
+    if (portnum != 1 /*TEXT_MESSAGE_APP*/ || !payload || payloadLen == 0)
+        return false;
+
+    size_t copyLen = (payloadLen < bodyOutCap - 1) ? payloadLen : bodyOutCap - 1;
+    memcpy(bodyOut, payload, copyLen);
+    bodyOut[copyLen] = 0;
     return true;
 }
 
