@@ -323,4 +323,16 @@ inline bool encodeMeshtasticNodeInfo(const char *id,
     return true;
 }
 
+// --- Reticulum / RNode encoder (NOT IMPLEMENTED) ---------------------------
+// Building a proper RNS packet (header byte, IFAC, hop count, destination
+// hash, context byte, encrypted payload framing) is non-trivial and not
+// done yet. Until it is, this stub always returns false, and the bridge
+// dispatcher in main.cpp treats "destination sync == 0x42" as a log-and-drop
+// path with the "No TX 2 RNS:" prefix rather than calling this function.
+inline bool encodeReticulum(const char * /*body*/,
+                             uint8_t * /*outBuf*/, size_t /*outBufCap*/,
+                             size_t  & /*outLen*/) {
+    return false;
+}
+
 }  // namespace MeshEncoderDebug

@@ -28,6 +28,7 @@ namespace MeshDecoderDebug {
 // --- Sync-word constants (match the platformio.ini build flags) -------------
 static constexpr uint8_t SYNC_WORD_MESHCORE   = 0x12;
 static constexpr uint8_t SYNC_WORD_MESHTASTIC = 0x2B;
+static constexpr uint8_t SYNC_WORD_RETICULUM  = 0x42;   // RNode / Reticulum Network Suite
 
 // --- MeshCore public channel ------------------------------------------------
 // AES-128 key for the default MeshCore public channel.
@@ -435,12 +436,49 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
 }
 
 
+// --- Reticulum / RNode raw decoder (stub) -----------------------------------
+// Reticulum's on-air framing (RNS packet header, addresses, hops, IFAC) is
+// not yet parsed. As an interim measure for cross-protocol bridging, the
+// "decoder" simply hex-encodes the raw LoRa payload so the bytes can ride
+// inside a Meshtastic or MeshCore text packet. A receiver can copy the hex
+// back into a proper RNS tool. Output is uppercase ASCII hex, no spaces.
+
+inline bool printReticulum(const uint8_t *buf, size_t len, const char *tag) {
+    if (len == 0) return false;
+    Serial.printf("[%8lu ms][%s decoded] Reticulum/RNode raw %u B: ",
+                  millis(), tag, (unsigned)len);
+    for (size_t i = 0; i < len; i++) Serial.printf("%02X", buf[i]);
+    Serial.println();
+    return true;
+}
+
+inline bool extractReticulumHex(const uint8_t *buf, size_t len,
+                                 char *bodyOut, size_t bodyOutCap) {
+    if (!bodyOut || bodyOutCap < 3) return false;
+    bodyOut[0] = 0;
+    if (len == 0) return false;
+
+    // Each input byte expands to two hex chars; leave 1 byte for the null.
+    static const char hex[] = "0123456789ABCDEF";
+    size_t maxBytes = (bodyOutCap - 1) / 2;
+    size_t n        = (len < maxBytes) ? len : maxBytes;
+    for (size_t i = 0; i < n; i++) {
+        bodyOut[2 * i    ] = hex[(buf[i] >> 4) & 0x0F];
+        bodyOut[2 * i + 1] = hex[ buf[i]       & 0x0F];
+    }
+    bodyOut[2 * n] = 0;
+    return true;
+}
+
+
 // --- Public entry point: dispatch by sync word ------------------------------
 inline void print(const uint8_t *buf, size_t len, uint8_t syncWord, const char *tag) {
     if (syncWord == SYNC_WORD_MESHCORE) {
         printMeshCore(buf, len, tag);
     } else if (syncWord == SYNC_WORD_MESHTASTIC) {
         printMeshtastic(buf, len, tag);
+    } else if (syncWord == SYNC_WORD_RETICULUM) {
+        printReticulum(buf, len, tag);
     }
     // Other sync words: silently ignore — we don't know that protocol.
 }

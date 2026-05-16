@@ -163,6 +163,112 @@ void radio1Task(void *pvParameters);
 void radio2Task(void *pvParameters);
 
 // ============================================================
+//  Cross-protocol bridge core
+//  ----------------------------------------------------------------
+//  One generic per-packet bridge step driven by the two radios' LoRa
+//  sync words. Supports three protocols today:
+//    0x12 MeshCore   <-> [MC] marker, body = decoded text
+//    0x2B Meshtastic <-> [MT] marker, body = decoded text
+//    0x42 Reticulum  <-> [rns] marker, body = uppercase hex of raw bytes
+//
+//  Behaviour:
+//    1. Decode source per srcSync. Bail silently if it isn't a recognised
+//       payload we know how to extract (e.g. non-text Meshtastic portnums,
+//       non-public-channel MeshCore packets).
+//    2. Drop if the body already starts with ANY of the three markers —
+//       that means the packet is one we (or another bridge) previously
+//       re-encoded and it's now looping back to us.
+//    3. Prepend the source marker so the destination side can recognise
+//       it as a bridged packet (and so step 2 catches the echo).
+//    4. If dstSync == 0x42 (Reticulum), log "No TX 2 RNS:" and drop — the
+//       RNS encoder is a TODO. Otherwise encode for the destination and
+//       transmit on dstRadio.
+// ============================================================
+static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
+                         WioSX1262 *dstRadio, const char *srcTag,
+                         const uint8_t *buf, size_t len)
+{
+    char body[256];
+    const char *srcMarker = nullptr;
+    bool        decoded   = false;
+
+    switch (srcSync) {
+        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
+            decoded = MeshDecoderDebug::extractMeshtasticBody(buf, len, body, sizeof(body));
+            srcMarker = "[MT]";
+            break;
+        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
+            decoded = MeshDecoderDebug::extractMeshCoreBody(buf, len, body, sizeof(body));
+            srcMarker = "[MC]";
+            break;
+        case MeshDecoderDebug::SYNC_WORD_RETICULUM:
+            decoded = MeshDecoderDebug::extractReticulumHex(buf, len, body, sizeof(body));
+            srcMarker = "[rns]";
+            break;
+        default:
+            return;
+    }
+    if (!decoded) return;
+
+    // Loop check — drop anything already carrying a bridge marker
+    if (strncmp(body, "[MT]",  4) == 0 ||
+        strncmp(body, "[MC]",  4) == 0 ||
+        strncmp(body, "[rns]", 5) == 0) {
+        Serial.printf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
+                      millis(), srcTag, body);
+        return;
+    }
+
+    char marked[280];
+    snprintf(marked, sizeof(marked), "%s %s", srcMarker, body);
+
+    // Destination is Reticulum — log and drop. No RNS encoder yet.
+    if (dstSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+        Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
+                      millis(), srcTag, marked);
+        return;
+    }
+
+    uint8_t outPkt[256];
+    size_t  outLen  = 0;
+    bool    encoded = false;
+    const char *dstName = "?";
+    switch (dstSync) {
+        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
+            encoded = MeshEncoderDebug::encodeMeshtasticText(
+                          marked, outPkt, sizeof(outPkt), outLen);
+            dstName = "MT";
+            break;
+        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
+            encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
+                          marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+            dstName = "MC";
+            break;
+        default:
+            Serial.printf("[%8lu ms][%s bridge] unknown dst sync 0x%02X — drop\n",
+                          millis(), srcTag, dstSync);
+            return;
+    }
+
+    if (!encoded) {
+        Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
+                      millis(), srcTag, dstName);
+        return;
+    }
+
+    Serial.printf("[%8lu ms][%s->%s bridge] re-encoded %u B: \"%s\"\n",
+                  millis(), srcTag, dstName, (unsigned)outLen, marked);
+    int16_t txState = dstRadio->transmit(outPkt, outLen);
+    if (txState == RADIOLIB_ERR_NONE) {
+        Serial.printf("[%8lu ms][%s->%s bridge] TX OK\n",
+                      millis(), srcTag, dstName);
+    } else {
+        Serial.printf("[%8lu ms][%s->%s bridge] TX ERROR %d\n",
+                      millis(), srcTag, dstName, txState);
+    }
+}
+
+// ============================================================
 //  FreeRTOS task: Radio1 RX → Radio2 TX
 // ============================================================
 void radio1Task(void *pvParameters)
@@ -172,10 +278,14 @@ void radio1Task(void *pvParameters)
     // First Meshtastic NodeInfo goes out ~10 s after task start, then every
     // 5 min. Without this, Meshtastic clients tend to hide text messages from
     // a node they've never seen NodeInfo for, so the bridge appears silent.
+    // The guard on the sync word keeps the broadcast silent if R1 is ever
+    // reconfigured to a non-Meshtastic protocol (it's a compile-time check,
+    // so unused code drops out of the binary).
     uint32_t nextNodeInfoMs = millis() + 10000;
 
     for (;;) {
-        if ((int32_t)(millis() - nextNodeInfoMs) >= 0) {
+        if (LORA_RADIO1_SYNC_WORD == MeshDecoderDebug::SYNC_WORD_MESHTASTIC &&
+            (int32_t)(millis() - nextNodeInfoMs) >= 0) {
             uint8_t niPkt[256];
             size_t  niLen = 0;
             if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
@@ -216,41 +326,8 @@ void radio1Task(void *pvParameters)
                 MeshDecoderDebug::print(buf, len,
                     LORA_RADIO1_SYNC_WORD, "R1");
 
-                // Cross-protocol bridge: MT text -> MC GRP_TXT, on radio2.
-                // - Extract the Meshtastic text body.
-                // - If it already carries the "[MC]" marker it's our own
-                //   bridged-from-MC packet looping back: drop.
-                // - Otherwise prepend "[MT] ", re-encode for MC, transmit.
-                char body[224];
-                if (MeshDecoderDebug::extractMeshtasticBody(
-                        buf, len, body, sizeof(body))) {
-                    if (strncmp(body, "[MC]", 4) == 0) {
-                        Serial.printf("[%8lu ms][R1->R2 bridge] loop-drop: \"%s\"\n",
-                                      millis(), body);
-                    } else {
-                        char marked[240];
-                        snprintf(marked, sizeof(marked), "[MT] %s", body);
-                        uint8_t outPkt[256];
-                        size_t  outLen = 0;
-                        if (MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                                marked, /*ts=*/0,
-                                outPkt, sizeof(outPkt), outLen)) {
-                            Serial.printf("[%8lu ms][R1->R2 bridge] re-encoded MC %u B: \"%s\"\n",
-                                          millis(), (unsigned)outLen, marked);
-                            int16_t txState = radio2->transmit(outPkt, outLen);
-                            if (txState == RADIOLIB_ERR_NONE) {
-                                Serial.printf("[%8lu ms][R1->R2 bridge] TX OK\n",
-                                              millis());
-                            } else {
-                                Serial.printf("[%8lu ms][R1->R2 bridge] TX ERROR %d\n",
-                                              millis(), txState);
-                            }
-                        } else {
-                            Serial.printf("[%8lu ms][R1->R2 bridge] encode failed (body too long?)\n",
-                                          millis());
-                        }
-                    }
-                }
+                bridgePacket(LORA_RADIO1_SYNC_WORD, LORA_RADIO2_SYNC_WORD,
+                             radio2, "R1", buf, len);
 
                 // RadioLib exits RX mode on packet receipt;
                 // restore it before polling again.
@@ -291,38 +368,8 @@ void radio2Task(void *pvParameters)
                 MeshDecoderDebug::print(buf, len,
                     LORA_RADIO2_SYNC_WORD, "R2");
 
-                // Cross-protocol bridge: MC text -> MT TEXT_MESSAGE_APP, on radio1.
-                // Drop packets whose body already carries the "[MT]" marker
-                // (our own bridged-from-MT packet looping back).
-                char body[224];
-                if (MeshDecoderDebug::extractMeshCoreBody(
-                        buf, len, body, sizeof(body))) {
-                    if (strncmp(body, "[MT]", 4) == 0) {
-                        Serial.printf("[%8lu ms][R2->R1 bridge] loop-drop: \"%s\"\n",
-                                      millis(), body);
-                    } else {
-                        char marked[240];
-                        snprintf(marked, sizeof(marked), "[MC] %s", body);
-                        uint8_t outPkt[256];
-                        size_t  outLen = 0;
-                        if (MeshEncoderDebug::encodeMeshtasticText(
-                                marked, outPkt, sizeof(outPkt), outLen)) {
-                            Serial.printf("[%8lu ms][R2->R1 bridge] re-encoded MT %u B: \"%s\"\n",
-                                          millis(), (unsigned)outLen, marked);
-                            int16_t txState = radio1->transmit(outPkt, outLen);
-                            if (txState == RADIOLIB_ERR_NONE) {
-                                Serial.printf("[%8lu ms][R2->R1 bridge] TX OK\n",
-                                              millis());
-                            } else {
-                                Serial.printf("[%8lu ms][R2->R1 bridge] TX ERROR %d\n",
-                                              millis(), txState);
-                            }
-                        } else {
-                            Serial.printf("[%8lu ms][R2->R1 bridge] encode failed (body too long?)\n",
-                                          millis());
-                        }
-                    }
-                }
+                bridgePacket(LORA_RADIO2_SYNC_WORD, LORA_RADIO1_SYNC_WORD,
+                             radio1, "R2", buf, len);
 
                 radio2->startReceive();
 
