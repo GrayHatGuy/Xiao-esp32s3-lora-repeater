@@ -22,6 +22,7 @@
 #include <string.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/md.h>
+#include <mbedtls/base64.h>
 
 namespace MeshDecoderDebug {
 
@@ -439,35 +440,85 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
 // --- Reticulum / RNode raw decoder (stub) -----------------------------------
 // Reticulum's on-air framing (RNS packet header, addresses, hops, IFAC) is
 // not yet parsed. As an interim measure for cross-protocol bridging, the
-// "decoder" simply hex-encodes the raw LoRa payload so the bytes can ride
-// inside a Meshtastic or MeshCore text packet. A receiver can copy the hex
-// back into a proper RNS tool. Output is uppercase ASCII hex, no spaces.
+// "decoder" simply base64-encodes the raw LoRa payload so the bytes can ride
+// inside a Meshtastic or MeshCore text packet. base64 (≈1.33x expansion) is
+// preferred over hex (2x expansion) so a single RNS announce typically fits
+// in one MT/MC packet without fragmentation; the bridge in main.cpp adds
+// fragmentation for the rare cases that don't fit.
+
+// CRC-16/CCITT (poly 0x1021, init 0xFFFF). The low byte is used as a per-
+// source-frame sequence ID so concurrent fragmented bridges can be
+// disambiguated by the receiving side.
+static inline uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
+                                  : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
 
 inline bool printReticulum(const uint8_t *buf, size_t len, const char *tag) {
     if (len == 0) return false;
-    Serial.printf("[%8lu ms][%s decoded] Reticulum/RNode raw %u B: ",
-                  millis(), tag, (unsigned)len);
-    for (size_t i = 0; i < len; i++) Serial.printf("%02X", buf[i]);
+    // base64 expansion is at most ceil(N/3)*4 ≈ 1.34*N + small. Cap the
+    // scratch buffer; if a frame is larger than what fits, truncate the
+    // diagnostic dump (the bridge handles the full frame separately).
+    static const size_t MAX_DUMP = 1024;
+    unsigned char b64[MAX_DUMP];
+    size_t b64Len = 0;
+    int rc = mbedtls_base64_encode(b64, sizeof(b64), &b64Len, buf, len);
+    Serial.printf("[%8lu ms][%s decoded] Reticulum/RNode raw %u B (b64=%u%s): ",
+                  millis(), tag, (unsigned)len, (unsigned)b64Len,
+                  rc == 0 ? "" : ",TRUNCATED");
+    for (size_t i = 0; i < b64Len; i++) Serial.write((char)b64[i]);
     Serial.println();
     return true;
 }
 
-inline bool extractReticulumHex(const uint8_t *buf, size_t len,
-                                 char *bodyOut, size_t bodyOutCap) {
-    if (!bodyOut || bodyOutCap < 3) return false;
+// Caller-buffer base64 of the raw RNS bytes. Useful as a low-level helper
+// (not used by the fragmenting bridge in main.cpp, which streams base64 per
+// fragment to keep memory low). Output is base64 with '=' padding, null-
+// terminated. Returns false if the destination buffer is too small.
+inline bool extractReticulumBase64(const uint8_t *buf, size_t len,
+                                    char *bodyOut, size_t bodyOutCap) {
+    if (!bodyOut || bodyOutCap < 2) return false;
     bodyOut[0] = 0;
     if (len == 0) return false;
-
-    // Each input byte expands to two hex chars; leave 1 byte for the null.
-    static const char hex[] = "0123456789ABCDEF";
-    size_t maxBytes = (bodyOutCap - 1) / 2;
-    size_t n        = (len < maxBytes) ? len : maxBytes;
-    for (size_t i = 0; i < n; i++) {
-        bodyOut[2 * i    ] = hex[(buf[i] >> 4) & 0x0F];
-        bodyOut[2 * i + 1] = hex[ buf[i]       & 0x0F];
+    size_t b64Len = 0;
+    int rc = mbedtls_base64_encode((unsigned char *)bodyOut, bodyOutCap, &b64Len,
+                                    buf, len);
+    if (rc != 0) {                       // MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL
+        bodyOut[0] = 0;
+        return false;
     }
-    bodyOut[2 * n] = 0;
+    bodyOut[b64Len] = 0;
     return true;
+}
+
+// --- Reticulum fragment reassembly (STUB) -----------------------------------
+// TODO: when the MT/MC -> RNS bridge direction lands, the bridge will receive
+// fragmented bodies of the form "[rns AA 1/3] base64data==" on its MT or MC
+// RX path. To reconstruct the original RNS frame for re-transmission on the
+// RNS radio, the bridge needs to:
+//   1. Parse "[rns <seq:hex> <x>/<y>] <base64>" out of the text body.
+//   2. Look up (or create) a reassembly slot keyed on <seq>.
+//   3. base64-decode <base64> and store the raw bytes at the slot's
+//      (x-1)*rawPerFrag offset; mark fragment x as received.
+//   4. When all 1..y fragments have been received, return the assembled raw
+//      RNS frame in outBuf.
+//   5. Time out incomplete slots after ~30 s so stale state doesn't
+//      accumulate.
+//
+// This stub returns false unconditionally; the real reassembly engine lands
+// alongside the RNS encoder in MeshEncoderDebug.h.
+inline bool reassembleReticulumFragment(const char * /*body*/,
+                                         uint8_t * /*outBuf*/,
+                                         size_t   /*outBufCap*/,
+                                         size_t  & /*outLen*/) {
+    return false;
 }
 
 

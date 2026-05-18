@@ -16,7 +16,7 @@ Supported today:
 
 - **Meshtastic LongFast** (sync `0x2B`) — AES-128-CTR + a hand-written protobuf walker that lifts the `TEXT_MESSAGE_APP` payload out of the on-air `Data` submessage. Bridged bodies are tagged `[MT] …`. A periodic NodeInfo announce makes phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
 - **MeshCore public channel** (sync `0x12`) — AES-128-ECB decrypt of `GRP_TXT`, with the 2-byte truncated HMAC-SHA256 verified against the public channel key. Bridged bodies are tagged `[MC] …`.
-- **Reticulum / RNode** (sync `0x42`, **stub**) — incoming frames are hex-encoded into a `[rns] <hex>` body and forwarded into the other mesh as text. A proper RNS packet encoder is still TODO; until then, "destination = RNS" is a log-and-drop path with a `No TX 2 RNS:` prefix on serial.
+- **Reticulum / RNode** (sync `0x42`, **stub**) — incoming frames are base64-encoded and bridged into the other mesh as text packets of the form `[rns <seq> <x>/<y>] <base64>`. The bridge auto-fragments across multiple MT/MC packets when a single one wouldn't hold the encoded frame, using a CRC-16 low-byte sequence ID so concurrent fragmented frames don't get mixed up on the receiving side, and pacing between fragments (2000 ms for SF11/BW250 MT, 500 ms for SF7/BW62.5 MC; max 8 fragments per frame, tunable via `BRIDGE_RNS_*` build flags). A proper RNS packet encoder is still TODO; until then, "destination = RNS" is a log-and-drop path with a `No TX 2 RNS:` prefix on serial.
 
 Source-protocol markers double as loop-prevention: when the bridge's own re-transmitted packet bounces back via a relay node, the marker is recognised and the packet is dropped before being bridged a second time.
 
@@ -65,14 +65,16 @@ The `0x42` Reticulum sync word is already wired into the bridge dispatcher as a 
 
 | Direction | Status |
 |-----------|--------|
-| `RX:RNS → TX:MT or MC` | ✅ stub. Raw RNS bytes are hex-encoded into a `[rns] <hex>` text body and re-transmitted on the destination radio. |
+| `RX:RNS → TX:MT or MC` | ✅ stub. Raw RNS bytes are base64-encoded and re-transmitted as one or more `[rns <seq> <x>/<y>] <base64>` text packets on the destination radio. CRC-16 low-byte sequence ID, per-protocol fragment pacing, 8-fragment cap. |
 | `RX:MT or MC → TX:RNS` | ❌ log-only. The decoded body is printed with a `No TX 2 RNS: [MT/MC] …` prefix; nothing is transmitted on the RNS radio. |
-| `RX:RNS → human-readable decode` | ❌ raw hex only — RNS packet framing isn't parsed yet. |
+| `RX:RNS → human-readable decode` | ❌ base64 dump only — RNS packet framing isn't parsed yet. |
+| `MT/MC fragment reassembly → RNS TX` | ❌ stub function present (`reassembleReticulumFragment()` in `MeshDecoderDebug.h`), no logic yet — lands with the RNS encoder. |
 
 Outstanding work to lift the stub:
 
 - **RNS packet decoder.** Parse the RNS LoRa frame: header byte (IFAC flag, hops, header type, propagation/context bits), destination/transport address hashes, context byte, ciphertext. Produce a structured decode line analogous to the Meshtastic/MeshCore ones in `MeshDecoderDebug.h`.
 - **RNS packet encoder.** Build a valid outgoing RNS frame in `MeshEncoderDebug.h`: write the header byte, attach the right destination hash, set the context byte for the payload type, and slot the body bytes into the ciphertext region. Wiring it into `bridgePacket()` is then a one-line dispatcher change.
+- **Fragment reassembly.** Fill in `reassembleReticulumFragment()` in `MeshDecoderDebug.h`: parse `[rns <seq> <x>/<y>] <base64>` out of the incoming MT/MC body, accumulate slots keyed on `<seq>`, base64-decode each chunk, time out stale entries after ~30 s, and emit the reassembled raw RNS frame once `count == total`. Needed before `MT/MC → RNS` can actually transmit.
 - **Optional IFAC support.** If the encoder ever needs to talk on a network with Identify-Fail Authentication enabled, the IFAC HMAC-SHA256 trailer and salt handling come along with it.
 
 ### Other future work

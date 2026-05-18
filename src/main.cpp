@@ -167,27 +167,163 @@ void radio2Task(void *pvParameters);
 //  ----------------------------------------------------------------
 //  One generic per-packet bridge step driven by the two radios' LoRa
 //  sync words. Supports three protocols today:
-//    0x12 MeshCore   <-> [MC] marker, body = decoded text
-//    0x2B Meshtastic <-> [MT] marker, body = decoded text
-//    0x42 Reticulum  <-> [rns] marker, body = uppercase hex of raw bytes
+//    0x12 MeshCore   <-> [MC] marker, body = decoded UTF-8 text
+//    0x2B Meshtastic <-> [MT] marker, body = decoded UTF-8 text
+//    0x42 Reticulum  <-> [rns <seq> <x>/<y>] marker, body = base64 of raw
+//                        RNS bytes. Fragmented across multiple MT/MC text
+//                        packets when one wouldn't fit.
 //
-//  Behaviour:
-//    1. Decode source per srcSync. Bail silently if it isn't a recognised
-//       payload we know how to extract (e.g. non-text Meshtastic portnums,
-//       non-public-channel MeshCore packets).
-//    2. Drop if the body already starts with ANY of the three markers —
-//       that means the packet is one we (or another bridge) previously
-//       re-encoded and it's now looping back to us.
-//    3. Prepend the source marker so the destination side can recognise
-//       it as a bridged packet (and so step 2 catches the echo).
-//    4. If dstSync == 0x42 (Reticulum), log "No TX 2 RNS:" and drop — the
-//       RNS encoder is a TODO. Otherwise encode for the destination and
-//       transmit on dstRadio.
+//  Behaviour for text sources (MT/MC):
+//    1. Extract the text body.
+//    2. Loop check — drop if body already starts with any known bridge
+//       marker (the strncmp uses 4 chars so "[rns ..." matches just as
+//       "[rns] ..." used to).
+//    3. Prepend the source marker.
+//    4. dst == RNS  -> log "No TX 2 RNS:" and drop (no RNS encoder yet).
+//       dst == MT/MC -> encode and transmit on dstRadio.
+//
+//  Behaviour for RNS sources: see bridgeFromReticulum() below — base64,
+//  CRC-16 sequence ID, fragment loop with per-protocol pacing.
 // ============================================================
+
+// Tuning knobs for the RNS source path. Override any of these via
+// -D build flags in platformio.ini.
+#ifndef BRIDGE_RNS_MAX_FRAGS
+  #define BRIDGE_RNS_MAX_FRAGS         8
+#endif
+#ifndef BRIDGE_RNS_FRAG_DELAY_MT_MS
+  #define BRIDGE_RNS_FRAG_DELAY_MT_MS  2000   // SF11/BW250 — slow airtime
+#endif
+#ifndef BRIDGE_RNS_FRAG_DELAY_MC_MS
+  #define BRIDGE_RNS_FRAG_DELAY_MC_MS  500    // SF7/BW62.5  — fast airtime
+#endif
+
+// Per-fragment raw-byte budgets, derived from:
+//   max on-air packet sizes: MC = 184 B, MT = 200 B (conservative).
+//   prefix overhead "[rns AA X/Y] " = 13 chars.
+//   base64 chunk length rounded down to a multiple of 4 so each fragment
+//   decodes cleanly without cross-fragment padding tricks.
+//
+//   MC: max body 170 -> 157 b64 -> 156 b64 -> 117 raw bytes / fragment
+//   MT: max body 179 -> 166 b64 -> 164 b64 -> 123 raw bytes / fragment
+#define BRIDGE_RNS_RAW_PER_FRAG_MC    117
+#define BRIDGE_RNS_RAW_PER_FRAG_MT    123
+
+static void bridgeFromReticulum(uint8_t dstSync, WioSX1262 *dstRadio,
+                                const char *srcTag,
+                                const uint8_t *buf, size_t len)
+{
+    if (dstSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) return;
+    if (len == 0) return;
+
+    // Pick destination-specific fragment size and pacing
+    size_t   rawPerFrag = 0;
+    uint32_t delayMs    = 0;
+    const char *dstName = "?";
+    if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MT;
+        delayMs    = BRIDGE_RNS_FRAG_DELAY_MT_MS;
+        dstName    = "MT";
+    } else if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MC;
+        delayMs    = BRIDGE_RNS_FRAG_DELAY_MC_MS;
+        dstName    = "MC";
+    } else {
+        Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst sync 0x%02X\n",
+                      millis(), srcTag, dstSync);
+        return;
+    }
+
+    // Fragment count + bound check
+    size_t totalFrags = (len + rawPerFrag - 1) / rawPerFrag;
+    if (totalFrags > BRIDGE_RNS_MAX_FRAGS) {
+        Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B needs %u frags "
+                      "(max %u) — drop\n",
+                      millis(), srcTag, dstName, (unsigned)len,
+                      (unsigned)totalFrags, (unsigned)BRIDGE_RNS_MAX_FRAGS);
+        return;
+    }
+
+    // Low byte of CRC-16/CCITT over the raw RNS frame is the sequence ID
+    // shared by all fragments of this frame.
+    uint8_t seq = (uint8_t)(MeshDecoderDebug::crc16_ccitt(buf, len) & 0xFF);
+
+    Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B -> %u frag(s), seq=%02X\n",
+                  millis(), srcTag, dstName, (unsigned)len,
+                  (unsigned)totalFrags, seq);
+
+    for (size_t idx = 0; idx < totalFrags; idx++) {
+        size_t rawStart = idx * rawPerFrag;
+        size_t rawLen   = (idx + 1 == totalFrags) ? (len - rawStart) : rawPerFrag;
+
+        // base64 this slice (per-fragment, so no cross-fragment padding)
+        unsigned char b64chunk[200];
+        size_t b64Len = 0;
+        int b64rc = mbedtls_base64_encode(b64chunk, sizeof(b64chunk), &b64Len,
+                                           buf + rawStart, rawLen);
+        if (b64rc != 0) {
+            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u base64 fail %d\n",
+                          millis(), srcTag, dstName,
+                          (unsigned)(idx + 1), (unsigned)totalFrags, b64rc);
+            return;
+        }
+
+        // Build the marked body and encode for the destination protocol
+        char marked[240];
+        snprintf(marked, sizeof(marked), "[rns %02X %u/%u] %.*s",
+                 seq, (unsigned)(idx + 1), (unsigned)totalFrags,
+                 (int)b64Len, (const char *)b64chunk);
+
+        uint8_t outPkt[256];
+        size_t  outLen  = 0;
+        bool    encoded = false;
+        if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+            encoded = MeshEncoderDebug::encodeMeshtasticText(
+                          marked, outPkt, sizeof(outPkt), outLen);
+        } else {
+            encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
+                          marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+        }
+        if (!encoded) {
+            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u encode failed\n",
+                          millis(), srcTag, dstName,
+                          (unsigned)(idx + 1), (unsigned)totalFrags);
+            return;
+        }
+
+        Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u (%u B): \"%s\"\n",
+                      millis(), srcTag, dstName,
+                      (unsigned)(idx + 1), (unsigned)totalFrags,
+                      (unsigned)outLen, marked);
+
+        int16_t txState = dstRadio->transmit(outPkt, outLen);
+        if (txState != RADIOLIB_ERR_NONE) {
+            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u TX ERROR %d\n",
+                          millis(), srcTag, dstName,
+                          (unsigned)(idx + 1), (unsigned)totalFrags, txState);
+            // Continue with remaining fragments so the receiver at least sees
+            // partial reassembly state; could return here instead.
+        }
+
+        // Inter-fragment pacing — give the destination mesh time to relay
+        // fragment N before we step on it with N+1.
+        if (idx + 1 < totalFrags) {
+            vTaskDelay(pdMS_TO_TICKS(delayMs));
+        }
+    }
+}
+
 static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
                          WioSX1262 *dstRadio, const char *srcTag,
                          const uint8_t *buf, size_t len)
 {
+    // RNS source uses its own fragmenting path
+    if (srcSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+        bridgeFromReticulum(dstSync, dstRadio, srcTag, buf, len);
+        return;
+    }
+
+    // Text source (MT or MC): single-packet bridge
     char body[256];
     const char *srcMarker = nullptr;
     bool        decoded   = false;
@@ -201,19 +337,17 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
             decoded = MeshDecoderDebug::extractMeshCoreBody(buf, len, body, sizeof(body));
             srcMarker = "[MC]";
             break;
-        case MeshDecoderDebug::SYNC_WORD_RETICULUM:
-            decoded = MeshDecoderDebug::extractReticulumHex(buf, len, body, sizeof(body));
-            srcMarker = "[rns]";
-            break;
         default:
             return;
     }
     if (!decoded) return;
 
-    // Loop check — drop anything already carrying a bridge marker
-    if (strncmp(body, "[MT]",  4) == 0 ||
-        strncmp(body, "[MC]",  4) == 0 ||
-        strncmp(body, "[rns]", 5) == 0) {
+    // Loop check — drop anything already carrying a bridge marker.
+    // "[rns" (4 chars) matches both the legacy "[rns] …" form and the
+    // fragmented "[rns AA 1/3] …" form.
+    if (strncmp(body, "[MT]", 4) == 0 ||
+        strncmp(body, "[MC]", 4) == 0 ||
+        strncmp(body, "[rns", 4) == 0) {
         Serial.printf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
                       millis(), srcTag, body);
         return;

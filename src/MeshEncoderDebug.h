@@ -329,6 +329,15 @@ inline bool encodeMeshtasticNodeInfo(const char *id,
 // done yet. Until it is, this stub always returns false, and the bridge
 // dispatcher in main.cpp treats "destination sync == 0x42" as a log-and-drop
 // path with the "No TX 2 RNS:" prefix rather than calling this function.
+//
+// The RX -> RNS source side IS implemented (see bridgePacket() in main.cpp):
+// raw RNS bytes are base64-encoded and fragmented as needed across one or
+// more MT/MC text packets of the form "[rns <seq> <x>/<y>] <base64>".
+// When this encoder lands, the reverse direction will need:
+//   - reassembleReticulumFragment() from MeshDecoderDebug.h to glue fragments
+//     back into raw bytes,
+//   - this function to wrap those bytes in a valid RNS LoRa frame and emit
+//     them on the radio whose sync word is SYNC_WORD_RETICULUM.
 inline bool encodeReticulum(const char * /*body*/,
                              uint8_t * /*outBuf*/, size_t /*outBufCap*/,
                              size_t  & /*outLen*/) {
