@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — F5: Meshtastic private-channel support
+## v6.1 — 2026-05-19 — F5: Meshtastic private-channel support
 
 The Meshtastic side is no longer pinned to the LongFast public channel. New `MeshtasticConfig.{h,cpp}` mirrors `MeshCoreConfig`: it reads a base64 PSK + channel name from `BridgeConfig`, runs Meshtastic's key expansion, and derives the on-air channel-hash byte.
 
