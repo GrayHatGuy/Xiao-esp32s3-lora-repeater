@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — F5: Meshtastic private-channel support
+
+The Meshtastic side is no longer pinned to the LongFast public channel. New `MeshtasticConfig.{h,cpp}` mirrors `MeshCoreConfig`: it reads a base64 PSK + channel name from `BridgeConfig`, runs Meshtastic's key expansion, and derives the on-air channel-hash byte.
+
+- **PSK expansion.** The base64 PSK decodes to 0 bytes (LongFast default), 1 byte (short-key index — expanded against `defaultpsk` with the last byte bumped by `index-1`), 16 bytes (AES-128) or 32 bytes (AES-256).
+- **AES-256.** The five MT decoders and two MT encoders now take the key length from `MeshtasticConfig::keyLen` (128/256) instead of a hard-coded 128, so 32-byte PSK channels decrypt correctly.
+- **Channel hash.** Computed as `XOR-fold(name) ^ XOR-fold(expanded key)` and used as the decoder gate, replacing the literal `0x08`.
+
+`BridgeConfig` schema bumped v1 → v2 with two new fields (`mtChannelName`, `mtPskBase64`); a v1 NVS blob from a v6.0 build is migrated forward automatically (existing settings preserved, MT channel defaults to LongFast). The captive portal gains a "Meshtastic channel" section with name + PSK inputs, and new `BRIDGE_MT_CHANNEL_NAME` / `BRIDGE_MT_PSK_B64` build-flag defaults.
+
+Also: the captive-portal recovery trigger now accepts **any serial-monitor character** during the post-boot window, not just the BOOT button — the button is unreachable when the radio shield is mounted over it. The window was widened 3 s → 5 s.
+
 ## v6.0 — 2026-05-19 — Captive-portal config, POSITION/TELEMETRY bridging, configurable MC channel
 
 This release makes the bridge field-configurable without a rebuild and widens the Meshtastic traffic it understands. It bundles features F2, F3 and F4.

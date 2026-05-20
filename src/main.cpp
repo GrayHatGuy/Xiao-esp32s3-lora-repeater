@@ -28,6 +28,7 @@
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
 #include "MeshCoreConfig.h"
+#include "MeshtasticConfig.h"
 #include "BridgeConfig.h"
 #include "CaptivePortal.h"
 #include "NodeDB.h"
@@ -658,25 +659,39 @@ void setup()
 
     // Captive portal trigger:
     //   - First-flash path: NVS has no saved config yet (isConfigured()==false).
-    //   - Recovery path:    user holds the BOOT button (GPIO0, active-LOW) at
-    //                       any point during the first ~3 s after boot.
+    //   - Recovery path:    within a short window after boot, either the BOOT
+    //                       button (GPIO0, active-LOW) is pressed, OR any byte
+    //                       arrives on the serial monitor. The serial route
+    //                       exists because on this hardware stack the BOOT
+    //                       button is physically hidden under the radio shield.
     // The portal call is blocking — it ESP.restart()s once the form saves —
-    // so any of the radio init below it never runs while the portal is up.
+    // so the radio init below it never runs while the portal is up.
     {
         pinMode(0, INPUT_PULLUP);
-        const uint32_t windowEnd = millis() + 3000;
-        bool buttonPressed = false;
         if (!BridgeConfig::isConfigured()) {
             Serial.println("[setup] no config in NVS — entering captive portal");
             CaptivePortal::begin();   // never returns
         }
-        Serial.println("[setup] press BOOT within 3 s to enter captive portal...");
+        const uint32_t windowMs  = 5000;
+        const uint32_t windowEnd = millis() + windowMs;
+        bool trigger = false;
+        Serial.printf("[setup] press BOOT — or send any character over serial — "
+                      "within %lu s to enter the config portal...\n",
+                      (unsigned long)(windowMs / 1000));
         while (millis() < windowEnd) {
-            if (digitalRead(0) == LOW) { buttonPressed = true; break; }
+            if (digitalRead(0) == LOW) {
+                Serial.println("[setup] BOOT pressed");
+                trigger = true; break;
+            }
+            if (Serial.available() > 0) {
+                Serial.println("[setup] serial input received");
+                trigger = true; break;
+            }
             delay(20);
         }
-        if (buttonPressed) {
-            Serial.println("[setup] BOOT pressed — entering captive portal");
+        if (trigger) {
+            while (Serial.available()) Serial.read();   // drain pending input
+            Serial.println("[setup] entering captive portal");
             CaptivePortal::begin();   // never returns
         }
         Serial.println("[setup] proceeding to bridge mode");
@@ -686,6 +701,11 @@ void setup()
     // BRIDGE_MC_KEY_HEX defaults or the value the user saved in the portal).
     // Computes channelHash = SHA-256(key)[0] once, before any RX.
     MeshCoreConfig::begin();
+
+    // Resolve the Meshtastic channel the same way — base64 PSK + name from
+    // BridgeConfig, expanded to the AES key (128/256) with the channel hash
+    // derived. Empty PSK == the LongFast public channel.
+    MeshtasticConfig::begin();
 
     // Load persisted NodeDB before the radio tasks start so the very first
     // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution

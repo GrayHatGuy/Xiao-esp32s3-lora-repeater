@@ -24,7 +24,8 @@
 #include <mbedtls/md.h>
 #include <mbedtls/base64.h>
 
-#include "MeshCoreConfig.h"     // key + channelHash + channelName
+#include "MeshCoreConfig.h"      // MeshCore key + channelHash + channelName
+#include "MeshtasticConfig.h"    // Meshtastic key + keyLen + channelHash + name
 
 namespace MeshDecoderDebug {
 
@@ -39,20 +40,11 @@ static constexpr uint8_t SYNC_WORD_RETICULUM  = 0x42;   // RNode / Reticulum Net
 // Decoders below read MeshCoreConfig::key / MeshCoreConfig::channelHash
 // directly.
 
-// --- Meshtastic default channel ---------------------------------------------
-// AES-128 key for the Meshtastic default LongFast channel ("AQ==").
-// Derivation (firmware: CryptoEngine::setKey + defaultpsk):
-//   defaultpsk = d4 f1 bb 3a 20 29 07 59 f0 bc ff ab cf 4e 69 01
-//   short PSK 0x01 from "AQ==" replaces the last byte, which is already 0x01,
-//   so the expanded key equals defaultpsk verbatim.
-//   Equivalently the base64 string "1PG7OiApB1nwvP+rz05pAQ==".
-static const uint8_t MESHTASTIC_DEFAULT_KEY[16] = {
-    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
-    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
-};
-// XOR of the channel name "LongFast" with each byte of MESHTASTIC_DEFAULT_KEY.
-// Used as a coarse gate before attempting decryption with the default key.
-static constexpr uint8_t MESHTASTIC_LONGFAST_CHANNEL_HASH = 0x08;
+// Meshtastic channel state (key + keyLen + channel hash + name) now lives
+// in MeshtasticConfig and is initialised in setup() so private channels —
+// including AES-256 ones — can be selected via build flags or the WiFi
+// captive-portal config. Decoders below read MeshtasticConfig::key /
+// ::keyLen / ::channelHash directly.
 
 // Meshtastic PortNum values we name in output; everything else prints as "?".
 static const char *meshtasticPortName(uint32_t n) {
@@ -261,7 +253,8 @@ inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -389,7 +382,7 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
     if (len < 17) return false;
 
     uint8_t channelHash = buf[13];
-    if (channelHash != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+    if (channelHash != MeshtasticConfig::channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -413,7 +406,8 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -477,7 +471,7 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
     if (len < 17) return false;
 
     uint8_t channelHash = buf[13];
-    if (channelHash != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+    if (channelHash != MeshtasticConfig::channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -501,7 +495,8 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -587,7 +582,7 @@ inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
                                        MeshtasticPositionInfo &out) {
     out = {};
     if (len < 17) return false;
-    if (buf[13] != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+    if (buf[13] != MeshtasticConfig::channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -611,7 +606,8 @@ inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -694,7 +690,7 @@ inline bool extractMeshtasticTelemetry(const uint8_t *buf, size_t len,
     out = {};
     out.kind = MeshtasticTelemetryInfo::Kind::NONE;
     if (len < 17) return false;
-    if (buf[13] != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+    if (buf[13] != MeshtasticConfig::channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -718,7 +714,8 @@ inline bool extractMeshtasticTelemetry(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);

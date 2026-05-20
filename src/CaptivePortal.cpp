@@ -9,6 +9,7 @@
 #include <DNSServer.h>
 #include <string.h>
 #include <ctype.h>
+#include <mbedtls/base64.h>
 
 namespace CaptivePortal {
 
@@ -111,6 +112,20 @@ static String renderForm(const char *flash = nullptr) {
     page += htmlEscape(BridgeConfig::mtShortName());
     page += F("\" required>");
 
+    page += F("<h2>Meshtastic channel</h2>");
+    page += F("<label>Channel name</label>"
+              "<input type=\"text\" name=\"mtChannelName\" maxlength=\"23\" value=\"");
+    page += htmlEscape(BridgeConfig::mtChannelName());
+    page += F("\" required>");
+
+    page += F("<label>PSK (base64, blank = LongFast default)</label>"
+              "<input type=\"text\" name=\"mtPskBase64\" maxlength=\"47\" value=\"");
+    page += htmlEscape(BridgeConfig::mtPskBase64());
+    page += F("\">"
+              "<div class=\"hint\">Leave blank for the public LongFast channel. "
+              "Otherwise paste the channel PSK as base64 — decodes to 1, 16 "
+              "(AES-128) or 32 (AES-256) bytes.</div>");
+
     page += F("<h2>MeshCore channel</h2>");
     page += F("<label>Key (32 hex characters)</label>"
               "<input type=\"text\" name=\"mcKeyHex\" maxlength=\"32\" pattern=\"[0-9a-fA-F]{32}\" value=\"");
@@ -161,6 +176,8 @@ static void handleSave() {
     String mtNodeIdStr     = s_http.arg("mtNodeIdStr");
     String mtLongName      = s_http.arg("mtLongName");
     String mtShortName     = s_http.arg("mtShortName");
+    String mtChannelName   = s_http.arg("mtChannelName");
+    String mtPskBase64     = s_http.arg("mtPskBase64");
     String mcKeyHex        = s_http.arg("mcKeyHex");
     String mcChannelName   = s_http.arg("mcChannelName");
     bool   positionEnabled = (s_http.arg("positionEnabled")  == "1");
@@ -204,16 +221,36 @@ static void handleSave() {
     }
 
     if (mtLongName.length() == 0 || mtShortName.length() == 0 ||
-        mcChannelName.length() == 0) {
+        mtChannelName.length() == 0 || mcChannelName.length() == 0) {
         s_http.send(200, "text/html; charset=utf-8",
-                    renderForm("Long name, short name, and channel name cannot be empty."));
+                    renderForm("Long name, short name, and channel names cannot be empty."));
         return;
+    }
+
+    // MT PSK: empty is allowed (== LongFast). If present it must base64-
+    // decode to 1, 16 or 32 bytes — the only lengths MeshtasticConfig
+    // accepts. Catch typos here rather than silently falling back at boot.
+    mtPskBase64.trim();
+    if (mtPskBase64.length() > 0) {
+        uint8_t  dec[48];
+        size_t   decLen = 0;
+        int rc = mbedtls_base64_decode(dec, sizeof(dec), &decLen,
+                                        (const unsigned char *)mtPskBase64.c_str(),
+                                        mtPskBase64.length());
+        if (rc != 0 || !(decLen == 1 || decLen == 16 || decLen == 32)) {
+            s_http.send(200, "text/html; charset=utf-8",
+                        renderForm("Meshtastic PSK must be blank, or base64 "
+                                   "decoding to 1, 16, or 32 bytes."));
+            return;
+        }
     }
 
     BridgeConfig::setMtNodeId(mtNodeId);
     BridgeConfig::setMtNodeIdStr(mtNodeIdStr.c_str());
     BridgeConfig::setMtLongName(mtLongName.c_str());
     BridgeConfig::setMtShortName(mtShortName.c_str());
+    BridgeConfig::setMtChannelName(mtChannelName.c_str());
+    BridgeConfig::setMtPskBase64(mtPskBase64.c_str());
     BridgeConfig::setMcKeyHex(mcKeyHex.c_str());
     BridgeConfig::setMcChannelName(mcChannelName.c_str());
     BridgeConfig::setPositionEnabled(positionEnabled);

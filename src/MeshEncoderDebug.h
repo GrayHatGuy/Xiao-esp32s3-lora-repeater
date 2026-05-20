@@ -168,7 +168,7 @@ inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
     // 0x84 (hop_start=4, hop_limit=4). 0x07 (hop_start=0, hop_limit=7) is
     // structurally invalid and current Meshtastic firmware silently drops it.
     outBuf[12] = 0x63;                                  // hop_start=3, hop_limit=3
-    outBuf[13] = MESHTASTIC_LONGFAST_CHANNEL_HASH;      // 0x08
+    outBuf[13] = MeshtasticConfig::channelHash;         // configured channel
     outBuf[14] = 0;                                     // next_hop
     outBuf[15] = 0;                                     // relay_node
 
@@ -185,7 +185,8 @@ inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, pbLen, &nc_off, nonce, stream,
@@ -283,7 +284,7 @@ inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
     outBuf[10] = (uint8_t)(pid  >> 16);
     outBuf[11] = (uint8_t)(pid  >> 24);
     outBuf[12] = 0x63;                            // hop_start=3, hop_limit=3
-    outBuf[13] = MESHTASTIC_LONGFAST_CHANNEL_HASH;
+    outBuf[13] = MeshtasticConfig::channelHash;
     outBuf[14] = 0;
     outBuf[15] = 0;
 
@@ -300,7 +301,8 @@ inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
+                               (unsigned)MeshtasticConfig::keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, dataLen, &nc_off, nonce, stream,

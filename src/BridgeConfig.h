@@ -32,6 +32,8 @@ constexpr size_t MT_LONG_NAME_MAX   = 39;   // Meshtastic long_name canonical ma
 constexpr size_t MT_SHORT_NAME_MAX  = 8;    // Meshtastic short_name typical 4
 constexpr size_t MC_KEY_HEX_LEN     = 32;   // 32 hex chars => 16 raw bytes
 constexpr size_t MC_CHANNEL_NAME_MAX = 23;  // arbitrary; fits within marker budget
+constexpr size_t MT_CHANNEL_NAME_MAX = 23;  // Meshtastic channel name
+constexpr size_t MT_PSK_B64_MAX     = 47;   // base64 of a 32-byte PSK is 44 chars
 
 void begin();           // load from NVS or initialise from build-flag defaults
 void save();            // persist current values + set configured=true
@@ -45,6 +47,8 @@ const char *mtLongName();
 const char *mtShortName();
 const char *mcKeyHex();           // 32-char lowercase hex string
 const char *mcChannelName();
+const char *mtChannelName();      // Meshtastic channel name
+const char *mtPskBase64();        // Meshtastic channel PSK, base64 ("" = LongFast)
 bool        positionEnabled();    // BRIDGE_MT_POSITION analogue
 bool        telemetryEnabled();   // BRIDGE_MT_TELEMETRY analogue
 
@@ -56,6 +60,8 @@ void setMtLongName(const char *s);
 void setMtShortName(const char *s);
 void setMcKeyHex(const char *s);
 void setMcChannelName(const char *s);
+void setMtChannelName(const char *s);
+void setMtPskBase64(const char *s);
 void setPositionEnabled(bool v);
 void setTelemetryEnabled(bool v);
 

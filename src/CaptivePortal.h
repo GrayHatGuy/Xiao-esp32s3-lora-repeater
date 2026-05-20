@@ -15,7 +15,9 @@
 //
 // Trigger is the caller's responsibility — main.cpp decides whether to
 // invoke begin() based on (a) BridgeConfig::isConfigured() returning false,
-// or (b) the BOOT button being pressed within the first ~3 s after boot.
+// or (b) within a short post-boot window, the BOOT button being pressed OR
+// any character arriving on the serial monitor (the serial route covers
+// hardware stacks where the BOOT button is hidden under the radio shield).
 // ---------------------------------------------------------------------------
 
 #pragma once
