@@ -1,5 +1,30 @@
 # Changelog
 
+## v7.0 — 2026-05-20 — Per-radio channels, same-protocol relay
+
+The bridge is no longer limited to cross-protocol MT↔MC. Each radio slot now
+carries its own channel, so it can also relay **same-protocol between two
+channels** — MC↔MC or MT↔MT (private↔public, private↔private).
+
+- New `RadioChannel` struct (`protocol`, `key`, `keyLen`, `channelHash`,
+  `name`) — two of them, one per radio slot, resolved at boot. Replaces the
+  `MeshCoreConfig` / `MeshtasticConfig` singletons; those modules are now
+  stateless `resolve()` helpers.
+- Every decoder and encoder takes a `const RadioChannel&`; `bridgePacket()`
+  decodes with the RX radio's channel and encodes with the TX radio's.
+- `BridgeConfig` schema v2→v3: the protocol-specific channel fields become
+  per-radio (`radio1/2ChannelName` + `radio1/2ChannelKey`). A v2 NVS blob is
+  migrated forward — its MT/MC channels map onto whichever radio runs that
+  protocol.
+- Captive portal: the two protocol-specific channel sections become a
+  *Radio 1 channel* / *Radio 2 channel* pair, each labelled by that radio's
+  build-flag protocol. The form rejects a config where both radios run the
+  same protocol with identical channels (a channel relayed to itself is a
+  feedback loop). No RNS controls in the portal.
+
+Radio protocol/RF stays a build-flag (`LORA_RADIO*`) decision — config-time
+only, never portal-editable.
+
 ## v6.2.1 — 2026-05-20 — Build reproducibility + GPIO init fix
 
 - **Pinned the PlatformIO platform.** `platformio.ini` now requires `espressif32 @ 6.13.0` (arduino-esp32 2.0.17) — the core the bridge is verified against. An unpinned `platform = espressif32` let a fresh checkout pull a newer core whose GPIO/SPI behaviour differs, producing spurious diagnostics on other people's builds.

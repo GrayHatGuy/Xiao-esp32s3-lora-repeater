@@ -11,6 +11,15 @@
 #include <ctype.h>
 #include <mbedtls/base64.h>
 
+// Per-radio protocol — used to label + validate each radio's channel form
+// section. Build-flag values, mirrored from platformio.ini.
+#ifndef LORA_RADIO1_SYNC_WORD
+  #define LORA_RADIO1_SYNC_WORD 0x2B
+#endif
+#ifndef LORA_RADIO2_SYNC_WORD
+  #define LORA_RADIO2_SYNC_WORD 0x12
+#endif
+
 namespace CaptivePortal {
 
 static const byte    DNS_PORT  = 53;
@@ -56,6 +65,79 @@ static bool isHexString(const String &s, size_t len) {
               (c >= 'A' && c <= 'F'))) return false;
     }
     return true;
+}
+
+// Human-readable protocol name for a LoRa sync word.
+static const char *protoName(uint8_t sync) {
+    if (sync == 0x2B) return "Meshtastic";
+    if (sync == 0x12) return "MeshCore";
+    if (sync == 0x42) return "Reticulum";
+    return "custom";
+}
+
+// Append one radio's channel-config section to the form. Field names are
+// "r<N>ChannelName" / "r<N>ChannelKey"; the key field label adapts to the
+// radio's protocol.
+static void appendRadioChannel(String &page, int radioNum, uint8_t sync,
+                               const char *chName, const char *chKey) {
+    page += F("<h2>Radio ");
+    page += radioNum;
+    page += F(" channel \xe2\x80\x94 ");
+    page += protoName(sync);
+    page += F("</h2>");
+
+    page += F("<label>Channel name</label><input type=\"text\" name=\"r");
+    page += radioNum;
+    page += F("ChannelName\" maxlength=\"23\" value=\"");
+    page += htmlEscape(chName);
+    page += F("\">");
+
+    if (sync == 0x2B) {
+        page += F("<label>PSK (base64, blank = LongFast default)</label>");
+    } else if (sync == 0x12) {
+        page += F("<label>Key (32 hex characters)</label>");
+    } else {
+        page += F("<label>Channel key (unused for this protocol)</label>");
+    }
+    page += F("<input type=\"text\" name=\"r");
+    page += radioNum;
+    page += F("ChannelKey\" maxlength=\"47\" value=\"");
+    page += htmlEscape(chKey);
+    page += F("\">");
+    if (sync == 0x12) {
+        page += F("<div class=\"hint\">MeshCore public default: "
+                  "8b3387e9c5cdea6ac9e5edbaa115cd72</div>");
+    } else if (sync == 0x2B) {
+        page += F("<div class=\"hint\">Blank = public LongFast. Otherwise the "
+                  "base64 PSK from the Meshtastic app (1, 16 or 32 bytes).</div>");
+    }
+}
+
+// Validate one radio's channel form input against its protocol. Mutates
+// `name`/`key` (trim, lowercase). Returns nullptr on success, or an error
+// message to flash back on the form.
+static const char *validateRadioChannel(uint8_t sync, String &name, String &key) {
+    name.trim();
+    key.trim();
+    if (sync == 0x12) {                       // MeshCore
+        toLower(key);
+        if (name.length() == 0) return "MeshCore channel name cannot be empty.";
+        if (!isHexString(key, 32))
+            return "MeshCore channel key must be exactly 32 hex characters.";
+    } else if (sync == 0x2B) {                // Meshtastic
+        if (name.length() == 0) return "Meshtastic channel name cannot be empty.";
+        if (key.length() > 0) {
+            uint8_t dec[48];
+            size_t  decLen = 0;
+            int rc = mbedtls_base64_decode(dec, sizeof(dec), &decLen,
+                                            (const unsigned char *)key.c_str(),
+                                            key.length());
+            if (rc != 0 || !(decLen == 1 || decLen == 16 || decLen == 32))
+                return "Meshtastic PSK must be blank, or base64 decoding to "
+                       "1, 16, or 32 bytes.";
+        }
+    }
+    return nullptr;   // Reticulum / other — no channel validation
 }
 
 // --- HTML form rendering ---------------------------------------------------
@@ -112,31 +194,12 @@ static String renderForm(const char *flash = nullptr) {
     page += htmlEscape(BridgeConfig::mtShortName());
     page += F("\" required>");
 
-    page += F("<h2>Meshtastic channel</h2>");
-    page += F("<label>Channel name</label>"
-              "<input type=\"text\" name=\"mtChannelName\" maxlength=\"23\" value=\"");
-    page += htmlEscape(BridgeConfig::mtChannelName());
-    page += F("\" required>");
-
-    page += F("<label>PSK (base64, blank = LongFast default)</label>"
-              "<input type=\"text\" name=\"mtPskBase64\" maxlength=\"47\" value=\"");
-    page += htmlEscape(BridgeConfig::mtPskBase64());
-    page += F("\">"
-              "<div class=\"hint\">Leave blank for the public LongFast channel. "
-              "Otherwise paste the channel PSK as base64 — decodes to 1, 16 "
-              "(AES-128) or 32 (AES-256) bytes.</div>");
-
-    page += F("<h2>MeshCore channel</h2>");
-    page += F("<label>Key (32 hex characters)</label>"
-              "<input type=\"text\" name=\"mcKeyHex\" maxlength=\"32\" pattern=\"[0-9a-fA-F]{32}\" value=\"");
-    page += htmlEscape(BridgeConfig::mcKeyHex());
-    page += F("\" required>"
-              "<div class=\"hint\">Public channel default: 8b3387e9c5cdea6ac9e5edbaa115cd72</div>");
-
-    page += F("<label>Channel display name</label>"
-              "<input type=\"text\" name=\"mcChannelName\" maxlength=\"23\" value=\"");
-    page += htmlEscape(BridgeConfig::mcChannelName());
-    page += F("\" required>");
+    appendRadioChannel(page, 1, (uint8_t)LORA_RADIO1_SYNC_WORD,
+                       BridgeConfig::radio1ChannelName(),
+                       BridgeConfig::radio1ChannelKey());
+    appendRadioChannel(page, 2, (uint8_t)LORA_RADIO2_SYNC_WORD,
+                       BridgeConfig::radio2ChannelName(),
+                       BridgeConfig::radio2ChannelKey());
 
     page += F("<h2>Bridge behaviour</h2>");
     page += F("<label><input type=\"checkbox\" name=\"positionEnabled\" value=\"1\"");
@@ -176,10 +239,10 @@ static void handleSave() {
     String mtNodeIdStr     = s_http.arg("mtNodeIdStr");
     String mtLongName      = s_http.arg("mtLongName");
     String mtShortName     = s_http.arg("mtShortName");
-    String mtChannelName   = s_http.arg("mtChannelName");
-    String mtPskBase64     = s_http.arg("mtPskBase64");
-    String mcKeyHex        = s_http.arg("mcKeyHex");
-    String mcChannelName   = s_http.arg("mcChannelName");
+    String r1ChannelName   = s_http.arg("r1ChannelName");
+    String r1ChannelKey    = s_http.arg("r1ChannelKey");
+    String r2ChannelName   = s_http.arg("r2ChannelName");
+    String r2ChannelKey    = s_http.arg("r2ChannelKey");
     bool   positionEnabled = (s_http.arg("positionEnabled")  == "1");
     bool   telemetryEnabled= (s_http.arg("telemetryEnabled") == "1");
 
@@ -212,47 +275,45 @@ static void handleSave() {
         }
     }
 
-    mcKeyHex.trim();
-    toLower(mcKeyHex);
-    if (!isHexString(mcKeyHex, 32)) {
+    if (mtLongName.length() == 0 || mtShortName.length() == 0) {
         s_http.send(200, "text/html; charset=utf-8",
-                    renderForm("MC key must be exactly 32 hex characters."));
+                    renderForm("Long name and short name cannot be empty."));
         return;
     }
 
-    if (mtLongName.length() == 0 || mtShortName.length() == 0 ||
-        mtChannelName.length() == 0 || mcChannelName.length() == 0) {
-        s_http.send(200, "text/html; charset=utf-8",
-                    renderForm("Long name, short name, and channel names cannot be empty."));
+    // Validate each radio's channel against its protocol (mutates the
+    // strings: trim + lowercase MC hex).
+    const char *err1 = validateRadioChannel((uint8_t)LORA_RADIO1_SYNC_WORD,
+                                            r1ChannelName, r1ChannelKey);
+    if (err1) {
+        s_http.send(200, "text/html; charset=utf-8", renderForm(err1));
+        return;
+    }
+    const char *err2 = validateRadioChannel((uint8_t)LORA_RADIO2_SYNC_WORD,
+                                            r2ChannelName, r2ChannelKey);
+    if (err2) {
+        s_http.send(200, "text/html; charset=utf-8", renderForm(err2));
         return;
     }
 
-    // MT PSK: empty is allowed (== LongFast). If present it must base64-
-    // decode to 1, 16 or 32 bytes — the only lengths MeshtasticConfig
-    // accepts. Catch typos here rather than silently falling back at boot.
-    mtPskBase64.trim();
-    if (mtPskBase64.length() > 0) {
-        uint8_t  dec[48];
-        size_t   decLen = 0;
-        int rc = mbedtls_base64_decode(dec, sizeof(dec), &decLen,
-                                        (const unsigned char *)mtPskBase64.c_str(),
-                                        mtPskBase64.length());
-        if (rc != 0 || !(decLen == 1 || decLen == 16 || decLen == 32)) {
-            s_http.send(200, "text/html; charset=utf-8",
-                        renderForm("Meshtastic PSK must be blank, or base64 "
-                                   "decoding to 1, 16, or 32 bytes."));
-            return;
-        }
+    // Same-protocol relay must be between two DIFFERENT channels — relaying
+    // a channel to itself is just a feedback loop.
+    if ((uint8_t)LORA_RADIO1_SYNC_WORD == (uint8_t)LORA_RADIO2_SYNC_WORD &&
+        r1ChannelName == r2ChannelName && r1ChannelKey == r2ChannelKey) {
+        s_http.send(200, "text/html; charset=utf-8",
+                    renderForm("Both radios run the same protocol \xe2\x80\x94 their two "
+                               "channels must differ (name or key)."));
+        return;
     }
 
     BridgeConfig::setMtNodeId(mtNodeId);
     BridgeConfig::setMtNodeIdStr(mtNodeIdStr.c_str());
     BridgeConfig::setMtLongName(mtLongName.c_str());
     BridgeConfig::setMtShortName(mtShortName.c_str());
-    BridgeConfig::setMtChannelName(mtChannelName.c_str());
-    BridgeConfig::setMtPskBase64(mtPskBase64.c_str());
-    BridgeConfig::setMcKeyHex(mcKeyHex.c_str());
-    BridgeConfig::setMcChannelName(mcChannelName.c_str());
+    BridgeConfig::setRadio1ChannelName(r1ChannelName.c_str());
+    BridgeConfig::setRadio1ChannelKey(r1ChannelKey.c_str());
+    BridgeConfig::setRadio2ChannelName(r2ChannelName.c_str());
+    BridgeConfig::setRadio2ChannelKey(r2ChannelKey.c_str());
     BridgeConfig::setPositionEnabled(positionEnabled);
     BridgeConfig::setTelemetryEnabled(telemetryEnabled);
     BridgeConfig::save();

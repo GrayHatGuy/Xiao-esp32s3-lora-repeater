@@ -167,6 +167,34 @@ WioSX1262 *radio1 = nullptr;
 WioSX1262 *radio2 = nullptr;
 
 // ============================================================
+//  Per-radio channel context — g_chan[0] = radio1, g_chan[1] = radio2.
+//  Resolved once in setup() before the radio tasks start; read-only after.
+// ============================================================
+RadioChannel g_chan[2];
+
+// Resolve one radio's channel into `out` from its protocol (sync word) and
+// its BridgeConfig channel name/key strings.
+static void resolveRadioChannel(uint8_t syncWord, const char *chName,
+                                const char *chKey, RadioChannel &out)
+{
+    if (syncWord == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        MeshtasticConfig::resolve(chKey, chName, out);
+    } else if (syncWord == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        MeshCoreConfig::resolve(chKey, chName, out);
+    } else {
+        // Reticulum or unknown — no channel key material.
+        out.protocol    = syncWord;
+        out.keyLen      = 0;
+        out.channelHash = 0;
+        memset(out.key, 0, sizeof(out.key));
+        if (!chName) chName = "";
+        strncpy(out.name, chName, sizeof(out.name) - 1);
+        out.name[sizeof(out.name) - 1] = 0;
+        Serial.printf("[radio] protocol 0x%02X — no channel key\n", syncWord);
+    }
+}
+
+// ============================================================
 //  Forward declarations
 // ============================================================
 void radio1Task(void *pvParameters);
@@ -219,28 +247,28 @@ void radio2Task(void *pvParameters);
 #define BRIDGE_RNS_RAW_PER_FRAG_MC    117
 #define BRIDGE_RNS_RAW_PER_FRAG_MT    123
 
-static void bridgeFromReticulum(uint8_t dstSync, WioSX1262 *dstRadio,
+static void bridgeFromReticulum(const RadioChannel &dstChan, WioSX1262 *dstRadio,
                                 const char *srcTag,
                                 const uint8_t *buf, size_t len)
 {
-    if (dstSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) return;
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) return;
     if (len == 0) return;
 
     // Pick destination-specific fragment size and pacing
     size_t   rawPerFrag = 0;
     uint32_t delayMs    = 0;
     const char *dstName = "?";
-    if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MT;
         delayMs    = BRIDGE_RNS_FRAG_DELAY_MT_MS;
         dstName    = "MT";
-    } else if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+    } else if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
         rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MC;
         delayMs    = BRIDGE_RNS_FRAG_DELAY_MC_MS;
         dstName    = "MC";
     } else {
-        Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst sync 0x%02X\n",
-                      millis(), srcTag, dstSync);
+        Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst protocol 0x%02X\n",
+                      millis(), srcTag, dstChan.protocol);
         return;
     }
 
@@ -287,13 +315,13 @@ static void bridgeFromReticulum(uint8_t dstSync, WioSX1262 *dstRadio,
         uint8_t outPkt[256];
         size_t  outLen  = 0;
         bool    encoded = false;
-        if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
             encoded = MeshEncoderDebug::encodeMeshtasticText(
-                          BridgeConfig::mtNodeId(),
+                          dstChan, BridgeConfig::mtNodeId(),
                           marked, outPkt, sizeof(outPkt), outLen);
         } else {
             encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                          marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+                          dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
         }
         if (!encoded) {
             Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u encode failed\n",
@@ -361,13 +389,13 @@ static void buildTextSrcMarker(uint8_t srcSync,
     snprintf(out, outCap, "[?]");
 }
 
-static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
+static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstChan,
                          WioSX1262 *dstRadio, const char *srcTag,
                          const uint8_t *buf, size_t len)
 {
     // RNS source uses its own fragmenting path
-    if (srcSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
-        bridgeFromReticulum(dstSync, dstRadio, srcTag, buf, len);
+    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+        bridgeFromReticulum(dstChan, dstRadio, srcTag, buf, len);
         return;
     }
 
@@ -375,12 +403,12 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     // they'd be constant noise on the destination mesh and the destination
     // doesn't have a use for them. Try this before the text-body extract
     // so we don't waste a Data-protobuf walk twice.
-    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         uint32_t niNodeId = 0;
         char     niShort[NodeDB::MAX_SHORT_NAME + 1] = {0};
         char     niLong [NodeDB::MAX_LONG_NAME  + 1] = {0};
         if (MeshDecoderDebug::extractMeshtasticNodeInfo(
-                buf, len, niNodeId,
+                buf, len, srcChan, niNodeId,
                 niShort, sizeof(niShort),
                 niLong,  sizeof(niLong))) {
             // Skip our own NodeInfo bouncing back via a relay. Without this
@@ -406,10 +434,10 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     char body[256];
     bool decoded = false;
 
-    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         if (!decoded && BridgeConfig::positionEnabled()) {
             MeshDecoderDebug::MeshtasticPositionInfo pos;
-            if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, pos)) {
+            if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, srcChan, pos)) {
                 int n = snprintf(body, sizeof(body), "pos");
                 if (pos.hasLat && pos.hasLon) {
                     n += snprintf(body + n, sizeof(body) - n, " %.4f,%.4f",
@@ -425,7 +453,7 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
         }
         if (!decoded && BridgeConfig::telemetryEnabled()) {
             MeshDecoderDebug::MeshtasticTelemetryInfo tel;
-            if (MeshDecoderDebug::extractMeshtasticTelemetry(buf, len, tel)) {
+            if (MeshDecoderDebug::extractMeshtasticTelemetry(buf, len, srcChan, tel)) {
                 using TKind = MeshDecoderDebug::MeshtasticTelemetryInfo::Kind;
                 if (tel.kind == TKind::DEVICE) {
                     int n = snprintf(body, sizeof(body), "bat");
@@ -453,11 +481,11 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
         }
         if (!decoded) {
             decoded = MeshDecoderDebug::extractMeshtasticBody(
-                buf, len, body, sizeof(body));
+                buf, len, srcChan, body, sizeof(body));
         }
-    } else if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+    } else if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
         decoded = MeshDecoderDebug::extractMeshCoreBody(
-            buf, len, body, sizeof(body));
+            buf, len, srcChan, body, sizeof(body));
     } else {
         return;
     }
@@ -476,12 +504,12 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     }
 
     char srcMarker[32];   // fits "[MT !12345678 ABCDEFGH]" (23 chars) + room
-    buildTextSrcMarker(srcSync, buf, len, srcMarker, sizeof(srcMarker));
+    buildTextSrcMarker(srcChan.protocol, buf, len, srcMarker, sizeof(srcMarker));
     char marked[280];
     snprintf(marked, sizeof(marked), "%s %s", srcMarker, body);
 
     // Destination is Reticulum — log and drop. No RNS encoder yet.
-    if (dstSync == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
         Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
                       millis(), srcTag, marked);
         return;
@@ -491,21 +519,21 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     size_t  outLen  = 0;
     bool    encoded = false;
     const char *dstName = "?";
-    switch (dstSync) {
+    switch (dstChan.protocol) {
         case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
             encoded = MeshEncoderDebug::encodeMeshtasticText(
-                          BridgeConfig::mtNodeId(),
+                          dstChan, BridgeConfig::mtNodeId(),
                           marked, outPkt, sizeof(outPkt), outLen);
             dstName = "MT";
             break;
         case MeshDecoderDebug::SYNC_WORD_MESHCORE:
             encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                          marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+                          dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
             dstName = "MC";
             break;
         default:
-            Serial.printf("[%8lu ms][%s bridge] unknown dst sync 0x%02X — drop\n",
-                          millis(), srcTag, dstSync);
+            Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
+                          millis(), srcTag, dstChan.protocol);
             return;
     }
 
@@ -548,6 +576,7 @@ void radio1Task(void *pvParameters)
             uint8_t niPkt[256];
             size_t  niLen = 0;
             if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
+                    g_chan[0],
                     BridgeConfig::mtNodeId(),
                     BridgeConfig::mtNodeIdStr(),
                     BridgeConfig::mtLongName(),
@@ -581,11 +610,9 @@ void radio1Task(void *pvParameters)
                 Serial.printf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
 
-                MeshDecoderDebug::print(buf, len,
-                    LORA_RADIO1_SYNC_WORD, "R1");
+                MeshDecoderDebug::print(buf, len, g_chan[0], "R1");
 
-                bridgePacket(LORA_RADIO1_SYNC_WORD, LORA_RADIO2_SYNC_WORD,
-                             radio2, "R1", buf, len);
+                bridgePacket(g_chan[0], g_chan[1], radio2, "R1", buf, len);
 
                 // RadioLib exits RX mode on packet receipt;
                 // restore it before polling again.
@@ -620,11 +647,9 @@ void radio2Task(void *pvParameters)
                 Serial.printf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
 
-                MeshDecoderDebug::print(buf, len,
-                    LORA_RADIO2_SYNC_WORD, "R2");
+                MeshDecoderDebug::print(buf, len, g_chan[1], "R2");
 
-                bridgePacket(LORA_RADIO2_SYNC_WORD, LORA_RADIO1_SYNC_WORD,
-                             radio1, "R2", buf, len);
+                bridgePacket(g_chan[1], g_chan[0], radio1, "R2", buf, len);
 
                 radio2->startReceive();
 
@@ -691,15 +716,15 @@ void setup()
         Serial.println("[setup] proceeding to bridge mode");
     }
 
-    // Resolve the MeshCore channel from BridgeConfig (which itself loaded
-    // BRIDGE_MC_KEY_HEX defaults or the value the user saved in the portal).
-    // Computes channelHash = SHA-256(key)[0] once, before any RX.
-    MeshCoreConfig::begin();
-
-    // Resolve the Meshtastic channel the same way — base64 PSK + name from
-    // BridgeConfig, expanded to the AES key (128/256) with the channel hash
-    // derived. Empty PSK == the LongFast public channel.
-    MeshtasticConfig::begin();
+    // Resolve each radio's channel into g_chan[] before any RX. Each radio's
+    // protocol is its build-flag sync word; its channel name/key come from
+    // BridgeConfig (build-flag defaults or the captive-portal-saved values).
+    resolveRadioChannel((uint8_t)LORA_RADIO1_SYNC_WORD,
+                        BridgeConfig::radio1ChannelName(),
+                        BridgeConfig::radio1ChannelKey(), g_chan[0]);
+    resolveRadioChannel((uint8_t)LORA_RADIO2_SYNC_WORD,
+                        BridgeConfig::radio2ChannelName(),
+                        BridgeConfig::radio2ChannelKey(), g_chan[1]);
 
     // Load persisted NodeDB before the radio tasks start so the very first
     // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution

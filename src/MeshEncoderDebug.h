@@ -41,7 +41,8 @@ namespace MeshEncoderDebug {
 // outBuf / outBufCap : caller-provided buffer for the assembled packet.
 // outLen : set to the byte count actually written on success.
 // Returns true on success.
-inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
+inline bool encodeMeshCoreGrpTxt(const RadioChannel &ch,
+                                  const char *body, uint32_t ts,
                                   uint8_t *outBuf, size_t outBufCap,
                                   size_t  &outLen) {
     using namespace MeshDecoderDebug;
@@ -72,7 +73,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshCoreConfig::key, 128);
+        mbedtls_aes_setkey_enc(&aes, ch.key, 128);
         for (size_t i = 0; i < ptLen; i += 16) {
             mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, p + i, p + i);
         }
@@ -87,8 +88,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
         const mbedtls_md_info_t *info =
             mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
         mbedtls_md_setup(&mdCtx, info, /*hmac=*/1);
-        mbedtls_md_hmac_starts(&mdCtx, MeshCoreConfig::key,
-                               sizeof(MeshCoreConfig::key));
+        mbedtls_md_hmac_starts(&mdCtx, ch.key, 16);   // MeshCore: 16-byte key
         mbedtls_md_hmac_update(&mdCtx, p, ptLen);
         mbedtls_md_hmac_finish(&mdCtx, hmac);
         mbedtls_md_free(&mdCtx);
@@ -99,7 +99,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
     // routeType 0x01 leaves the optional 4-byte transport-codes field absent.
     outBuf[0] = (uint8_t)((0 << 6) | (0x05 << 2) | 0x01);
     outBuf[1] = 0;                                  // pathLen — no relays
-    outBuf[2] = MeshCoreConfig::channelHash;       // 0x11
+    outBuf[2] = ch.channelHash;                    // configured MC channel hash
     outBuf[3] = hmac[0];
     outBuf[4] = hmac[1];
 
@@ -113,7 +113,8 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
 // outBuf / outBufCap : caller-provided buffer for the assembled packet.
 // outLen : set to the byte count actually written on success.
 // Returns true on success.
-inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
+inline bool encodeMeshtasticText(const RadioChannel &ch,
+                                  uint32_t srcNodeId, const char *body,
                                   uint8_t *outBuf, size_t outBufCap,
                                   size_t  &outLen) {
     using namespace MeshDecoderDebug;
@@ -168,7 +169,7 @@ inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
     // 0x84 (hop_start=4, hop_limit=4). 0x07 (hop_start=0, hop_limit=7) is
     // structurally invalid and current Meshtastic firmware silently drops it.
     outBuf[12] = 0x63;                                  // hop_start=3, hop_limit=3
-    outBuf[13] = MeshtasticConfig::channelHash;         // configured channel
+    outBuf[13] = ch.channelHash;         // configured channel
     outBuf[14] = 0;                                     // next_hop
     outBuf[15] = 0;                                     // relay_node
 
@@ -185,8 +186,8 @@ inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, pbLen, &nc_off, nonce, stream,
@@ -207,7 +208,8 @@ inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
 // Meshtastic clients recognise the bridge as a known node, so text messages
 // from BRIDGE_MT_NODE_ID surface in their UI instead of being silently
 // hidden as "from an unknown sender".
-inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
+inline bool encodeMeshtasticNodeInfo(const RadioChannel &ch,
+                                      uint32_t srcNodeId,
                                       const char *id,
                                       const char *longName,
                                       const char *shortName,
@@ -284,7 +286,7 @@ inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
     outBuf[10] = (uint8_t)(pid  >> 16);
     outBuf[11] = (uint8_t)(pid  >> 24);
     outBuf[12] = 0x63;                            // hop_start=3, hop_limit=3
-    outBuf[13] = MeshtasticConfig::channelHash;
+    outBuf[13] = ch.channelHash;
     outBuf[14] = 0;
     outBuf[15] = 0;
 
@@ -301,8 +303,8 @@ inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, dataLen, &nc_off, nonce, stream,

@@ -1,23 +1,21 @@
 // BridgeConfig.h
 // ---------------------------------------------------------------------------
-// Single source of truth for runtime-configurable bridge settings. Replaces
-// reading the BRIDGE_* build-flag macros directly throughout the code.
+// Single source of truth for runtime-configurable bridge settings, persisted
+// in NVS namespace 'bridgecfg'.
 //
-// Lifetime:
-//   1. setup() calls begin() — loads NVS namespace 'bridgecfg' if present,
-//      otherwise initialises every field from its build-flag default.
-//   2. The CaptivePortal writes new values through the field accessors and
-//      calls save(), which marks configured=true and flushes to NVS.
-//   3. Downstream modules (MeshCoreConfig, the encoder helpers, the
-//      bridgePacket pipeline) read from the public field accessors.
+// As of v2 the channel config is per-radio: each radio slot carries its own
+// channel name + key string, so the bridge can relay same-protocol between
+// two channels (MC↔MC, MT↔MT) as well as cross-protocol (MT↔MC). A radio's
+// PROTOCOL is still a build-flag decision (LORA_RADIO*_SYNC_WORD); only the
+// channel name/key are stored here and editable in the captive portal.
 //
-// Storage: one PersistedV1 blob in the 'bridgecfg' Preferences namespace.
-// On a schema bump, increment the version byte and handle migration in
-// begin() — old blobs older than the latest version fall back to defaults.
+// The channel key string is interpreted per the radio's protocol:
+//   - MeshCore  radio: 32-char hex AES key
+//   - Meshtastic radio: base64 PSK ("" = LongFast default)
+//   - Reticulum radio: unused
 //
-// Thread-safety: read-mostly. All writes come from CaptivePortal (running
-// in setup() before tasks start) or from setup() initialisation. The
-// radio tasks only ever read.
+// Storage: one PersistedV3 blob. begin() migrates a v2 blob forward.
+// Thread-safety: read-mostly; writes come only from CaptivePortal / setup().
 // ---------------------------------------------------------------------------
 
 #pragma once
@@ -27,44 +25,41 @@
 
 namespace BridgeConfig {
 
-constexpr size_t MT_NODE_ID_STR_MAX = 15;   // "!12345678" plus null
-constexpr size_t MT_LONG_NAME_MAX   = 39;   // Meshtastic long_name canonical max 40
-constexpr size_t MT_SHORT_NAME_MAX  = 8;    // Meshtastic short_name typical 4
-constexpr size_t MC_KEY_HEX_LEN     = 32;   // 32 hex chars => 16 raw bytes
-constexpr size_t MC_CHANNEL_NAME_MAX = 23;  // arbitrary; fits within marker budget
-constexpr size_t MT_CHANNEL_NAME_MAX = 23;  // Meshtastic channel name
-constexpr size_t MT_PSK_B64_MAX     = 47;   // base64 of a 32-byte PSK is 44 chars
+constexpr size_t MT_NODE_ID_STR_MAX     = 15;   // "!12345678" plus null
+constexpr size_t MT_LONG_NAME_MAX       = 39;   // Meshtastic long_name canonical max 40
+constexpr size_t MT_SHORT_NAME_MAX      = 8;    // Meshtastic short_name typical 4
+constexpr size_t RADIO_CHANNEL_NAME_MAX = 23;   // per-radio channel display name
+constexpr size_t RADIO_CHANNEL_KEY_MAX  = 47;   // 32-hex MC key or ~44-char base64 MT PSK
 
 void begin();           // load from NVS or initialise from build-flag defaults
 void save();            // persist current values + set configured=true
 void resetToDefaults(); // erase NVS blob; next boot will use build-flag defaults
 bool isConfigured();    // true once save() has been called at least once
 
-// Accessors — reads are O(1) reference returns, fine to call from any task.
+// Accessors.
 uint32_t    mtNodeId();
 const char *mtNodeIdStr();
 const char *mtLongName();
 const char *mtShortName();
-const char *mcKeyHex();           // 32-char lowercase hex string
-const char *mcChannelName();
-const char *mtChannelName();      // Meshtastic channel name
-const char *mtPskBase64();        // Meshtastic channel PSK, base64 ("" = LongFast)
-bool        positionEnabled();    // BRIDGE_MT_POSITION analogue
-bool        telemetryEnabled();   // BRIDGE_MT_TELEMETRY analogue
+const char *radio1ChannelName();
+const char *radio1ChannelKey();
+const char *radio2ChannelName();
+const char *radio2ChannelKey();
+bool        positionEnabled();
+bool        telemetryEnabled();
 
-// Setters — used by the captive portal to apply form input. Validation is
-// caller-side; setters do bounds-clamping and string-null-termination only.
+// Setters — used by the captive portal. Bounds-clamp + null-terminate only.
 void setMtNodeId(uint32_t v);
 void setMtNodeIdStr(const char *s);
 void setMtLongName(const char *s);
 void setMtShortName(const char *s);
-void setMcKeyHex(const char *s);
-void setMcChannelName(const char *s);
-void setMtChannelName(const char *s);
-void setMtPskBase64(const char *s);
+void setRadio1ChannelName(const char *s);
+void setRadio1ChannelKey(const char *s);
+void setRadio2ChannelName(const char *s);
+void setRadio2ChannelKey(const char *s);
 void setPositionEnabled(bool v);
 void setTelemetryEnabled(bool v);
 
-void debugDump();       // pretty-print all values to Serial
+void debugDump();
 
 }  // namespace BridgeConfig

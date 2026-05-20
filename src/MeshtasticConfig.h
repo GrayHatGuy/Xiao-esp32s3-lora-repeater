@@ -1,39 +1,29 @@
 // MeshtasticConfig.h
 // ---------------------------------------------------------------------------
-// Runtime container for the Meshtastic channel the bridge talks on. The
-// symmetric counterpart to MeshCoreConfig — replaces the hard-coded
-// MESHTASTIC_DEFAULT_KEY / MESHTASTIC_LONGFAST_CHANNEL_HASH constants that
-// used to pin the bridge to the public LongFast channel.
+// Meshtastic channel resolver. As of v2 this is a stateless helper, not a
+// singleton — resolve() fills a caller-owned RadioChannel from a base64 PSK
+// + channel name, so each radio slot can carry its own MT channel.
 //
-// Defaults reproduce LongFast. Override via BridgeConfig (which itself
-// defaults to the BRIDGE_MT_CHANNEL_NAME / BRIDGE_MT_PSK_B64 build flags,
-// and can be set at runtime through the captive portal).
-//
-// PSK handling — Meshtastic channel keys arrive as a base64 string that
-// decodes to:
+// PSK handling — the base64 PSK decodes to:
 //   - 0 bytes  : default/primary channel  -> defaultpsk, AES-128
-//   - 1 byte   : short key index N        -> defaultpsk with last byte
-//                                            bumped by (N-1), AES-128
-//   - 16 bytes : full key                 -> used verbatim, AES-128
-//   - 32 bytes : full key                 -> used verbatim, AES-256
-// begin() runs that expansion and computes the on-air channel-hash byte.
-//
-// Thread-safety: read-mostly. begin() runs in setup() before the radio
-// tasks start, so key/keyLen/channelHash are stable by the time any
-// decode/encode reads them.
+//   - 1 byte   : short key index N        -> defaultpsk, last byte +(N-1)
+//   - 16 bytes : full key                 -> verbatim, AES-128
+//   - 32 bytes : full key                 -> verbatim, AES-256
+// channelHash = XOR-fold(name) ^ XOR-fold(expanded key).
 // ---------------------------------------------------------------------------
 
 #pragma once
 
-#include <stdint.h>
+#include "RadioChannel.h"
 
 namespace MeshtasticConfig {
 
-extern uint8_t      key[32];        // expanded AES key; first keyLen bytes valid
-extern uint8_t      keyLen;         // 16 (AES-128) or 32 (AES-256)
-extern uint8_t      channelHash;    // XOR-fold(name) ^ XOR-fold(key) — on-air selector
-extern const char  *channelName;    // for diagnostics; default "LongFast"
-
-void begin();
+// Resolve a Meshtastic channel into `out`:
+//   - base64-decode pskB64 and run the expansion above into out.key,
+//   - out.keyLen = 16 or 32, out.protocol = 0x2B (SYNC_WORD_MESHTASTIC),
+//   - out.channelHash = XOR-fold(name) ^ XOR-fold(key),
+//   - out.name = name (truncated to fit).
+// Falls back to the LongFast default channel on any malformed PSK.
+void resolve(const char *pskB64, const char *name, RadioChannel &out);
 
 }  // namespace MeshtasticConfig

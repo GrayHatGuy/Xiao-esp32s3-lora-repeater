@@ -24,8 +24,7 @@
 #include <mbedtls/md.h>
 #include <mbedtls/base64.h>
 
-#include "MeshCoreConfig.h"      // MeshCore key + channelHash + channelName
-#include "MeshtasticConfig.h"    // Meshtastic key + keyLen + channelHash + name
+#include "RadioChannel.h"        // per-radio { protocol, key, keyLen, channelHash, name }
 
 namespace MeshDecoderDebug {
 
@@ -34,17 +33,10 @@ static constexpr uint8_t SYNC_WORD_MESHCORE   = 0x12;
 static constexpr uint8_t SYNC_WORD_MESHTASTIC = 0x2B;
 static constexpr uint8_t SYNC_WORD_RETICULUM  = 0x42;   // RNode / Reticulum Network Suite
 
-// MeshCore channel state (key + channel hash + display name) now lives
-// in MeshCoreConfig and is initialised in setup() so private channels can
-// be selected via build flags or, later, the WiFi captive-portal config.
-// Decoders below read MeshCoreConfig::key / MeshCoreConfig::channelHash
-// directly.
-
-// Meshtastic channel state (key + keyLen + channel hash + name) now lives
-// in MeshtasticConfig and is initialised in setup() so private channels —
-// including AES-256 ones — can be selected via build flags or the WiFi
-// captive-portal config. Decoders below read MeshtasticConfig::key /
-// ::keyLen / ::channelHash directly.
+// Channel state is per-radio (v2): every decoder takes a `const RadioChannel&`
+// — resolved at boot for each radio slot — and reads ch.key / ch.keyLen /
+// ch.channelHash from it. This lets the two radios run different channels,
+// including the same protocol on both (MC↔MC, MT↔MT relay).
 
 // Meshtastic PortNum values we name in output; everything else prints as "?".
 static const char *meshtasticPortName(uint32_t n) {
@@ -111,7 +103,8 @@ static inline float pbFixed32AsFloat(uint32_t v) {
 
 // --- MeshCore public-channel GRP_TXT decoder --------------------------------
 // Returns true iff a public-channel GRP_TXT was decoded and printed.
-inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
+inline bool printMeshCore(const uint8_t *buf, size_t len,
+                          const RadioChannel &ch, const char *tag) {
     if (len < 6) return false;
 
     // Header: 0bVVPPPPRR
@@ -138,7 +131,7 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     const uint8_t *ct   = &buf[off + 3];
     size_t ctLen        = len - (off + 3);
 
-    if (channelHash != MeshCoreConfig::channelHash) return false;
+    if (channelHash != ch.channelHash) return false;
     if (ctLen == 0 || (ctLen % 16) != 0)             return false;
     if (ctLen > 224)                                 return false;  // sanity
 
@@ -149,8 +142,7 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     const mbedtls_md_info_t *info =
         mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     mbedtls_md_setup(&mdCtx, info, /*hmac=*/1);
-    mbedtls_md_hmac_starts(&mdCtx, MeshCoreConfig::key,
-                           sizeof(MeshCoreConfig::key));
+    mbedtls_md_hmac_starts(&mdCtx, ch.key, 16);   // MeshCore: AES-128, 16-byte key
     mbedtls_md_hmac_update(&mdCtx, ct, ctLen);
     mbedtls_md_hmac_finish(&mdCtx, hmacOut);
     mbedtls_md_free(&mdCtx);
@@ -160,7 +152,7 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     uint8_t pt[224];
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, MeshCoreConfig::key, 128);
+    mbedtls_aes_setkey_dec(&aes, ch.key, 128);
     for (size_t i = 0; i < ctLen; i += 16) {
         mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, ct + i, pt + i);
     }
@@ -207,7 +199,8 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
 // We try the default LongFast channel key. If the channel_hash doesn't match
 // the LongFast hash 0x08 the plaintext will be garbage; the protobuf walker
 // will simply fail and we'll print "(no decodable protobuf)".
-inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
+inline bool printMeshtastic(const uint8_t *buf, size_t len,
+                            const RadioChannel &ch, const char *tag) {
     if (len < 17) return false;   // 16-byte header + at least 1 byte ciphertext
 
     uint32_t dest = (uint32_t)buf[0]  | ((uint32_t)buf[1]  << 8)
@@ -253,8 +246,8 @@ inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -324,6 +317,7 @@ inline bool printMeshtastic(const uint8_t *buf, size_t len, const char *tag) {
 // portnums, wrong-channel packets, and decrypt failures return false.
 
 inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
+                                const RadioChannel &ch,
                                 char *bodyOut, size_t bodyOutCap) {
     if (!bodyOut || bodyOutCap < 2) return false;
     bodyOut[0] = 0;
@@ -351,13 +345,13 @@ inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
     const uint8_t *ct   = &buf[off + 3];
     size_t ctLen        = len - (off + 3);
 
-    if (channelHash != MeshCoreConfig::channelHash) return false;
+    if (channelHash != ch.channelHash) return false;
     if (ctLen == 0 || (ctLen % 16) != 0 || ctLen > 224) return false;
 
     uint8_t pt[224];
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, MeshCoreConfig::key, 128);
+    mbedtls_aes_setkey_dec(&aes, ch.key, 128);
     for (size_t i = 0; i < ctLen; i += 16) {
         mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, ct + i, pt + i);
     }
@@ -376,13 +370,14 @@ inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
 }
 
 inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
+                                   const RadioChannel &ch,
                                    char *bodyOut, size_t bodyOutCap) {
     if (!bodyOut || bodyOutCap < 2) return false;
     bodyOut[0] = 0;
     if (len < 17) return false;
 
     uint8_t channelHash = buf[13];
-    if (channelHash != MeshtasticConfig::channelHash) return false;
+    if (channelHash != ch.channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -406,8 +401,8 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -462,6 +457,7 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
 // it keeps each decoder readable as a single linear function rather than
 // chasing a shared helper.
 inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
+                                       const RadioChannel &ch,
                                        uint32_t &outNodeId,
                                        char *shortNameOut, size_t shortCap,
                                        char *longNameOut,  size_t longCap) {
@@ -471,7 +467,7 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
     if (len < 17) return false;
 
     uint8_t channelHash = buf[13];
-    if (channelHash != MeshtasticConfig::channelHash) return false;
+    if (channelHash != ch.channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -495,8 +491,8 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -579,10 +575,11 @@ struct MeshtasticPositionInfo {
 };
 
 inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
+                                       const RadioChannel &ch,
                                        MeshtasticPositionInfo &out) {
     out = {};
     if (len < 17) return false;
-    if (buf[13] != MeshtasticConfig::channelHash) return false;
+    if (buf[13] != ch.channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -606,8 +603,8 @@ inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -686,11 +683,12 @@ struct MeshtasticTelemetryInfo {
 };
 
 inline bool extractMeshtasticTelemetry(const uint8_t *buf, size_t len,
+                                        const RadioChannel &ch,
                                         MeshtasticTelemetryInfo &out) {
     out = {};
     out.kind = MeshtasticTelemetryInfo::Kind::NONE;
     if (len < 17) return false;
-    if (buf[13] != MeshtasticConfig::channelHash) return false;
+    if (buf[13] != ch.channelHash) return false;
 
     uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
@@ -714,8 +712,8 @@ inline bool extractMeshtasticTelemetry(const uint8_t *buf, size_t len,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MeshtasticConfig::key,
-                               (unsigned)MeshtasticConfig::keyLen * 8);
+        mbedtls_aes_setkey_enc(&aes, ch.key,
+                               (unsigned)ch.keyLen * 8);
         uint8_t stream[16] = {};
         size_t  nc_off = 0;
         mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
@@ -915,16 +913,17 @@ inline bool reassembleReticulumFragment(const char * /*body*/,
 }
 
 
-// --- Public entry point: dispatch by sync word ------------------------------
-inline void print(const uint8_t *buf, size_t len, uint8_t syncWord, const char *tag) {
-    if (syncWord == SYNC_WORD_MESHCORE) {
-        printMeshCore(buf, len, tag);
-    } else if (syncWord == SYNC_WORD_MESHTASTIC) {
-        printMeshtastic(buf, len, tag);
-    } else if (syncWord == SYNC_WORD_RETICULUM) {
+// --- Public entry point: dispatch by the radio's protocol -------------------
+inline void print(const uint8_t *buf, size_t len,
+                   const RadioChannel &ch, const char *tag) {
+    if (ch.protocol == SYNC_WORD_MESHCORE) {
+        printMeshCore(buf, len, ch, tag);
+    } else if (ch.protocol == SYNC_WORD_MESHTASTIC) {
+        printMeshtastic(buf, len, ch, tag);
+    } else if (ch.protocol == SYNC_WORD_RETICULUM) {
         printReticulum(buf, len, tag);
     }
-    // Other sync words: silently ignore — we don't know that protocol.
+    // Other protocols: silently ignore — we don't know that protocol.
 }
 
 }  // namespace MeshDecoderDebug
