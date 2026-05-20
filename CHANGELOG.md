@@ -1,5 +1,11 @@
 # Changelog
 
+## v6.2 — 2026-05-20 — Remove deprecated raw RX hex dump
+
+The raw incoming-packet hex dump (`[R1 RX] data: FF FF FF FF …`) is removed from both radio tasks. It was an early-development debugging aid — pure `Serial.printf` with no functional role — and is now deprecated. The bridge's decode → re-encode → transmit path is unaffected; the `extract*()` decoders are untouched.
+
+Per-packet serial output keeps the RX summary line (size / RSSI / SNR), the `[R1 decoded]` protocol summary, and the bridge re-encode / TX lines.
+
 ## v6.1 — 2026-05-19 — F5: Meshtastic private-channel support
 
 The Meshtastic side is no longer pinned to the LongFast public channel. New `MeshtasticConfig.{h,cpp}` mirrors `MeshCoreConfig`: it reads a base64 PSK + channel name from `BridgeConfig`, runs Meshtastic's key expansion, and derives the on-air channel-hash byte.

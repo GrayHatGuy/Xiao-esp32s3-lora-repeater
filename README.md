@@ -56,7 +56,7 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
 5. **Clean + build.** `pio run -t clean && pio run` — the clean is important whenever a header changes.
 6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
 7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MT node ID, in hex). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to a single-page config form pre-filled with the build-flag defaults from step 4. Edit identity / channel / portnum toggles as needed, hit **Save & reboot**, and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)
-8. **Monitor.** Once the bridge is configured, expect RX hex dumps, protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
+8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
 ## Roadmap
 
