@@ -437,6 +437,118 @@ inline bool extractMeshtasticBody(const uint8_t *buf, size_t len,
 }
 
 
+// --- Meshtastic NODEINFO_APP (portnum 4) decoder ----------------------------
+// Pulls the User submessage out of a Meshtastic NodeInfo broadcast. On
+// success, fills outNodeId with the packet's src field (the canonical
+// 32-bit ID), and writes the User long_name (field 2) and short_name
+// (field 3) into the caller's buffers as null-terminated strings. Returns
+// false for any of: not a LongFast packet, decrypt boundary error, portnum
+// != 4, missing payload, malformed protobuf.
+//
+// Crypto mirrors extractMeshtasticBody(); the duplication is intentional —
+// it keeps each decoder readable as a single linear function rather than
+// chasing a shared helper.
+inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
+                                       uint32_t &outNodeId,
+                                       char *shortNameOut, size_t shortCap,
+                                       char *longNameOut,  size_t longCap) {
+    outNodeId = 0;
+    if (shortNameOut && shortCap) shortNameOut[0] = 0;
+    if (longNameOut  && longCap)  longNameOut[0]  = 0;
+    if (len < 17) return false;
+
+    uint8_t channelHash = buf[13];
+    if (channelHash != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+
+    uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                 | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+    uint32_t pid = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
+                 | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
+
+    const uint8_t *ct = buf + 16;
+    size_t ctLen      = len - 16;
+    if (ctLen > 240) return false;
+
+    uint8_t nonce[16] = {
+        (uint8_t)(pid >>  0), (uint8_t)(pid >>  8),
+        (uint8_t)(pid >> 16), (uint8_t)(pid >> 24),
+        0, 0, 0, 0,
+        (uint8_t)(src >>  0), (uint8_t)(src >>  8),
+        (uint8_t)(src >> 16), (uint8_t)(src >> 24),
+        0, 0, 0, 0
+    };
+
+    uint8_t pt[240];
+    {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        uint8_t stream[16] = {};
+        size_t  nc_off = 0;
+        mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
+        mbedtls_aes_free(&aes);
+    }
+
+    // Walk Data protobuf, find portnum and payload.
+    size_t   pos        = 0;
+    uint32_t portnum    = 0;
+    const uint8_t *payload = nullptr;
+    size_t   payloadLen = 0;
+    while (pos < ctLen) {
+        uint64_t tagv;
+        if (!pbVarint(pt, ctLen, pos, tagv)) break;
+        int fieldNum = (int)(tagv >> 3);
+        int wireType = (int)(tagv & 0x07);
+        if (fieldNum == 1 && wireType == 0) {
+            uint64_t v;
+            if (!pbVarint(pt, ctLen, pos, v)) break;
+            portnum = (uint32_t)v;
+        } else if (fieldNum == 2 && wireType == 2) {
+            uint64_t plen;
+            if (!pbVarint(pt, ctLen, pos, plen) || pos + plen > ctLen) break;
+            payload    = pt + pos;
+            payloadLen = (size_t)plen;
+            pos       += payloadLen;
+        } else {
+            if (!pbSkip(pt, ctLen, pos, wireType)) break;
+        }
+    }
+    if (portnum != 4 /*NODEINFO_APP*/ || !payload || payloadLen == 0)
+        return false;
+
+    // Walk User submessage. We care about long_name (field 2) and
+    // short_name (field 3); field 1 is the "!hexid" string which we ignore
+    // in favour of the header src field.
+    size_t up = 0;
+    while (up < payloadLen) {
+        uint64_t tagv;
+        if (!pbVarint(payload, payloadLen, up, tagv)) return false;
+        int field = (int)(tagv >> 3);
+        int wt    = (int)(tagv & 0x07);
+        if (wt == 2) {
+            uint64_t slen;
+            if (!pbVarint(payload, payloadLen, up, slen) ||
+                up + slen > payloadLen) return false;
+            if (field == 2 && longNameOut && longCap > 1) {
+                size_t copy = (slen < longCap - 1) ? (size_t)slen : longCap - 1;
+                memcpy(longNameOut, payload + up, copy);
+                longNameOut[copy] = 0;
+            } else if (field == 3 && shortNameOut && shortCap > 1) {
+                size_t copy = (slen < shortCap - 1) ? (size_t)slen : shortCap - 1;
+                memcpy(shortNameOut, payload + up, copy);
+                shortNameOut[copy] = 0;
+            }
+            up += (size_t)slen;
+        } else {
+            if (!pbSkip(payload, payloadLen, up, wt)) return false;
+        }
+    }
+
+    outNodeId = src;
+    return true;
+}
+
+
 // --- Reticulum / RNode raw decoder (stub) -----------------------------------
 // Reticulum's on-air framing (RNS packet header, addresses, hops, IFAC) is
 // not yet parsed. As an interim measure for cross-protocol bridging, the

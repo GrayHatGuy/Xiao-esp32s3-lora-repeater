@@ -14,7 +14,7 @@ Each radio gets an independent LoRa configuration (frequency, bandwidth, spreadi
 
 Supported today:
 
-- **Meshtastic LongFast** (sync `0x2B`) — AES-128-CTR + a hand-written protobuf walker that lifts the `TEXT_MESSAGE_APP` payload out of the on-air `Data` submessage. Bridged bodies are tagged `[MT] …`. A periodic NodeInfo announce makes phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
+- **Meshtastic LongFast** (sync `0x2B`) — AES-128-CTR + a hand-written protobuf walker that lifts the `TEXT_MESSAGE_APP` payload out of the on-air `Data` submessage. Bridged bodies are tagged with the sender's canonical Meshtastic `!`-prefixed hex ID plus the short_name when known: `[MT !3d3a87a3 KN5J] …` (or `[MT !3d3a87a3] …` if no `NODEINFO_APP` has been seen yet for that node). The bridge decodes incoming `NODEINFO_APP` packets to populate a 64-entry, NVS-persistent NodeDB so attribution survives reboots, and emits its own periodic NodeInfo announce so phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
 - **MeshCore public channel** (sync `0x12`) — AES-128-ECB decrypt of `GRP_TXT`, with the 2-byte truncated HMAC-SHA256 verified against the public channel key. Bridged bodies are tagged `[MC] …`.
 - **Reticulum / RNode** (sync `0x42`, **stub**) — incoming frames are base64-encoded and bridged into the other mesh as text packets of the form `[rns <seq> <x>/<y>] <base64>`. The bridge auto-fragments across multiple MT/MC packets when a single one wouldn't hold the encoded frame, using a CRC-16 low-byte sequence ID so concurrent fragmented frames don't get mixed up on the receiving side, and pacing between fragments (2000 ms for SF11/BW250 MT, 500 ms for SF7/BW62.5 MC; max 8 fragments per frame, tunable via `BRIDGE_RNS_*` build flags). A proper RNS packet encoder is still TODO; until then, "destination = RNS" is a log-and-drop path with a `No TX 2 RNS:` prefix on serial.
 
@@ -79,6 +79,6 @@ Outstanding work to lift the stub:
 
 ### Other future work
 
-- [ ] More Meshtastic portnums (`POSITION_APP`, `TELEMETRY_APP`, `NODEINFO_APP`) bridged where they map cleanly to MeshCore advert/group-data equivalents.
+- [ ] More Meshtastic portnums bridged: `POSITION_APP` (lat/lon/alt → human-readable `📍 KN5J 40.7,-74.0 alt 12m` line on the MC side) and `TELEMETRY_APP` (battery/env). `NODEINFO_APP` is already decoded into the NodeDB but intentionally not bridged as text.
 - [ ] MeshCore private-channel support (channel/key table instead of the hard-coded public channel `0x11`).
-- [ ] Persistent NodeDB so `[MT] …` prefixes can be replaced with the actual sender's short name learned from upstream NodeInfo packets, giving the destination mesh a real attribution instead of an anonymous bridge tag.
+- [x] ~~Persistent NodeDB so `[MT] …` prefixes can be replaced with the actual sender's short name~~ — **done** in `NodeDB.{h,cpp}`; MT→MC bridged messages now carry `[MT !<hexid> <SHORT>] …` attribution learned from `NODEINFO_APP` packets and persisted to NVS.

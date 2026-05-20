@@ -27,6 +27,7 @@
 #include "WioSX1262.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
+#include "NodeDB.h"
 // Per-radio LoRa settings — fall back to the generic LORA_* defaults
 // from WioSX1262.h for any value not defined in platformio.ini.
 #ifndef LORA_RADIO1_FREQUENCY
@@ -140,7 +141,12 @@ static const LoraConfig radio2Config = {
 // ============================================================
 //  FreeRTOS configuration
 // ============================================================
-#define BRIDGE_TASK_STACK  4096
+// Radio task stack. Bumped from 4096 to 8192 once F1 (NodeDB) landed:
+// bridgePacket() can nest extractMeshtasticNodeInfo (240 B pt + AES ctx
+// ~280 B) under its own body[256]+marked[280]+outPkt[256], plus the
+// fragmented-RNS path needs similar headroom. 8 KB leaves a comfortable
+// margin; the ESP32-S3 has 512 KB SRAM so it's free real estate.
+#define BRIDGE_TASK_STACK  8192
 #define BRIDGE_TASK_PRIO   2       // above idle, below system
 #define BRIDGE_POLL_MS     1       // ms between RX polls
 
@@ -313,6 +319,43 @@ static void bridgeFromReticulum(uint8_t dstSync, WioSX1262 *dstRadio,
     }
 }
 
+// Build the bridge prefix for a text-source packet. For MT source, surfaces
+// the sender's canonical 32-bit ID in Meshtastic's "!<8 lowercase hex>" form
+// and appends the short_name from NodeDB when known:
+//   "[MT !3d3a87a3 KN5J]"  — id + name (NodeDB hit)
+//   "[MT !3d3a87a3]"       — id only (no NodeInfo seen yet for this node)
+//   "[MT]"                 — defensive fallback if buf < 8 B
+// MC packets already carry the sender's name inline in the body, so the MC
+// marker stays bare.
+static void buildTextSrcMarker(uint8_t srcSync,
+                               const uint8_t *buf, size_t len,
+                               char *out, size_t outCap)
+{
+    if (!out || outCap == 0) return;
+    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        if (len >= 8) {
+            uint32_t srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                           | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+            const char *shortName = NodeDB::lookupShortName(srcId);
+            if (shortName && shortName[0]) {
+                snprintf(out, outCap, "[MT !%08lx %s]",
+                         (unsigned long)srcId, shortName);
+            } else {
+                snprintf(out, outCap, "[MT !%08lx]",
+                         (unsigned long)srcId);
+            }
+            return;
+        }
+        snprintf(out, outCap, "[MT]");
+        return;
+    }
+    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        snprintf(out, outCap, "[MC]");
+        return;
+    }
+    snprintf(out, outCap, "[?]");
+}
+
 static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
                          WioSX1262 *dstRadio, const char *srcTag,
                          const uint8_t *buf, size_t len)
@@ -323,19 +366,43 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
         return;
     }
 
+    // MT NodeInfo packets feed the NodeDB and are NOT bridged as text —
+    // they'd be constant noise on the destination mesh and the destination
+    // doesn't have a use for them. Try this before the text-body extract
+    // so we don't waste a Data-protobuf walk twice.
+    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        uint32_t niNodeId = 0;
+        char     niShort[NodeDB::MAX_SHORT_NAME + 1] = {0};
+        char     niLong [NodeDB::MAX_LONG_NAME  + 1] = {0};
+        if (MeshDecoderDebug::extractMeshtasticNodeInfo(
+                buf, len, niNodeId,
+                niShort, sizeof(niShort),
+                niLong,  sizeof(niLong))) {
+            // Skip our own NodeInfo bouncing back via a relay. Without this
+            // guard every echo would trigger an NVS write of our own ID.
+            if (niNodeId == (uint32_t)BRIDGE_MT_NODE_ID) {
+                Serial.printf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
+                              millis(), srcTag, (unsigned long)niNodeId);
+                return;
+            }
+            NodeDB::upsert(niNodeId, niShort, niLong);
+            Serial.printf("[%8lu ms][%s NodeDB] upsert !%08lX short=\"%s\" long=\"%s\"\n",
+                          millis(), srcTag,
+                          (unsigned long)niNodeId, niShort, niLong);
+            return;     // not a text packet — don't bridge
+        }
+    }
+
     // Text source (MT or MC): single-packet bridge
     char body[256];
-    const char *srcMarker = nullptr;
-    bool        decoded   = false;
+    bool decoded = false;
 
     switch (srcSync) {
         case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
             decoded = MeshDecoderDebug::extractMeshtasticBody(buf, len, body, sizeof(body));
-            srcMarker = "[MT]";
             break;
         case MeshDecoderDebug::SYNC_WORD_MESHCORE:
             decoded = MeshDecoderDebug::extractMeshCoreBody(buf, len, body, sizeof(body));
-            srcMarker = "[MC]";
             break;
         default:
             return;
@@ -343,16 +410,19 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     if (!decoded) return;
 
     // Loop check — drop anything already carrying a bridge marker.
-    // "[rns" (4 chars) matches both the legacy "[rns] …" form and the
-    // fragmented "[rns AA 1/3] …" form.
-    if (strncmp(body, "[MT]", 4) == 0 ||
-        strncmp(body, "[MC]", 4) == 0 ||
+    // We use 3-char "[MT" and "[MC" prefixes so the check survives the
+    // upcoming "[MT <SHORT>]" form when NodeDB attribution lands. The "[rns"
+    // 4-char prefix already covers both legacy and fragmented RNS markers.
+    if (strncmp(body, "[MT",  3) == 0 ||
+        strncmp(body, "[MC",  3) == 0 ||
         strncmp(body, "[rns", 4) == 0) {
         Serial.printf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
                       millis(), srcTag, body);
         return;
     }
 
+    char srcMarker[32];   // fits "[MT !12345678 ABCDEFGH]" (23 chars) + room
+    buildTextSrcMarker(srcSync, buf, len, srcMarker, sizeof(srcMarker));
     char marked[280];
     snprintf(marked, sizeof(marked), "%s %s", srcMarker, body);
 
@@ -525,6 +595,12 @@ void setup()
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Crossover Bridge ===");
+
+    // Load persisted NodeDB before the radio tasks start so the very first
+    // bridged MT packet can already carry a [MT <SHORT>] attribution if the
+    // sender was seen in a previous boot.
+    NodeDB::begin();
+    NodeDB::debugDump();
 
     // Start shared SPI bus with explicit XIAO ESP32S3 pin mapping
     spi.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
