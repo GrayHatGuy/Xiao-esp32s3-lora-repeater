@@ -12,6 +12,27 @@ This release makes the bridge field-configurable without a rebuild and widens th
 
 Per-radio LoRa parameters (frequency, BW, SF, CR, TX power, sync word) remain build-flag-only — out-of-band misconfiguration is too easy to expose in a v1 form.
 
+### Changes since v5.0
+
+`v5.0..v6.0` — commit `04c0c5a`. 12 files changed, +1122 / -62.
+
+```
+ CHANGELOG.md           |  14 ++         changelog
+ README.md              |  35 ++         instructions + roadmap (F5, portal v2, 2.4 GHz)
+ platformio.ini         |  13 ++         BRIDGE_MC_* / BRIDGE_MT_* flag examples
+ src/BridgeConfig.h     |  64 ++         new — NVS-backed config interface
+ src/BridgeConfig.cpp   | 178 ++         new — schema-v1 blob load/save/defaults
+ src/CaptivePortal.h    |  29 ++         new — portal interface
+ src/CaptivePortal.cpp  | 276 ++         new — WiFi AP + DNS + HTTP config form
+ src/MeshCoreConfig.h   |  33 ++         new — MC channel module interface
+ src/MeshCoreConfig.cpp |  68 ++         new — key/hash from BridgeConfig
+ src/MeshDecoderDebug.h | 312 ++         POSITION/TELEMETRY decoders, MC config refs
+ src/MeshEncoderDebug.h |  37 ++         encoders take srcNodeId param
+ src/main.cpp           | 125 ++         portal trigger, runtime portnum gates, wiring
+```
+
+New files: `BridgeConfig.{h,cpp}`, `CaptivePortal.{h,cpp}`, `MeshCoreConfig.{h,cpp}`.
+
 ## v5.0 — 2026-05-19 — Persistent NodeDB & MT sender attribution
 
 This release adds end-to-end sender attribution for MT→MC bridged text, plus reliability fixes shaken out during integration testing.
