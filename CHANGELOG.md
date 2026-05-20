@@ -1,6 +1,18 @@
 # Changelog
 
-## 2026-05-19 — Persistent NodeDB & MT sender attribution
+## v6.0 — 2026-05-19 — Captive-portal config, POSITION/TELEMETRY bridging, configurable MC channel
+
+This release makes the bridge field-configurable without a rebuild and widens the Meshtastic traffic it understands. It bundles features F2, F3 and F4.
+
+**WiFi captive portal (F4).** On a fresh flash — or any time the **BOOT** button is pressed within ~3 s of reset — the bridge comes up as an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MT node ID in hex) and DNS-redirects all HTTP traffic to a single-page config form. The form exposes the eight settings users actually re-tune: Meshtastic identity (node ID numeric + `!hex` string, long name, short name), MeshCore channel (32-char hex key + display name), and the POSITION/TELEMETRY bridge toggles. Saving writes a schema-v1 blob to NVS and reboots into bridge mode. New `BridgeConfig.{h,cpp}` is the single source of truth; the `BRIDGE_MT_*` / `BRIDGE_MC_*` build flags become the defaults a fresh device starts from, so existing `platformio.ini` configs behave identically until the portal saves something new.
+
+**POSITION + TELEMETRY bridging (F2).** `POSITION_APP` and `TELEMETRY_APP` are decoded from incoming MT packets and re-emitted to MeshCore as compact text under the existing `[MT !<hexid> <SHORT>]` marker — `pos 40.7234,-74.0123 alt 12m`, `bat 87% 4.05V`, `env 22.5C RH 45% 1013hPa`. Each portnum is individually toggleable from the portal or via build flag.
+
+**Configurable MeshCore channel (F3).** The hard-coded public-channel key moved into a new `MeshCoreConfig` module; the bridge can now point at any MC channel via config, with the on-air channel hash auto-derived from `SHA-256(key)[0]`.
+
+Per-radio LoRa parameters (frequency, BW, SF, CR, TX power, sync word) remain build-flag-only — out-of-band misconfiguration is too easy to expose in a v1 form.
+
+## v5.0 — 2026-05-19 — Persistent NodeDB & MT sender attribution
 
 This release adds end-to-end sender attribution for MT→MC bridged text, plus reliability fixes shaken out during integration testing.
 

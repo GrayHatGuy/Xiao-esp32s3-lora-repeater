@@ -27,6 +27,9 @@
 #include "WioSX1262.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
+#include "MeshCoreConfig.h"
+#include "BridgeConfig.h"
+#include "CaptivePortal.h"
 #include "NodeDB.h"
 // Per-radio LoRa settings — fall back to the generic LORA_* defaults
 // from WioSX1262.h for any value not defined in platformio.ini.
@@ -285,6 +288,7 @@ static void bridgeFromReticulum(uint8_t dstSync, WioSX1262 *dstRadio,
         bool    encoded = false;
         if (dstSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
             encoded = MeshEncoderDebug::encodeMeshtasticText(
+                          BridgeConfig::mtNodeId(),
                           marked, outPkt, sizeof(outPkt), outLen);
         } else {
             encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
@@ -380,7 +384,7 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
                 niLong,  sizeof(niLong))) {
             // Skip our own NodeInfo bouncing back via a relay. Without this
             // guard every echo would trigger an NVS write of our own ID.
-            if (niNodeId == (uint32_t)BRIDGE_MT_NODE_ID) {
+            if (niNodeId == BridgeConfig::mtNodeId()) {
                 Serial.printf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
                               millis(), srcTag, (unsigned long)niNodeId);
                 return;
@@ -393,19 +397,68 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
         }
     }
 
-    // Text source (MT or MC): single-packet bridge
+    // Text source (MT or MC): single-packet bridge.
+    // For MT we try POSITION_APP and TELEMETRY_APP first; if either yields
+    // structured data we format it as a compact text line and reuse the
+    // standard text-bridge pipeline below. TEXT_MESSAGE_APP is the final
+    // fallback. For MC we just lift the GRP_TXT body directly.
     char body[256];
     bool decoded = false;
 
-    switch (srcSync) {
-        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
-            decoded = MeshDecoderDebug::extractMeshtasticBody(buf, len, body, sizeof(body));
-            break;
-        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
-            decoded = MeshDecoderDebug::extractMeshCoreBody(buf, len, body, sizeof(body));
-            break;
-        default:
-            return;
+    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        if (!decoded && BridgeConfig::positionEnabled()) {
+            MeshDecoderDebug::MeshtasticPositionInfo pos;
+            if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, pos)) {
+                int n = snprintf(body, sizeof(body), "pos");
+                if (pos.hasLat && pos.hasLon) {
+                    n += snprintf(body + n, sizeof(body) - n, " %.4f,%.4f",
+                                  (double)pos.latI / 1e7,
+                                  (double)pos.lonI / 1e7);
+                }
+                if (pos.hasAlt) {
+                    n += snprintf(body + n, sizeof(body) - n, " alt %dm",
+                                  (int)pos.altM);
+                }
+                decoded = true;
+            }
+        }
+        if (!decoded && BridgeConfig::telemetryEnabled()) {
+            MeshDecoderDebug::MeshtasticTelemetryInfo tel;
+            if (MeshDecoderDebug::extractMeshtasticTelemetry(buf, len, tel)) {
+                using TKind = MeshDecoderDebug::MeshtasticTelemetryInfo::Kind;
+                if (tel.kind == TKind::DEVICE) {
+                    int n = snprintf(body, sizeof(body), "bat");
+                    if (tel.hasBatteryPct)
+                        n += snprintf(body + n, sizeof(body) - n,
+                                      " %.0f%%", (double)tel.batteryPct);
+                    if (tel.hasVoltage)
+                        n += snprintf(body + n, sizeof(body) - n,
+                                      " %.2fV", (double)tel.voltage);
+                    decoded = true;
+                } else if (tel.kind == TKind::ENVIRONMENT) {
+                    int n = snprintf(body, sizeof(body), "env");
+                    if (tel.hasTempC)
+                        n += snprintf(body + n, sizeof(body) - n,
+                                      " %.1fC", (double)tel.tempC);
+                    if (tel.hasRhPct)
+                        n += snprintf(body + n, sizeof(body) - n,
+                                      " RH %.0f%%", (double)tel.rhPct);
+                    if (tel.hasPressureHpa)
+                        n += snprintf(body + n, sizeof(body) - n,
+                                      " %.0fhPa", (double)tel.pressureHpa);
+                    decoded = true;
+                }
+            }
+        }
+        if (!decoded) {
+            decoded = MeshDecoderDebug::extractMeshtasticBody(
+                buf, len, body, sizeof(body));
+        }
+    } else if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        decoded = MeshDecoderDebug::extractMeshCoreBody(
+            buf, len, body, sizeof(body));
+    } else {
+        return;
     }
     if (!decoded) return;
 
@@ -440,6 +493,7 @@ static void bridgePacket(uint8_t srcSync, uint8_t dstSync,
     switch (dstSync) {
         case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
             encoded = MeshEncoderDebug::encodeMeshtasticText(
+                          BridgeConfig::mtNodeId(),
                           marked, outPkt, sizeof(outPkt), outLen);
             dstName = "MT";
             break;
@@ -493,13 +547,15 @@ void radio1Task(void *pvParameters)
             uint8_t niPkt[256];
             size_t  niLen = 0;
             if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
-                    BRIDGE_MT_NODE_ID_STR,
-                    BRIDGE_MT_LONG_NAME,
-                    BRIDGE_MT_SHORT_NAME,
+                    BridgeConfig::mtNodeId(),
+                    BridgeConfig::mtNodeIdStr(),
+                    BridgeConfig::mtLongName(),
+                    BridgeConfig::mtShortName(),
                     niPkt, sizeof(niPkt), niLen)) {
                 Serial.printf("[%8lu ms][R1 NodeInfo TX] %u B id=%s name=\"%s\"\n",
                               millis(), (unsigned)niLen,
-                              BRIDGE_MT_NODE_ID_STR, BRIDGE_MT_LONG_NAME);
+                              BridgeConfig::mtNodeIdStr(),
+                              BridgeConfig::mtLongName());
                 int16_t txState = radio1->transmit(niPkt, niLen);
                 if (txState != RADIOLIB_ERR_NONE) {
                     Serial.printf("[%8lu ms][R1 NodeInfo TX] ERROR %d\n",
@@ -596,9 +652,44 @@ void setup()
     while (!Serial && millis() < 3000);
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Crossover Bridge ===");
 
+    // Bridge configuration: NVS first, build-flag defaults otherwise.
+    BridgeConfig::begin();
+    BridgeConfig::debugDump();
+
+    // Captive portal trigger:
+    //   - First-flash path: NVS has no saved config yet (isConfigured()==false).
+    //   - Recovery path:    user holds the BOOT button (GPIO0, active-LOW) at
+    //                       any point during the first ~3 s after boot.
+    // The portal call is blocking — it ESP.restart()s once the form saves —
+    // so any of the radio init below it never runs while the portal is up.
+    {
+        pinMode(0, INPUT_PULLUP);
+        const uint32_t windowEnd = millis() + 3000;
+        bool buttonPressed = false;
+        if (!BridgeConfig::isConfigured()) {
+            Serial.println("[setup] no config in NVS — entering captive portal");
+            CaptivePortal::begin();   // never returns
+        }
+        Serial.println("[setup] press BOOT within 3 s to enter captive portal...");
+        while (millis() < windowEnd) {
+            if (digitalRead(0) == LOW) { buttonPressed = true; break; }
+            delay(20);
+        }
+        if (buttonPressed) {
+            Serial.println("[setup] BOOT pressed — entering captive portal");
+            CaptivePortal::begin();   // never returns
+        }
+        Serial.println("[setup] proceeding to bridge mode");
+    }
+
+    // Resolve the MeshCore channel from BridgeConfig (which itself loaded
+    // BRIDGE_MC_KEY_HEX defaults or the value the user saved in the portal).
+    // Computes channelHash = SHA-256(key)[0] once, before any RX.
+    MeshCoreConfig::begin();
+
     // Load persisted NodeDB before the radio tasks start so the very first
-    // bridged MT packet can already carry a [MT <SHORT>] attribution if the
-    // sender was seen in a previous boot.
+    // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution
+    // if the sender was seen in a previous boot.
     NodeDB::begin();
     NodeDB::debugDump();
 

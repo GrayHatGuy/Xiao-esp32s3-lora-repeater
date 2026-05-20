@@ -26,22 +26,10 @@
 
 #include "MeshDecoderDebug.h"   // for key constants + channel-hash constants
 
-// Cross-protocol bridge identity (Meshtastic side). Override any of these
-// via -D build flags in platformio.ini. The numeric BRIDGE_MT_NODE_ID and
-// the string BRIDGE_MT_NODE_ID_STR MUST encode the same value, e.g.
-// "!b16b00b5" <-> 0xB16B00B5u.
-#ifndef BRIDGE_MT_NODE_ID
-  #define BRIDGE_MT_NODE_ID      0xB16B00B5u
-#endif
-#ifndef BRIDGE_MT_NODE_ID_STR
-  #define BRIDGE_MT_NODE_ID_STR  "!b16b00b5"
-#endif
-#ifndef BRIDGE_MT_LONG_NAME
-  #define BRIDGE_MT_LONG_NAME    "LoRa Bridge"
-#endif
-#ifndef BRIDGE_MT_SHORT_NAME
-  #define BRIDGE_MT_SHORT_NAME   "BR"
-#endif
+// Cross-protocol bridge identity (Meshtastic side) is now owned by
+// BridgeConfig. The encoders below take srcNodeId as a parameter so they
+// stay decoupled from any particular configuration source; the call sites
+// in main.cpp read BridgeConfig::mtNodeId() and pass the value in.
 
 namespace MeshEncoderDebug {
 
@@ -84,7 +72,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
     {
         mbedtls_aes_context aes;
         mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, MESHCORE_PUBLIC_KEY, 128);
+        mbedtls_aes_setkey_enc(&aes, MeshCoreConfig::key, 128);
         for (size_t i = 0; i < ptLen; i += 16) {
             mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, p + i, p + i);
         }
@@ -99,8 +87,8 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
         const mbedtls_md_info_t *info =
             mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
         mbedtls_md_setup(&mdCtx, info, /*hmac=*/1);
-        mbedtls_md_hmac_starts(&mdCtx, MESHCORE_PUBLIC_KEY,
-                               sizeof(MESHCORE_PUBLIC_KEY));
+        mbedtls_md_hmac_starts(&mdCtx, MeshCoreConfig::key,
+                               sizeof(MeshCoreConfig::key));
         mbedtls_md_hmac_update(&mdCtx, p, ptLen);
         mbedtls_md_hmac_finish(&mdCtx, hmac);
         mbedtls_md_free(&mdCtx);
@@ -111,7 +99,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
     // routeType 0x01 leaves the optional 4-byte transport-codes field absent.
     outBuf[0] = (uint8_t)((0 << 6) | (0x05 << 2) | 0x01);
     outBuf[1] = 0;                                  // pathLen — no relays
-    outBuf[2] = MESHCORE_PUBLIC_CHANNEL_HASH;       // 0x11
+    outBuf[2] = MeshCoreConfig::channelHash;       // 0x11
     outBuf[3] = hmac[0];
     outBuf[4] = hmac[1];
 
@@ -125,7 +113,7 @@ inline bool encodeMeshCoreGrpTxt(const char *body, uint32_t ts,
 // outBuf / outBufCap : caller-provided buffer for the assembled packet.
 // outLen : set to the byte count actually written on success.
 // Returns true on success.
-inline bool encodeMeshtasticText(const char *body,
+inline bool encodeMeshtasticText(uint32_t srcNodeId, const char *body,
                                   uint8_t *outBuf, size_t outBufCap,
                                   size_t  &outLen) {
     using namespace MeshDecoderDebug;
@@ -160,7 +148,7 @@ inline bool encodeMeshtasticText(const char *body,
     if (pid == 0) pid = 1;
 
     const uint32_t dest = 0xFFFFFFFFu;                  // broadcast
-    const uint32_t src  = BRIDGE_MT_NODE_ID;
+    const uint32_t src  = srcNodeId;
 
     // 16-byte transport header
     outBuf[0]  = (uint8_t)(dest >>  0);
@@ -218,7 +206,8 @@ inline bool encodeMeshtasticText(const char *body,
 // Meshtastic clients recognise the bridge as a known node, so text messages
 // from BRIDGE_MT_NODE_ID surface in their UI instead of being silently
 // hidden as "from an unknown sender".
-inline bool encodeMeshtasticNodeInfo(const char *id,
+inline bool encodeMeshtasticNodeInfo(uint32_t srcNodeId,
+                                      const char *id,
                                       const char *longName,
                                       const char *shortName,
                                       uint8_t *outBuf, size_t outBufCap,
@@ -278,7 +267,7 @@ inline bool encodeMeshtasticNodeInfo(const char *id,
     if (pid == 0) pid = 1;
 
     const uint32_t dest = 0xFFFFFFFFu;            // broadcast
-    const uint32_t src  = (uint32_t)BRIDGE_MT_NODE_ID;
+    const uint32_t src  = srcNodeId;
 
     // 16-byte transport header (identical layout to encodeMeshtasticText)
     outBuf[0]  = (uint8_t)(dest >>  0);

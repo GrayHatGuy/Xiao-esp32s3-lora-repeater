@@ -24,6 +24,8 @@
 #include <mbedtls/md.h>
 #include <mbedtls/base64.h>
 
+#include "MeshCoreConfig.h"     // key + channelHash + channelName
+
 namespace MeshDecoderDebug {
 
 // --- Sync-word constants (match the platformio.ini build flags) -------------
@@ -31,14 +33,11 @@ static constexpr uint8_t SYNC_WORD_MESHCORE   = 0x12;
 static constexpr uint8_t SYNC_WORD_MESHTASTIC = 0x2B;
 static constexpr uint8_t SYNC_WORD_RETICULUM  = 0x42;   // RNode / Reticulum Network Suite
 
-// --- MeshCore public channel ------------------------------------------------
-// AES-128 key for the default MeshCore public channel.
-// SHA-256(key)[0] == 0x11, which is the on-air channel hash.
-static const uint8_t MESHCORE_PUBLIC_KEY[16] = {
-    0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a,
-    0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72
-};
-static constexpr uint8_t MESHCORE_PUBLIC_CHANNEL_HASH = 0x11;
+// MeshCore channel state (key + channel hash + display name) now lives
+// in MeshCoreConfig and is initialised in setup() so private channels can
+// be selected via build flags or, later, the WiFi captive-portal config.
+// Decoders below read MeshCoreConfig::key / MeshCoreConfig::channelHash
+// directly.
 
 // --- Meshtastic default channel ---------------------------------------------
 // AES-128 key for the Meshtastic default LongFast channel ("AQ==").
@@ -97,6 +96,26 @@ static inline bool pbSkip(const uint8_t *b, size_t n, size_t &p, int wt) {
     }
 }
 
+// Read a wire-type-5 (fixed32) payload. sfixed32 and fixed32 both arrive
+// here as 4 little-endian bytes; the caller reinterprets the resulting
+// uint32_t as int32_t / float as appropriate.
+static inline bool pbReadFixed32(const uint8_t *b, size_t n, size_t &p, uint32_t &v) {
+    if (p + 4 > n) return false;
+    v = (uint32_t)b[p]
+      | ((uint32_t)b[p + 1] << 8)
+      | ((uint32_t)b[p + 2] << 16)
+      | ((uint32_t)b[p + 3] << 24);
+    p += 4;
+    return true;
+}
+
+// Reinterpret a wire-type-5 word as IEEE 754 float without aliasing UB.
+static inline float pbFixed32AsFloat(uint32_t v) {
+    float f;
+    memcpy(&f, &v, sizeof(f));
+    return f;
+}
+
 
 // --- MeshCore public-channel GRP_TXT decoder --------------------------------
 // Returns true iff a public-channel GRP_TXT was decoded and printed.
@@ -127,7 +146,7 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     const uint8_t *ct   = &buf[off + 3];
     size_t ctLen        = len - (off + 3);
 
-    if (channelHash != MESHCORE_PUBLIC_CHANNEL_HASH) return false;
+    if (channelHash != MeshCoreConfig::channelHash) return false;
     if (ctLen == 0 || (ctLen % 16) != 0)             return false;
     if (ctLen > 224)                                 return false;  // sanity
 
@@ -138,8 +157,8 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     const mbedtls_md_info_t *info =
         mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     mbedtls_md_setup(&mdCtx, info, /*hmac=*/1);
-    mbedtls_md_hmac_starts(&mdCtx, MESHCORE_PUBLIC_KEY,
-                           sizeof(MESHCORE_PUBLIC_KEY));
+    mbedtls_md_hmac_starts(&mdCtx, MeshCoreConfig::key,
+                           sizeof(MeshCoreConfig::key));
     mbedtls_md_hmac_update(&mdCtx, ct, ctLen);
     mbedtls_md_hmac_finish(&mdCtx, hmacOut);
     mbedtls_md_free(&mdCtx);
@@ -149,7 +168,7 @@ inline bool printMeshCore(const uint8_t *buf, size_t len, const char *tag) {
     uint8_t pt[224];
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, MESHCORE_PUBLIC_KEY, 128);
+    mbedtls_aes_setkey_dec(&aes, MeshCoreConfig::key, 128);
     for (size_t i = 0; i < ctLen; i += 16) {
         mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, ct + i, pt + i);
     }
@@ -339,13 +358,13 @@ inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
     const uint8_t *ct   = &buf[off + 3];
     size_t ctLen        = len - (off + 3);
 
-    if (channelHash != MESHCORE_PUBLIC_CHANNEL_HASH) return false;
+    if (channelHash != MeshCoreConfig::channelHash) return false;
     if (ctLen == 0 || (ctLen % 16) != 0 || ctLen > 224) return false;
 
     uint8_t pt[224];
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, MESHCORE_PUBLIC_KEY, 128);
+    mbedtls_aes_setkey_dec(&aes, MeshCoreConfig::key, 128);
     for (size_t i = 0; i < ctLen; i += 16) {
         mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, ct + i, pt + i);
     }
@@ -546,6 +565,271 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
 
     outNodeId = src;
     return true;
+}
+
+
+// --- Meshtastic POSITION_APP (portnum 3) decoder ----------------------------
+// Pulls latitude_i (field 1, sfixed32), longitude_i (field 2, sfixed32) and
+// altitude (field 3, int32 varint) out of the Position submessage. The
+// "_i" coordinates are stored as integer degrees * 1e7; callers divide by
+// 1e7 when formatting. Returns false unless portnum == 3 AND at least one
+// of lat/lon/alt was present.
+struct MeshtasticPositionInfo {
+    bool    hasLat;
+    bool    hasLon;
+    bool    hasAlt;
+    int32_t latI;       // latitude  * 1e7   (e.g. 407234567 -> 40.7234567 N)
+    int32_t lonI;       // longitude * 1e7
+    int32_t altM;       // altitude in metres
+};
+
+inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
+                                       MeshtasticPositionInfo &out) {
+    out = {};
+    if (len < 17) return false;
+    if (buf[13] != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+
+    uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                 | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+    uint32_t pid = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
+                 | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
+
+    const uint8_t *ct = buf + 16;
+    size_t ctLen      = len - 16;
+    if (ctLen > 240) return false;
+
+    uint8_t nonce[16] = {
+        (uint8_t)(pid >>  0), (uint8_t)(pid >>  8),
+        (uint8_t)(pid >> 16), (uint8_t)(pid >> 24),
+        0, 0, 0, 0,
+        (uint8_t)(src >>  0), (uint8_t)(src >>  8),
+        (uint8_t)(src >> 16), (uint8_t)(src >> 24),
+        0, 0, 0, 0
+    };
+
+    uint8_t pt[240];
+    {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        uint8_t stream[16] = {};
+        size_t  nc_off = 0;
+        mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
+        mbedtls_aes_free(&aes);
+    }
+
+    // Walk Data protobuf
+    size_t   pos        = 0;
+    uint32_t portnum    = 0;
+    const uint8_t *payload = nullptr;
+    size_t   payloadLen = 0;
+    while (pos < ctLen) {
+        uint64_t tagv;
+        if (!pbVarint(pt, ctLen, pos, tagv)) break;
+        int fieldNum = (int)(tagv >> 3);
+        int wireType = (int)(tagv & 0x07);
+        if (fieldNum == 1 && wireType == 0) {
+            uint64_t v;
+            if (!pbVarint(pt, ctLen, pos, v)) break;
+            portnum = (uint32_t)v;
+        } else if (fieldNum == 2 && wireType == 2) {
+            uint64_t plen;
+            if (!pbVarint(pt, ctLen, pos, plen) || pos + plen > ctLen) break;
+            payload    = pt + pos;
+            payloadLen = (size_t)plen;
+            pos       += payloadLen;
+        } else {
+            if (!pbSkip(pt, ctLen, pos, wireType)) break;
+        }
+    }
+    if (portnum != 3 /*POSITION_APP*/ || !payload || payloadLen == 0)
+        return false;
+
+    // Walk Position submessage
+    size_t p = 0;
+    while (p < payloadLen) {
+        uint64_t tagv;
+        if (!pbVarint(payload, payloadLen, p, tagv)) return false;
+        int field = (int)(tagv >> 3);
+        int wt    = (int)(tagv & 0x07);
+        if (field == 1 && wt == 5) {            // latitude_i, sfixed32
+            uint32_t v; if (!pbReadFixed32(payload, payloadLen, p, v)) return false;
+            out.latI = (int32_t)v; out.hasLat = true;
+        } else if (field == 2 && wt == 5) {     // longitude_i, sfixed32
+            uint32_t v; if (!pbReadFixed32(payload, payloadLen, p, v)) return false;
+            out.lonI = (int32_t)v; out.hasLon = true;
+        } else if (field == 3 && wt == 0) {     // altitude, int32 varint
+            uint64_t v; if (!pbVarint(payload, payloadLen, p, v)) return false;
+            out.altM = (int32_t)v; out.hasAlt = true;
+        } else {
+            if (!pbSkip(payload, payloadLen, p, wt)) return false;
+        }
+    }
+
+    return out.hasLat || out.hasLon || out.hasAlt;
+}
+
+
+// --- Meshtastic TELEMETRY_APP (portnum 67) decoder --------------------------
+// Telemetry wraps a oneof variant — we surface the two most useful ones:
+//   field 2 (DeviceMetrics):       battery_level (f1, float), voltage (f2, float)
+//   field 3 (EnvironmentMetrics):  temperature (f1, float), relative_humidity
+//                                  (f2, float), barometric_pressure (f3, float)
+// Other variants (air_quality, power, local_stats, health) set kind=OTHER
+// and leave the floats untouched. Returns false unless portnum == 67 AND a
+// recognised variant carried at least one field we know about.
+struct MeshtasticTelemetryInfo {
+    enum class Kind { NONE, DEVICE, ENVIRONMENT, OTHER } kind;
+    // DeviceMetrics
+    bool  hasBatteryPct;  float batteryPct;
+    bool  hasVoltage;     float voltage;
+    // EnvironmentMetrics
+    bool  hasTempC;       float tempC;
+    bool  hasRhPct;       float rhPct;
+    bool  hasPressureHpa; float pressureHpa;
+};
+
+inline bool extractMeshtasticTelemetry(const uint8_t *buf, size_t len,
+                                        MeshtasticTelemetryInfo &out) {
+    out = {};
+    out.kind = MeshtasticTelemetryInfo::Kind::NONE;
+    if (len < 17) return false;
+    if (buf[13] != MESHTASTIC_LONGFAST_CHANNEL_HASH) return false;
+
+    uint32_t src = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                 | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+    uint32_t pid = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
+                 | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
+
+    const uint8_t *ct = buf + 16;
+    size_t ctLen      = len - 16;
+    if (ctLen > 240) return false;
+
+    uint8_t nonce[16] = {
+        (uint8_t)(pid >>  0), (uint8_t)(pid >>  8),
+        (uint8_t)(pid >> 16), (uint8_t)(pid >> 24),
+        0, 0, 0, 0,
+        (uint8_t)(src >>  0), (uint8_t)(src >>  8),
+        (uint8_t)(src >> 16), (uint8_t)(src >> 24),
+        0, 0, 0, 0
+    };
+
+    uint8_t pt[240];
+    {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        mbedtls_aes_setkey_enc(&aes, MESHTASTIC_DEFAULT_KEY, 128);
+        uint8_t stream[16] = {};
+        size_t  nc_off = 0;
+        mbedtls_aes_crypt_ctr(&aes, ctLen, &nc_off, nonce, stream, ct, pt);
+        mbedtls_aes_free(&aes);
+    }
+
+    // Walk Data protobuf
+    size_t   pos        = 0;
+    uint32_t portnum    = 0;
+    const uint8_t *payload = nullptr;
+    size_t   payloadLen = 0;
+    while (pos < ctLen) {
+        uint64_t tagv;
+        if (!pbVarint(pt, ctLen, pos, tagv)) break;
+        int fieldNum = (int)(tagv >> 3);
+        int wireType = (int)(tagv & 0x07);
+        if (fieldNum == 1 && wireType == 0) {
+            uint64_t v;
+            if (!pbVarint(pt, ctLen, pos, v)) break;
+            portnum = (uint32_t)v;
+        } else if (fieldNum == 2 && wireType == 2) {
+            uint64_t plen;
+            if (!pbVarint(pt, ctLen, pos, plen) || pos + plen > ctLen) break;
+            payload    = pt + pos;
+            payloadLen = (size_t)plen;
+            pos       += payloadLen;
+        } else {
+            if (!pbSkip(pt, ctLen, pos, wireType)) break;
+        }
+    }
+    if (portnum != 67 /*TELEMETRY_APP*/ || !payload || payloadLen == 0)
+        return false;
+
+    // Walk Telemetry submessage. We expect either field 2 (DeviceMetrics)
+    // or field 3 (EnvironmentMetrics) as a length-delimited submessage;
+    // field 1 is the time and we ignore it. Anything else maps to OTHER.
+    size_t p = 0;
+    while (p < payloadLen) {
+        uint64_t tagv;
+        if (!pbVarint(payload, payloadLen, p, tagv)) return false;
+        int field = (int)(tagv >> 3);
+        int wt    = (int)(tagv & 0x07);
+
+        if (field == 2 && wt == 2) {
+            // DeviceMetrics submessage
+            uint64_t slen;
+            if (!pbVarint(payload, payloadLen, p, slen) ||
+                p + slen > payloadLen) return false;
+            const uint8_t *sb = payload + p;
+            size_t sn = (size_t)slen;
+            p += sn;
+            out.kind = MeshtasticTelemetryInfo::Kind::DEVICE;
+            size_t sp = 0;
+            while (sp < sn) {
+                uint64_t st;
+                if (!pbVarint(sb, sn, sp, st)) break;
+                int sf = (int)(st >> 3);
+                int sw = (int)(st & 0x07);
+                if (sf == 1 && sw == 5) {
+                    uint32_t v; if (!pbReadFixed32(sb, sn, sp, v)) break;
+                    out.batteryPct = pbFixed32AsFloat(v); out.hasBatteryPct = true;
+                } else if (sf == 2 && sw == 5) {
+                    uint32_t v; if (!pbReadFixed32(sb, sn, sp, v)) break;
+                    out.voltage = pbFixed32AsFloat(v); out.hasVoltage = true;
+                } else {
+                    if (!pbSkip(sb, sn, sp, sw)) break;
+                }
+            }
+        } else if (field == 3 && wt == 2) {
+            // EnvironmentMetrics submessage
+            uint64_t slen;
+            if (!pbVarint(payload, payloadLen, p, slen) ||
+                p + slen > payloadLen) return false;
+            const uint8_t *sb = payload + p;
+            size_t sn = (size_t)slen;
+            p += sn;
+            out.kind = MeshtasticTelemetryInfo::Kind::ENVIRONMENT;
+            size_t sp = 0;
+            while (sp < sn) {
+                uint64_t st;
+                if (!pbVarint(sb, sn, sp, st)) break;
+                int sf = (int)(st >> 3);
+                int sw = (int)(st & 0x07);
+                if (sf == 1 && sw == 5) {
+                    uint32_t v; if (!pbReadFixed32(sb, sn, sp, v)) break;
+                    out.tempC = pbFixed32AsFloat(v); out.hasTempC = true;
+                } else if (sf == 2 && sw == 5) {
+                    uint32_t v; if (!pbReadFixed32(sb, sn, sp, v)) break;
+                    out.rhPct = pbFixed32AsFloat(v); out.hasRhPct = true;
+                } else if (sf == 3 && sw == 5) {
+                    uint32_t v; if (!pbReadFixed32(sb, sn, sp, v)) break;
+                    out.pressureHpa = pbFixed32AsFloat(v); out.hasPressureHpa = true;
+                } else {
+                    if (!pbSkip(sb, sn, sp, sw)) break;
+                }
+            }
+        } else if (field >= 4 && field <= 7 && wt == 2) {
+            // air_quality / power / local_stats / health — skip but mark
+            uint64_t slen;
+            if (!pbVarint(payload, payloadLen, p, slen) ||
+                p + slen > payloadLen) return false;
+            p += (size_t)slen;
+            if (out.kind == MeshtasticTelemetryInfo::Kind::NONE)
+                out.kind = MeshtasticTelemetryInfo::Kind::OTHER;
+        } else {
+            if (!pbSkip(payload, payloadLen, p, wt)) return false;
+        }
+    }
+
+    return out.kind == MeshtasticTelemetryInfo::Kind::DEVICE
+        || out.kind == MeshtasticTelemetryInfo::Kind::ENVIRONMENT;
 }
 
 

@@ -14,8 +14,8 @@ Each radio gets an independent LoRa configuration (frequency, bandwidth, spreadi
 
 Supported today:
 
-- **Meshtastic LongFast** (sync `0x2B`) — AES-128-CTR + a hand-written protobuf walker that lifts the `TEXT_MESSAGE_APP` payload out of the on-air `Data` submessage. Bridged bodies are tagged with the sender's canonical Meshtastic `!`-prefixed hex ID plus the short_name when known: `[MT !3d3a87a3 KN5J] …` (or `[MT !3d3a87a3] …` if no `NODEINFO_APP` has been seen yet for that node). The bridge decodes incoming `NODEINFO_APP` packets to populate a 64-entry, NVS-persistent NodeDB so attribution survives reboots, and emits its own periodic NodeInfo announce so phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
-- **MeshCore public channel** (sync `0x12`) — AES-128-ECB decrypt of `GRP_TXT`, with the 2-byte truncated HMAC-SHA256 verified against the public channel key. Bridged bodies are tagged `[MC] …`.
+- **Meshtastic LongFast** (sync `0x2B`) — AES-128-CTR + a hand-written protobuf walker that lifts `TEXT_MESSAGE_APP` payloads out of the on-air `Data` submessage. `POSITION_APP` and `TELEMETRY_APP` are also decoded and bridged as compact text lines under the same marker (`pos 40.7234,-74.0123 alt 12m`, `bat 87% 4.05V`, `env 22.5C RH 45% 1013hPa`). Bridged bodies are tagged with the sender's canonical Meshtastic `!`-prefixed hex ID plus the short_name when known: `[MT !3d3a87a3 KN5J] …` (or `[MT !3d3a87a3] …` if no `NODEINFO_APP` has been seen yet for that node). The bridge decodes incoming `NODEINFO_APP` packets to populate a 64-entry, NVS-persistent NodeDB so attribution survives reboots, and emits its own periodic NodeInfo announce so phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
+- **MeshCore channel** (sync `0x12`) — AES-128-ECB decrypt of `GRP_TXT`, with the 2-byte truncated HMAC-SHA256 verified against the channel key. Defaults to the MeshCore public channel (hash `0x11`); override `BRIDGE_MC_KEY_HEX` / `BRIDGE_MC_CHANNEL_NAME` in `platformio.ini` to bridge a private or custom channel instead — the on-air channel-hash byte is auto-derived from `SHA-256(key)[0]` at boot. Bridged bodies are tagged `[MC] …`.
 - **Reticulum / RNode** (sync `0x42`, **stub**) — incoming frames are base64-encoded and bridged into the other mesh as text packets of the form `[rns <seq> <x>/<y>] <base64>`. The bridge auto-fragments across multiple MT/MC packets when a single one wouldn't hold the encoded frame, using a CRC-16 low-byte sequence ID so concurrent fragmented frames don't get mixed up on the receiving side, and pacing between fragments (2000 ms for SF11/BW250 MT, 500 ms for SF7/BW62.5 MC; max 8 fragments per frame, tunable via `BRIDGE_RNS_*` build flags). A proper RNS packet encoder is still TODO; until then, "destination = RNS" is a log-and-drop path with a `No TX 2 RNS:` prefix on serial.
 
 Source-protocol markers double as loop-prevention: when the bridge's own re-transmitted packet bounces back via a relay node, the marker is recognised and the packet is dropped before being bridged a second time.
@@ -46,7 +46,7 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
    -DLORA_RADIO1_TX_POWER=20
    -DLORA_RADIO1_SYNC_WORD=0x2B   ; 0x12 MeshCore, 0x2B Meshtastic, 0x42 Reticulum
    ```
-4. **Configure the bridge's Meshtastic identity** (also in `platformio.ini`). The numeric ID and `!`-prefixed string must encode the same value, and string macros must be single-quoted so values with spaces survive shell tokenization:
+4. *(Optional)* **Set bridge defaults** in `platformio.ini`. These are the values the bridge uses when its NVS config is empty (i.e. a fresh flash). The captive portal in step 7 lets users override them at runtime without rebuilding. The numeric ID and `!`-prefixed string must encode the same value; string macros are single-quoted so spaces survive shell tokenization:
    ```ini
    -DBRIDGE_MT_NODE_ID=0xB16B00B5u
    '-DBRIDGE_MT_NODE_ID_STR="!b16b00b5"'
@@ -55,7 +55,8 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
    ```
 5. **Clean + build.** `pio run -t clean && pio run` — the clean is important whenever a header changes.
 6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
-7. **Monitor.** `pio device monitor` at 115200 baud. Expect RX hex dumps, protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
+7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MT node ID, in hex). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to a single-page config form pre-filled with the build-flag defaults from step 4. Edit identity / channel / portnum toggles as needed, hit **Save & reboot**, and the bridge restarts into normal mode with the NVS values. To re-enter the form later, press the **BOOT** button within ~3 s of any reset.
+8. **Monitor.** Once the bridge is configured, expect RX hex dumps, protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
 ## Roadmap
 
@@ -79,6 +80,28 @@ Outstanding work to lift the stub:
 
 ### Other future work
 
-- [ ] More Meshtastic portnums bridged: `POSITION_APP` (lat/lon/alt → human-readable `📍 KN5J 40.7,-74.0 alt 12m` line on the MC side) and `TELEMETRY_APP` (battery/env). `NODEINFO_APP` is already decoded into the NodeDB but intentionally not bridged as text.
-- [ ] MeshCore private-channel support (channel/key table instead of the hard-coded public channel `0x11`).
+- [x] ~~More Meshtastic portnums bridged: `POSITION_APP` and `TELEMETRY_APP`~~ — **done**; both decoded and re-emitted as text under the existing bridge marker. Individually gated by `BRIDGE_MT_POSITION` / `BRIDGE_MT_TELEMETRY` build flags. `NODEINFO_APP` is decoded into the NodeDB and intentionally not bridged as text.
+- [x] ~~MeshCore private-channel support~~ — **done** via `MeshCoreConfig.{h,cpp}`; override `BRIDGE_MC_KEY_HEX` and `BRIDGE_MC_CHANNEL_NAME` in `platformio.ini` to point the bridge at any MC channel. The hash byte is computed automatically from `SHA-256(key)[0]`.
 - [x] ~~Persistent NodeDB so `[MT] …` prefixes can be replaced with the actual sender's short name~~ — **done** in `NodeDB.{h,cpp}`; MT→MC bridged messages now carry `[MT !<hexid> <SHORT>] …` attribution learned from `NODEINFO_APP` packets and persisted to NVS.
+- [x] ~~**WiFi captive-portal first-boot config.**~~ — **done** via `BridgeConfig.{h,cpp}` + `CaptivePortal.{h,cpp}`. On a fresh flash (or whenever the BOOT button is pressed within ~3 s of reset) the bridge brings up an open AP named `LoRa-Bridge-<XX>` and DNS-redirects all HTTP traffic to a config form for MT identity, MC key + channel name, and the POSITION/TELEMETRY toggles. Saving the form writes the schema-v1 blob to NVS and reboots into bridge mode. Per-radio LoRa params (frequency, BW, SF, CR, TX power, sync word) remain build-flag-only — a misstep there can put the radio out of band.
+- [ ] **F5: Meshtastic private-channel support.** Symmetric counterpart to F3 (which made the MeshCore channel configurable). Today every Meshtastic decoder is hardwired to the LongFast public channel — it gates on `channelHash == 0x08` and decrypts with the fixed `MESHTASTIC_DEFAULT_KEY`, so private-channel traffic shows up as `(no decodable protobuf — wrong key/channel?)`. The fix is a `MeshtasticConfig` module mirroring `MeshCoreConfig`, with two wrinkles MC didn't have:
+  - **PSK expansion.** Meshtastic channel keys come as a base64 PSK that may be empty (default), 1 byte (short key — expanded against the `defaultpsk` array, same as `AQ==`→LongFast), 16 bytes (AES-128) or 32 bytes (AES-256). The config layer base64-decodes and runs that expansion.
+  - **AES-256.** A 32-byte PSK means AES-256-CTR. The five MT decoders + two MT encoders currently hard-code `setkey_enc(..., 128)`; they'd switch to a configurable `keyLen` (128/256). The CTR call itself is unchanged.
+
+  The channel hash is then computed (`XOR-fold(name) ^ XOR-fold(expanded_key)`) and the decoders gate on the computed value instead of the literal `0x08`. New `BridgeConfig` fields (`mtChannelName`, `mtPskBase64`) and matching captive-portal inputs come along with it.
+
+- [ ] **Captive-portal v2: per-radio protocol selection.** Extend the config form with a radio-button group per radio slot — **Meshtastic** / **MeshCore** / **Reticulum** / **Custom**. The first three apply a vetted preset bundle (frequency, BW, SF, CR, sync word) so the user picks a protocol, not raw numbers — low brick risk, and it makes "swap which slot runs which protocol" a portal action instead of a rebuild. Selecting **Custom** reveals the raw LoRa-plan fields behind an explicit warning banner (out-of-band TX is illegal *and* silently unreceivable; a bad SF/BW combo deafens the radio). The custom path should clamp entries to the radio's hardware tuning range and show a region hint. Pairs naturally with F5's per-protocol channel config.
+
+- [ ] **Sub-GHz ↔ 2.4 GHz LoRa cross-band bridging.** The current build talks the SX1262's native sub-GHz ranges (902-928 MHz US ISM, 868 MHz EU, etc.). A long-horizon goal is to bridge those to 2.4 GHz LoRa networks (e.g. Meshtastic's 2.4 GHz preset) on the worldwide-licence-free **2.4 GHz ISM band** — the headline feature that makes this milestone worth doing.
+
+  **Minimum viable hardware change:** keep the existing Xiao Wio-SX1262 on one of the two slots, and swap *only the other slot* for a radio that can reach 2.4 GHz. The bridge needs exactly one 2.4-GHz-capable side; the SX1262 stays as the sub-GHz endpoint.
+
+  **Prototype target:** the **Seeed Wio LR1121 breadboard** — already on hand, RadioLib-supported, multi-band on one die (sub-GHz **+ 2.4 GHz + S-band 1.9-2.1 GHz**), plus LR-FHSS. For this bridge it sits on the 2.4 GHz slot opposite the existing Xiao Wio SX1262; longer-term a single LR1121 could replace *both* SX1262s if collapsing to one radio family becomes interesting.
+
+  Other Semtech parts to track for later, in roughly increasing capability:
+  - **SX1280** — 2.4 GHz only (~2400-2500 MHz). Cheapest and narrowest; useful if a smaller, lower-cost run is ever in scope.
+  - **LR22xx series** (e.g. LR2021) — newer multi-band parts: SX1280-class 2.4 GHz, improved sensitivity, BLE-coexistence awareness, expanded LR-FHSS modes. Worth watching as RadioLib support matures.
+
+  **MCU upgrade is conditional, not required.** If a Xiao-compatible 2.4 GHz module turns up (or can be hand-wired onto the edge pins next to the existing B2B Wio shield) the Xiao ESP32S3 Sense stays in service and the form factor barely changes. If the only available SX1280 / LR1121 carriers want full 0.1"-header access, the natural upgrade target is the **ESP32-S3 DevKitC-1 N-R** (e.g. N8R8 — standard ESP32-S3-WROOM-1 dev board with N flash + R PSRAM): ~40 broken-out GPIOs, more flash + PSRAM, and the ability to wire arbitrary off-the-shelf breakouts. `WioSX1262.{h,cpp}` already abstracts pin assignments, SPI bus sharing, and the mutex — switching MCU boards would mean a new `pinout.h` (or per-board `#ifdef` block) and not much else.
+
+  Good news on the firmware side: the protocol decoders and `bridgePacket()` dispatcher in this repo are RF-agnostic — they branch on the LoRa sync word, not the carrier frequency. Once a `WioSX1280` / `WioLR1121` / `WioLR2021` wrapper lands alongside `WioSX1262` (same `LoraConfig` struct, same `available()` / `read()` / `transmit()` surface), the existing bridge pipeline drops straight in with RF parameter changes in `platformio.ini` or the captive portal.
