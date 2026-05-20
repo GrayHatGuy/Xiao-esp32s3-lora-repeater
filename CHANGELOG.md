@@ -1,5 +1,12 @@
 # Changelog
 
+## v6.2.1 — 2026-05-20 — Build reproducibility + GPIO init fix
+
+- **Pinned the PlatformIO platform.** `platformio.ini` now requires `espressif32 @ 6.13.0` (arduino-esp32 2.0.17) — the core the bridge is verified against. An unpinned `platform = espressif32` let a fresh checkout pull a newer core whose GPIO/SPI behaviour differs, producing spurious diagnostics on other people's builds.
+- **Fixed a GPIO init bug.** The `busyWait` pre-flight diagnostic in `setup()` read the SX1262 BUSY pins via `digitalRead()` without first calling `pinMode(..., INPUT)`. Newer arduino-esp32 cores logged `[E] __digitalRead(): IO N is not set as GPIO` for each read. Harmless to radio detection, but now correct.
+
+Neither change alters bridge behaviour — this is a build-reproducibility and diagnostic-cleanliness patch.
+
 ## v6.2 — 2026-05-20 — Remove deprecated raw RX hex dump
 
 The raw incoming-packet hex dump (`[R1 RX] data: FF FF FF FF …`) is removed from both radio tasks. It was an early-development debugging aid — pure `Serial.printf` with no functional role — and is now deprecated. The bridge's decode → re-encode → transmit path is unaffected; the `extract*()` decoders are untouched.

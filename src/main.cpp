@@ -729,6 +729,9 @@ void setup()
     // or unpowered — wiring problem, not a software bug.
     auto busyWait = [](int resetPin, int busyPin, const char *label) {
         pinMode(resetPin, OUTPUT);
+        pinMode(busyPin,  INPUT);   // must configure before digitalRead(),
+                                    // else newer arduino-esp32 cores log
+                                    // "IO N is not set as GPIO"
         digitalWrite(resetPin, LOW);
         delay(2);
         digitalWrite(resetPin, HIGH);
