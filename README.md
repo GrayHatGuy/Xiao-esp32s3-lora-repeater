@@ -36,53 +36,8 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
 ## Wiring
 
 This build uses **stacked shields** — there is no hand-wiring. The B2B SX1262
-mounts under the Xiao on the 40-pin board-to-board connector; the edge-pin
-SX1262 mounts on top of the Xiao's perimeter header. The diagram and table
-below document the pin mapping the firmware drives (see `src/main.cpp`).
-
-```
-                    ┌──────────────────────────────┐
-                    │     XIAO ESP32-S3 (Sense)     │
-                    │                               │
-   ┌────────────────┤ SHARED SPI BUS                │
-   │  ┌─────────────┤  GPIO7  (D8)  SCK             │
-   │  │  ┌──────────┤  GPIO9  (D10) MOSI            │
-   │  │  │  ┌───────┤  GPIO8  (D9)  MISO            │
-   │  │  │  │        │                               │
-   │  │  │  │        │ RADIO 1  (B2B 40-pin header)  │
-   │  │  │  │  ┌─────┤  GPIO41       NSS   (CS)      │
-   │  │  │  │  │ ┌───┤  GPIO39       DIO1  (IRQ)     │
-   │  │  │  │  │ │ ┌─┤  GPIO42       RESET            │
-   │  │  │  │  │ │ │ ┤  GPIO40       BUSY             │
-   │  │  │  │  │ │ │ ┤  GPIO38       ANT_SW (RF SW)  │
-   │  │  │  │  │ │ │ │ │                               │
-   │  │  │  │  │ │ │ │ │ RADIO 2  (edge-pin header)   │
-   │  │  │  │  │ │ │ │ ┤  GPIO5  (D4)  NSS   (CS)     │
-   │  │  │  │  │ │ │ │ ┤  GPIO2  (D1)  DIO1  (IRQ)    │
-   │  │  │  │  │ │ │ │ ┤  GPIO3  (D2)  RESET           │
-   │  │  │  │  │ │ │ │ ┤  GPIO4  (D3)  BUSY            │
-   │  │  │  │  │ │ │ │ ┤  GPIO6  (D5)  ANT_SW (RF SW) │
-   │  │  │  │  │ │ │ │ │  3V3 ──┬── VCC both radios   │
-   │  │  │  │  │ │ │ │ │  GND ──┴── GND both radios   │
-   │  │  │  │  │ │ │ │ └──────────────────────────────┘
-   │  │  │  │  │ │ │ │
-   │  │  │  ▼  ▼ ▼ ▼ ▼          ┌───────────────────────┐
-   │  │  │  └──┼─┼─┼─┼──────────┤  WIO SX1262  #1 (B2B)  │
-   │  │  └─────┘ │ │ │  NSS1    │  stacked UNDER Xiao    │
-   │  └──────────┘ │ │  DIO1_1  │  ┌─── u.FL ANTENNA 1   │
-   │ (SCK/MOSI/    │ │  RST1    │  │   (915 MHz tuned)    │
-   │  MISO shared) │ │  BUSY1   └──┼───────────────────────┘
-   │               │ └─ ANTSW1     │
-   │               │
-   │  ┌────────────┼───────────────┐
-   └──┤  WIO SX1262 #2 (edge-pin)  │
-      │  stacked ON TOP of Xiao    │
-      │  NSS2/DIO1_2/RST2/BUSY2/   │
-      │  ANTSW2  +  SCK/MOSI/MISO  │
-      │  ┌─── u.FL ANTENNA 2        │
-      │  │   (915 MHz tuned)        │
-      └──┴────────────────────────-┘
-```
+mounts on top of the Xiao on the 40-pin board-to-board connector; the edge-pin
+SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmware (see `src/main.cpp`).
 
 | Signal | Radio 1 (B2B) | Radio 2 (edge) | Notes |
 |--------|---------------|----------------|-------|
@@ -108,14 +63,9 @@ below document the pin mapping the firmware drives (see `src/main.cpp`).
 - **Connect both u.FL antennas before power-on** — transmitting into a missing
   antenna risks the PA.
 
-An editable schematic of this wiring is attached in the repo:
-[`hardware/lora-bridge-wiring.kicad_sch`](hardware/lora-bridge-wiring.kicad_sch)
-— opens in KiCad 7 or newer (the symbols are embedded, so no external libraries
-are needed; connectivity is expressed with matching net labels).
-
 ## Instructions
 
-1. **Stack the hardware.** Mate the B2B shield (radio 1) underneath the Xiao, the edge-pin shield (radio 2) on top. Connect antennas to **both** radios before powering on.
+1. **Stack the hardware.** Mate the B2B shield (radio 1) on top the Xiao, the edge-pin shield (radio 2) on bottom. Connect antennas to **both** radios before powering on. Correct orientation has all antennas on the same side.
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
 3. *(Optional — source builds only)* **Pre-seed the radios** in [`platformio.ini`](platformio.ini). As of v8.0 this is no longer required: a `.bin` built with no `LORA_RADIO*` flags first-boots straight into the captive portal where region, protocol and RF are all set. If you do build from source, these flags become the first-boot defaults the portal form pre-fills:
    ```ini
