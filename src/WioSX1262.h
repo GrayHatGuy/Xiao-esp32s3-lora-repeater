@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
+#include "LoraRadio.h"
 
 // Compile-time RF constants — board facts, not user settings (v8 spec §6).
 // The per-radio RF plan (frequency, bandwidth, SF, CR, sync word, TX power)
@@ -30,18 +31,18 @@ struct LoraConfig {
     float    tcxoVoltage;
 };
 
-class WioSX1262 {
+class WioSX1262 : public LoraRadio {
 public:
     WioSX1262(int nss, int dio1, int reset, int busy,
               int antSw, SPIClass &spi, SemaphoreHandle_t mutex,
               const char *name, const LoraConfig &config);
-    ~WioSX1262();
+    ~WioSX1262() override;
 
-    bool    begin();
-    bool    available();
-    int16_t read(uint8_t *buf, size_t &len, float *rssi, float *snr);
-    int16_t transmit(const uint8_t *buf, size_t len);
-    void    startReceive();
+    bool    begin() override;
+    bool    available() override;
+    int16_t read(uint8_t *buf, size_t &len, float *rssi, float *snr) override;
+    int16_t transmit(const uint8_t *buf, size_t len) override;
+    void    startReceive() override;
 
     // Written by the IRAM ISR trampoline; read by the polling task.
     volatile bool _rxFlag = false;

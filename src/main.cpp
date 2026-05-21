@@ -131,8 +131,8 @@ SemaphoreHandle_t spiMutex = NULL;
 //  Radio objects — constructed as pointers so the mutex exists
 //  before the WioSX1262 constructors run.
 // ============================================================
-WioSX1262 *radio1 = nullptr;
-WioSX1262 *radio2 = nullptr;
+LoraRadio *radio1 = nullptr;
+LoraRadio *radio2 = nullptr;
 
 // ============================================================
 //  Per-radio channel context — g_chan[0] = radio1, g_chan[1] = radio2.
@@ -220,7 +220,7 @@ void radio2Task(void *pvParameters);
 #define BRIDGE_RNS_RAW_PER_FRAG_MC    117
 #define BRIDGE_RNS_RAW_PER_FRAG_MT    123
 
-static void bridgeFromReticulum(const RadioChannel &dstChan, WioSX1262 *dstRadio,
+static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio,
                                 const char *srcTag,
                                 const uint8_t *buf, size_t len)
 {
@@ -363,7 +363,7 @@ static void buildTextSrcMarker(uint8_t srcSync,
 }
 
 static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstChan,
-                         WioSX1262 *dstRadio, const char *srcTag,
+                         LoraRadio *dstRadio, const char *srcTag,
                          const uint8_t *buf, size_t len)
 {
     // RNS source uses its own fragmenting path
