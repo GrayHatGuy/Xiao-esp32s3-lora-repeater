@@ -4,30 +4,16 @@
 #include <SPI.h>
 #include <RadioLib.h>
 
-// Global defaults — used as fallbacks in main.cpp for any per-radio value not explicitly set
-#ifndef LORA_FREQUENCY
-  #define LORA_FREQUENCY     915.0f
-#endif
-#ifndef LORA_BANDWIDTH
-  #define LORA_BANDWIDTH     125.0f
-#endif
-#ifndef LORA_SPREAD_FACTOR
-  #define LORA_SPREAD_FACTOR 9
-#endif
-#ifndef LORA_CODING_RATE
-  #define LORA_CODING_RATE   7
-#endif
-#ifndef LORA_TX_POWER
-  #define LORA_TX_POWER      20
-#endif
-#ifndef LORA_SYNC_WORD
-  #define LORA_SYNC_WORD     0x12
-#endif
+// Compile-time RF constants — board facts, not user settings (v8 spec §6).
+// The per-radio RF plan (frequency, bandwidth, SF, CR, sync word, TX power)
+// is resolved at runtime from BridgeConfig; there is deliberately NO hard
+// fallback chain for those values — an unconfigured radio resolves to null
+// and forces the captive portal rather than guessing 915.0f / SF9 / 0x12.
 #ifndef LORA_PREAMBLE_LEN
-  #define LORA_PREAMBLE_LEN  8
+  #define LORA_PREAMBLE_LEN  8        // symbols — universal
 #endif
 #ifndef LORA_TCXO_VOLTAGE
-  #define LORA_TCXO_VOLTAGE  1.8f
+  #define LORA_TCXO_VOLTAGE  1.8f     // Wio SX1262 hardware property
 #endif
 #ifndef LORA_MAX_PACKET
   #define LORA_MAX_PACKET    256

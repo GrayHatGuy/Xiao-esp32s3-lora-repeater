@@ -1,5 +1,43 @@
 # Changelog
 
+## v8.0 — 2026-05-21 — Vanilla firmware: full portal config
+
+The bridge is now configurable **entirely through the WiFi captive portal** —
+region, per-radio protocol, RF plan, channels and identity. A single `.bin`
+built with no `LORA_RADIO*` build flags first-boots straight into the portal,
+so a non-developer can flash and configure without PlatformIO. Build flags, if
+present, become first-boot defaults only.
+
+- **`BridgeConfig` schema v3 → v4.** New global `region` and a per-radio
+  `RadioRf` struct (`protocol`, `frequency`, `bandwidth`, `sf`, `cr`,
+  `syncWord`, `txPower`). `begin()` migrates a v2 or v3 blob forward — region
+  and RF fall back to build-flag defaults so an upgraded device keeps running.
+- **Runtime RF.** `setup()` builds each radio's `LoraConfig` from
+  `BridgeConfig` at boot (`makeLoraConfig()`); the compile-time
+  `LORA_RADIO*_*` RF macros and the `WioSX1262.h` `915.0f / SF9 / 0x12`
+  fallback chain are gone. Preamble length (8) and TCXO voltage (1.8 V) stay
+  compile-time board facts.
+- **Per-radio protocol picker** in the portal: Meshtastic / MeshCore /
+  Reticulum / Custom / **None**. A None radio is disabled (single-radio
+  monitor mode — a debug aid, or a parked slot for a future 2.4 GHz radio).
+- **Region support** — global selector for US, EU_868, EU_433, ANZ, CN, JP,
+  IN, KR, RU (+ Custom/Other). New `RegionPreset.h` carries the region table,
+  the Meshtastic modem-preset BW/SF/CR bundles, and the **Tier 2 channel-slot
+  frequency computation** (`djb2` hash + slot formula, transcribed verbatim
+  from `meshtastic/firmware` and verified: US + LongFast → 906.875 MHz). The
+  computed frequency pre-fills an **editable** field; a manual override is
+  flagged inline (`computed: … — overridden`).
+- **MAC-derived identity.** The default Meshtastic node ID and portal SSID are
+  derived from the ESP32 MAC, so every vanilla device is unique out of the box.
+- **Custom RF** path exposes the full plan (frequency, BW, SF, CR, sync word,
+  TX power) behind an explicit warning banner. `handleSave()` clamps frequency
+  to the SX1262 range and sanity-checks SF/CR/BW/sync; TX power is capped to
+  the region's regulatory limit.
+
+This reverses the previous "protocol/RF is config-time only" decision for the
+vanilla-bin use case — the MT/MC/RNS presets are vetted; only the Custom path
+is dangerous, and it is behind a warning. New file: `RegionPreset.h`.
+
 ## v7.0 — 2026-05-20 — Per-radio channels, same-protocol relay
 
 The bridge is no longer limited to cross-protocol MT↔MC. Each radio slot now

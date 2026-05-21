@@ -16,10 +16,9 @@
  *       ├── WioSX1262.h
  *       └── WioSX1262.cpp
  *
- * All LoRa RF settings (frequency, BW, SF, CR, power …) are
- * defined as preprocessor macros in WioSX1262.h.
- * Override any of them in platformio.ini build_flags, e.g.:
- *   build_flags = -DLORA_FREQUENCY=868.0f -DLORA_TX_POWER=14
+ * All LoRa RF settings (frequency, BW, SF, CR, power, sync word) are
+ * resolved at runtime from BridgeConfig (NVS / captive portal). The
+ * platformio.ini LORA_RADIO*_* build flags only seed first-boot defaults.
  */
 
 #include <Arduino.h>
@@ -32,79 +31,47 @@
 #include "BridgeConfig.h"
 #include "CaptivePortal.h"
 #include "NodeDB.h"
-// Per-radio LoRa settings — fall back to the generic LORA_* defaults
-// from WioSX1262.h for any value not defined in platformio.ini.
-#ifndef LORA_RADIO1_FREQUENCY
-  #define LORA_RADIO1_FREQUENCY    LORA_FREQUENCY
-#endif
-#ifndef LORA_RADIO1_BANDWIDTH
-  #define LORA_RADIO1_BANDWIDTH    LORA_BANDWIDTH
-#endif
-#ifndef LORA_RADIO1_SPREAD_FACTOR
-  #define LORA_RADIO1_SPREAD_FACTOR LORA_SPREAD_FACTOR
-#endif
-#ifndef LORA_RADIO1_CODING_RATE
-  #define LORA_RADIO1_CODING_RATE  LORA_CODING_RATE
-#endif
-#ifndef LORA_RADIO1_SYNC_WORD
-  #define LORA_RADIO1_SYNC_WORD    LORA_SYNC_WORD
-#endif
-#ifndef LORA_RADIO1_TX_POWER
-  #define LORA_RADIO1_TX_POWER     LORA_TX_POWER
-#endif
-#ifndef LORA_RADIO1_PREAMBLE_LEN
-  #define LORA_RADIO1_PREAMBLE_LEN LORA_PREAMBLE_LEN
-#endif
-#ifndef LORA_RADIO1_TCXO_VOLTAGE
-  #define LORA_RADIO1_TCXO_VOLTAGE LORA_TCXO_VOLTAGE
-#endif
+#include "RegionPreset.h"
+#include <esp_mac.h>
 
-#ifndef LORA_RADIO2_FREQUENCY
-  #define LORA_RADIO2_FREQUENCY    LORA_FREQUENCY
-#endif
-#ifndef LORA_RADIO2_BANDWIDTH
-  #define LORA_RADIO2_BANDWIDTH    LORA_BANDWIDTH
-#endif
-#ifndef LORA_RADIO2_SPREAD_FACTOR
-  #define LORA_RADIO2_SPREAD_FACTOR LORA_SPREAD_FACTOR
-#endif
-#ifndef LORA_RADIO2_CODING_RATE
-  #define LORA_RADIO2_CODING_RATE  LORA_CODING_RATE
-#endif
-#ifndef LORA_RADIO2_SYNC_WORD
-  #define LORA_RADIO2_SYNC_WORD    LORA_SYNC_WORD
-#endif
-#ifndef LORA_RADIO2_TX_POWER
-  #define LORA_RADIO2_TX_POWER     LORA_TX_POWER
-#endif
-#ifndef LORA_RADIO2_PREAMBLE_LEN
-  #define LORA_RADIO2_PREAMBLE_LEN LORA_PREAMBLE_LEN
-#endif
-#ifndef LORA_RADIO2_TCXO_VOLTAGE
-  #define LORA_RADIO2_TCXO_VOLTAGE LORA_TCXO_VOLTAGE
-#endif
+// Per-radio LoRa RF is resolved at RUNTIME from BridgeConfig (schema v4) —
+// see makeLoraConfig() below. There are no compile-time LORA_RADIO*_* RF
+// macros any more; platformio.ini build flags now only seed BridgeConfig's
+// first-boot defaults. Preamble length and TCXO voltage stay compile-time
+// constants (board facts — WioSX1262.h §6).
 
-static const LoraConfig radio1Config = {
-    LORA_RADIO1_FREQUENCY,
-    LORA_RADIO1_BANDWIDTH,
-    LORA_RADIO1_SPREAD_FACTOR,
-    LORA_RADIO1_CODING_RATE,
-    LORA_RADIO1_SYNC_WORD,
-    LORA_RADIO1_TX_POWER,
-    LORA_RADIO1_PREAMBLE_LEN,
-    LORA_RADIO1_TCXO_VOLTAGE
-};
+// Build a LoraConfig for one radio (index 0 or 1) from the live BridgeConfig.
+static LoraConfig makeLoraConfig(int radio)
+{
+    LoraConfig c;
+    c.frequency    = BridgeConfig::radioFrequency(radio);
+    c.bandwidth    = BridgeConfig::radioBandwidth(radio);
+    c.spreadFactor = BridgeConfig::radioSf(radio);
+    c.codingRate   = BridgeConfig::radioCr(radio);
+    c.syncWord     = BridgeConfig::radioSyncWord(radio);
+    c.txPower      = BridgeConfig::radioTxPower(radio);
+    c.preambleLen  = LORA_PREAMBLE_LEN;
+    c.tcxoVoltage  = LORA_TCXO_VOLTAGE;
+    return c;
+}
 
-static const LoraConfig radio2Config = {
-    LORA_RADIO2_FREQUENCY,
-    LORA_RADIO2_BANDWIDTH,
-    LORA_RADIO2_SPREAD_FACTOR,
-    LORA_RADIO2_CODING_RATE,
-    LORA_RADIO2_SYNC_WORD,
-    LORA_RADIO2_TX_POWER,
-    LORA_RADIO2_PREAMBLE_LEN,
-    LORA_RADIO2_TCXO_VOLTAGE
-};
+// Derive a unique default Meshtastic node ID from the ESP32 MAC so every
+// vanilla device is distinct out of the box (v8 spec §5). Called on first
+// boot only; the captive-portal SSID follows automatically since it keys off
+// mtNodeId(). The user can still override identity in the portal.
+static void deriveMacIdentity()
+{
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    uint32_t id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) |
+                  ((uint32_t)mac[4] << 8)  |  (uint32_t)mac[5];
+    char idStr[12];
+    snprintf(idStr, sizeof(idStr), "!%08lx", (unsigned long)id);
+    BridgeConfig::setMtNodeId(id);
+    BridgeConfig::setMtNodeIdStr(idStr);
+    Serial.printf("[setup] MAC-derived identity: 0x%08lX (%s)\n",
+                  (unsigned long)id, idStr);
+}
 
 // ============================================================
 //  Shared SPI bus
@@ -171,6 +138,11 @@ WioSX1262 *radio2 = nullptr;
 //  Resolved once in setup() before the radio tasks start; read-only after.
 // ============================================================
 RadioChannel g_chan[2];
+
+// Per-radio enable flag. A radio whose BridgeConfig protocol is PROTO_NONE
+// is disabled — its RX task is not spawned and the other radio bridges
+// nothing to it (single-radio monitor mode, a deliberate debug option).
+bool g_radioEnabled[2] = { true, true };
 
 // Resolve one radio's channel into `out` from its protocol (sync word) and
 // its BridgeConfig channel name/key strings.
@@ -571,7 +543,7 @@ void radio1Task(void *pvParameters)
     uint32_t nextNodeInfoMs = millis() + 10000;
 
     for (;;) {
-        if (LORA_RADIO1_SYNC_WORD == MeshDecoderDebug::SYNC_WORD_MESHTASTIC &&
+        if (g_chan[0].protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC &&
             (int32_t)(millis() - nextNodeInfoMs) >= 0) {
             uint8_t niPkt[256];
             size_t  niLen = 0;
@@ -612,7 +584,8 @@ void radio1Task(void *pvParameters)
 
                 MeshDecoderDebug::print(buf, len, g_chan[0], "R1");
 
-                bridgePacket(g_chan[0], g_chan[1], radio2, "R1", buf, len);
+                if (g_radioEnabled[1])
+                    bridgePacket(g_chan[0], g_chan[1], radio2, "R1", buf, len);
 
                 // RadioLib exits RX mode on packet receipt;
                 // restore it before polling again.
@@ -649,7 +622,8 @@ void radio2Task(void *pvParameters)
 
                 MeshDecoderDebug::print(buf, len, g_chan[1], "R2");
 
-                bridgePacket(g_chan[1], g_chan[0], radio1, "R2", buf, len);
+                if (g_radioEnabled[0])
+                    bridgePacket(g_chan[1], g_chan[0], radio1, "R2", buf, len);
 
                 radio2->startReceive();
 
@@ -674,6 +648,13 @@ void setup()
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
+
+    // First boot (nothing saved): seed a unique MAC-derived identity so the
+    // captive-portal form pre-fills with a per-device node ID + SSID rather
+    // than a shared build-flag default. Portal save persists it.
+    if (!BridgeConfig::isConfigured())
+        deriveMacIdentity();
+
     BridgeConfig::debugDump();
 
     // Captive portal trigger:
@@ -716,13 +697,21 @@ void setup()
         Serial.println("[setup] proceeding to bridge mode");
     }
 
-    // Resolve each radio's channel into g_chan[] before any RX. Each radio's
-    // protocol is its build-flag sync word; its channel name/key come from
-    // BridgeConfig (build-flag defaults or the captive-portal-saved values).
-    resolveRadioChannel((uint8_t)LORA_RADIO1_SYNC_WORD,
+    // Per-radio enable: a radio whose protocol is PROTO_NONE is disabled.
+    g_radioEnabled[0] = (BridgeConfig::radioProtocol(0) != BridgeConfig::PROTO_NONE);
+    g_radioEnabled[1] = (BridgeConfig::radioProtocol(1) != BridgeConfig::PROTO_NONE);
+    if (!g_radioEnabled[0])
+        Serial.println("[setup] Radio1 protocol = None — disabled (monitor mode)");
+    if (!g_radioEnabled[1])
+        Serial.println("[setup] Radio2 protocol = None — disabled (monitor mode)");
+
+    // Resolve each radio's channel into g_chan[] before any RX. Protocol +
+    // RF + channel all come from BridgeConfig (portal-saved, or first-boot
+    // build-flag defaults).
+    resolveRadioChannel(BridgeConfig::radioSyncWord(0),
                         BridgeConfig::radio1ChannelName(),
                         BridgeConfig::radio1ChannelKey(), g_chan[0]);
-    resolveRadioChannel((uint8_t)LORA_RADIO2_SYNC_WORD,
+    resolveRadioChannel(BridgeConfig::radioSyncWord(1),
                         BridgeConfig::radio2ChannelName(),
                         BridgeConfig::radio2ChannelKey(), g_chan[1]);
 
@@ -739,7 +728,10 @@ void setup()
     spiMutex = xSemaphoreCreateMutex();
     configASSERT(spiMutex != NULL);
 
-    // Construct radio objects now the mutex and SPI bus are ready
+    // Construct radio objects now the mutex and SPI bus are ready. RF comes
+    // from BridgeConfig at runtime (makeLoraConfig).
+    LoraConfig radio1Config = makeLoraConfig(0);
+    LoraConfig radio2Config = makeLoraConfig(1);
     radio1 = new WioSX1262(R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
                             R1_ANT_SW, spi, spiMutex, "Radio1-B2B", radio1Config);
 
@@ -808,38 +800,43 @@ void setup()
         Serial.printf("[diag] RadioLib expects '%.6s' at 0x0320\n", "SX1261");
     }
 
-    // Initialise — applies all LORA_* settings from WioSX1262.h
-    bool r1ok = radio1->begin();
-    bool r2ok = radio2->begin();
+    // Initialise — applies the runtime RF config. A PROTO_NONE radio is
+    // skipped (begin() never called) so its slot can be left empty.
+    bool r1ok = g_radioEnabled[0] ? radio1->begin() : false;
+    bool r2ok = g_radioEnabled[1] ? radio2->begin() : false;
 
-    if (!r1ok) {
+    if (g_radioEnabled[0] && !r1ok) {
         Serial.println("\nFATAL: Radio1 init failed. Check wiring. Halting.");
         while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
-    if (!r2ok) {
+    if (g_radioEnabled[1] && !r2ok) {
         Serial.println("\n[WARN] Radio2 init failed — running Radio1 only.\n");
     }
 
-    // Start both radios listening
-    radio1->startReceive();
-    radio2->startReceive();
+    // Start enabled radios listening
+    if (g_radioEnabled[0]) radio1->startReceive();
+    if (g_radioEnabled[1]) radio2->startReceive();
 
-    Serial.println("\nBridge active — both radios listening.\n");
+    Serial.println("\nBridge active.\n");
 
-    // Spawn one FreeRTOS task per radio, pinned to separate cores
-    xTaskCreatePinnedToCore(
-        radio1Task, "R1_task",
-        BRIDGE_TASK_STACK, NULL,
-        BRIDGE_TASK_PRIO,  NULL,
-        0   // core 0
-    );
+    // Spawn one FreeRTOS task per enabled radio, pinned to separate cores
+    if (g_radioEnabled[0]) {
+        xTaskCreatePinnedToCore(
+            radio1Task, "R1_task",
+            BRIDGE_TASK_STACK, NULL,
+            BRIDGE_TASK_PRIO,  NULL,
+            0   // core 0
+        );
+    }
 
-    xTaskCreatePinnedToCore(
-        radio2Task, "R2_task",
-        BRIDGE_TASK_STACK, NULL,
-        BRIDGE_TASK_PRIO,  NULL,
-        1   // core 1
-    );
+    if (g_radioEnabled[1]) {
+        xTaskCreatePinnedToCore(
+            radio2Task, "R2_task",
+            BRIDGE_TASK_STACK, NULL,
+            BRIDGE_TASK_PRIO,  NULL,
+            1   // core 1
+        );
+    }
 }
 
 // ============================================================
