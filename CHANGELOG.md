@@ -1,5 +1,24 @@
 # Changelog
 
+## v8.1 — 2026-05-21 — Compile-time build-flag validation
+
+A small follow-up to v8.0 — build-time safety for source builds, plus docs.
+
+- **`LoraConfigCheck.h`** — `static_assert` guards that reject an invalid
+  `LORA_RADIO*` build-flag default at compile time, so a bad flag fails
+  `pio run` with a clear message instead of shipping misbehaving firmware.
+  Checks: frequency 150–960 MHz, bandwidth a valid SX1262 value, SF 5–12,
+  CR 5–8, TX power −9…22 dBm. Sync word is byte-range only (`0x00–0xFF`),
+  not a whitelist, since the v8 Custom protocol path allows any sync word.
+  Each guard is `#ifdef`-wrapped, so an unset flag (the vanilla-`.bin` case)
+  is skipped. This complements v8.0's portal-side runtime validation —
+  build-time checks the compile-time defaults, the portal checks
+  portal-entered values.
+- **README** — new Wiring section (signal/GPIO table for the stacked-shield
+  Xiao ↔ dual SX1262 connections).
+
+No firmware behaviour change for a valid configuration.
+
 ## v8.0 — 2026-05-21 — Vanilla firmware: full portal config
 
 The bridge is now configurable **entirely through the WiFi captive portal** —
