@@ -32,6 +32,7 @@
 #include "CaptivePortal.h"
 #include "NodeDB.h"
 #include "RegionPreset.h"
+#include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
 #include <esp_mac.h>
 
 // Per-radio LoRa RF is resolved at RUNTIME from BridgeConfig (schema v4) —
