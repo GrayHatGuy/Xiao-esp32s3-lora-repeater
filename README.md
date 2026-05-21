@@ -108,6 +108,11 @@ below document the pin mapping the firmware drives (see `src/main.cpp`).
 - **Connect both u.FL antennas before power-on** — transmitting into a missing
   antenna risks the PA.
 
+An editable schematic of this wiring is attached in the repo:
+[`hardware/lora-bridge-wiring.kicad_sch`](hardware/lora-bridge-wiring.kicad_sch)
+— opens in KiCad 7 or newer (the symbols are embedded, so no external libraries
+are needed; connectivity is expressed with matching net labels).
+
 ## Instructions
 
 1. **Stack the hardware.** Mate the B2B shield (radio 1) underneath the Xiao, the edge-pin shield (radio 2) on top. Connect antennas to **both** radios before powering on.
