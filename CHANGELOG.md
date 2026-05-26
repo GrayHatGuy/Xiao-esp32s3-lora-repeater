@@ -68,12 +68,20 @@ Bench bring-up sequence completed methodically:
 
 ### Known limitation (carried into v9.x)
 
-- MeshCore reception on the LR1121 at MC's standard RF profile
-  (910.525 MHz / BW62.5 / SF7 / sync `0x12`) is **not yet verified**
-  despite confirmed MT reception working. SX1262 ↔ MC bridging
-  unaffected. Next bench session: head-to-head SX1262/LR1121 comparison
-  on identical MC RF to isolate whether this is an LR11x0 7.0.0 driver
-  issue or a downstream decoder/packet-params gap. Tracked under task #33.
+- **LR1121 continuous-RX re-arm.** Post-v9.0 head-to-head testing with
+  both radios on identical MT LongFast RF + RadioLib 7.7.0 narrows the
+  remaining issue: the LR1121 receives the first packet correctly
+  (verified at -41 dBm, decoded cleanly) but then doesn't re-arm into
+  continuous RX — while the SX1262 alongside happily receives 10+
+  subsequent OTA packets in the same window. The chip's RX path,
+  modem config, IRQ wiring, and antenna path are all confirmed
+  functional; the gap is in how `WioLR1121::read()` →
+  `radio task` → `startReceive()` interact with RadioLib 7.x's
+  LR11x0 state machine. Likely fix: explicit `clearIrqStatus()` +
+  `startReceive(RX_TIMEOUT_INF, ...)` inside the wrapper's `read()`
+  to guarantee re-arm, plus instrumented IRQ-count logging to
+  confirm. Tracked for v9.0.x patch. Phase 0 dual-SX1262 bridging
+  is entirely unaffected.
 
 ### Migration notes
 
