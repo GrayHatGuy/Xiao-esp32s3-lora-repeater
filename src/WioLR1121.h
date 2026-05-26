@@ -33,7 +33,11 @@ public:
     void    startReceive() override;
 
     // Written by the IRAM ISR trampoline; read by the polling task.
-    volatile bool _rxFlag = false;
+    volatile bool     _rxFlag   = false;
+    // Diagnostic: number of times the DIO9 ISR has fired since boot. If this
+    // counter never advances past 1, DIO9 is wedged HIGH and no further
+    // rising edges are being delivered to the ESP32.
+    volatile uint32_t _isrCount = 0;
 
 private:
     Module           *_mod;

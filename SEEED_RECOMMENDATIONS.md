@@ -1,0 +1,230 @@
+# Recommendations to Seeed Studio for Wio-LR1121 (SKU 113991415)
+
+**Companion document to `SEEED_SUPPORT_INQUIRY.md`.**
+**Date:** 2026-05-26
+**Project:** Xiao-ESP32-S3 Dual-Radio LoRa Mesh Bridge
+**Repository:** <https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater>
+
+This document captures four tiers of recommendations for Seeed engineering
+based on our Phase 1 LR1121 bring-up investigation. The Seeed support
+inquiry (separate doc) focuses on specific questions / asks. This document
+is the longer-form companion intended as constructive feedback should
+Seeed engineering wish to engage further.
+
+Tiers are ordered cheapest-to-most-expensive. Tier 1 is unilaterally
+actionable by Seeed today with no engineering cost. Tier 4 is process /
+policy. Tiers 2 and 3 require bench work and (potentially) hardware
+revision respectively.
+
+---
+
+## Tier 1 — Documentation gaps (zero engineering cost, immediate value)
+
+Even if the Wio-LR1121 hardware is healthy and we are simply missing a
+config step, the documentation around this module makes it nearly
+impossible for users to bring up RX correctly. Seeed can close these gaps
+unilaterally without any bench work.
+
+1. **Publish the RF switch truth table.** The Wio-LR1121 Module Datasheet
+   (v1.0, 2025-07-01) confirms "integrated TCXO and RF switch" but does
+   not publish the truth table for the switch. Add a table to the
+   datasheet specifying, for each LR1121 operating mode (STBY / sub-GHz
+   RX / sub-GHz TX low-power / sub-GHz TX high-power / 2.4 GHz TX /
+   2.4 GHz RX / GNSS / WiFi), what state DIO5, DIO6, DIO7 (and DIO8 if
+   relevant) should be driven to. This is exactly the table that needs
+   to be passed to `setRfSwitchTable()` in RadioLib, or the equivalent
+   in any LR1121 driver.
+
+2. **Publish or link to a known-good reference firmware example.** A
+   simple Arduino / PlatformIO + RadioLib sketch that initializes the
+   Wio-LR1121, transmits one packet, receives one packet, and prints
+   both — verified by Seeed engineering on real hardware. The Wio-SX1262
+   has examples like this in Seeed's wiki; the Wio-LR1121 should too.
+   Even a minimal "ping-pong" between two Wio-LR1121 modules would be
+   highly valuable.
+
+3. **Document the exact TCXO voltage** the LR1121's `tcxoVoltage`
+   configuration should be set to for this module. The datasheet is
+   silent. We've bench-tested 1.6 V, 3.0 V, and 3.3 V — guessing at this
+   value is unprofessional and a developer time-sink.
+
+4. **Publish the module's internal RF schematic** (or at minimum a block
+   diagram showing antenna → switch → chip-pin wiring). The OPL KiCad
+   library at `Seeed-Studio/OPL_Kicad_Library/Seeed Studio Wio LR1121
+   Module v0.9` only shows the part footprint, not the internal RF
+   front-end. A simplified block diagram showing which switch IC part
+   number is populated (or whether the switch is fully integrated into
+   the LR1121 silicon vs implemented externally on the module PCB) and
+   how DIO5/6/7 connect to it would let firmware authors verify behavior
+   with a logic analyzer.
+
+5. **Document any required chip-level initialization beyond
+   `SetDioAsRfSwitch` (cmd 0x0112).** If the Wio-LR1121's integrated
+   front-end requires additional commands — e.g. `SetLnaConfig`,
+   `SetRxBoostedGainMode`, an internal calibration sequence, or a
+   non-default `SetPaConfig` — please publish them in the datasheet or
+   an application note.
+
+6. **Document the supported LR1121 firmware version range.** Our modules
+   report `Base FW version: 1.3` via `GET_VERSION` (cmd 0x0303). If
+   Seeed knows that certain firmware versions have RX-path bugs that are
+   fixed in later revisions, please publish the version compatibility
+   matrix and a firmware-update procedure.
+
+## Tier 2 — Engineering verification (1–2 days of bench work)
+
+If Seeed engineering can reproduce our setup with their own bench tools,
+these tests will localize the root cause:
+
+1. **Verify RX functionality on a freshly-pulled production unit.** Connect
+   a Wio-LR1121 to a host MCU running RadioLib's stock
+   `examples/LR11x0/LR11x0_Receive_Interrupt` example, configured for
+   906–915 MHz / BW 250 kHz / SF 11 / sync 0x2B, with the antenna
+   plugged in. Use a calibrated signal generator (or a known-good
+   LR1121-based device like a LilyGO T3S3) to inject a -80 dBm signal
+   at the antenna port. Confirm `RX_DONE` fires on DIO9 and the packet
+   decodes. **If this works for Seeed:** the working firmware reveals
+   what step we are missing — please share. **If this does not work for
+   Seeed either:** there is a Wio-LR1121 production issue affecting all
+   units of the current revision.
+
+2. **Probe DIO5, DIO6, DIO7 on a powered unit during TX → RX transitions**
+   with a logic analyzer. The Wio-LR1121's module pads don't expose
+   these pins, so this requires a populated test point or a needle probe
+   on the die side. Confirm whether the LR1121 actually toggles those
+   pins on mode transitions when `SetDioAsRfSwitch` has been issued
+   (RadioLib 7.7.0 calls this command via `setRfSwitchTable()`). If they
+   don't toggle, there's either a chip-firmware bug or our
+   `SetDioAsRfSwitch` arguments are being silently rejected by the chip.
+
+3. **Replicate the dual-radio bench setup** — Wio-SX1262 + Wio-LR1121 on
+   the same carrier ~10 cm apart, both transmitting at +20 dBm — and
+   confirm whether the LR1121's RX desensitizes / blocks when the
+   SX1262's PA is active. Our observation is that R2 receives the
+   bridge's own R1 NodeInfo TX at -52 to -56 dBm **regardless of what we
+   drive DIO5/6/7 to** (8/8 brute-force sweep confirmed), suggesting the
+   receive signal is not travelling through the proper antenna → LNA
+   chain at all but through PCB substrate / supply / ground coupling
+   from R1's PA. This is symptomatic of either a permanently-
+   disconnected LNA path or persistent desensitization.
+
+4. **Inspect production-test coverage for RX sensitivity.** It is
+   plausible that production test verifies TX (straightforward — measure
+   radiated power) but does not verify RX sensitivity (harder —
+   requires injecting a known-low-power signal and confirming demod). If
+   two independently-sourced units from different orders both fail RX
+   but pass current production test, the test coverage has a gap.
+
+5. **Verify the module's antenna feedline integrity** with a network
+   analyzer (S11 return loss) on a representative production unit. Our
+   bench DMM check showed continuous connectivity from antenna tip
+   through IPEX → pad 23 (SUBG_RF), but DC continuity does not guarantee
+   RF integrity. An S11 sweep across 850–960 MHz would catch matching
+   network defects, missing capacitors, or solder shorts that pass DC
+   checks.
+
+## Tier 3 — Hardware design improvements (future module revisions)
+
+If Seeed determines the current Wio-LR1121 design has a structural
+limitation that an existing-stock fix cannot address:
+
+1. **Add LNA bias decoupling capacitor if missing.** The LR1121's LNA
+   input typically requires a small decoupling cap close to the chip
+   pin. A missing or under-spec cap allows ground bounce or RF
+   re-radiation onto the LNA input, killing sensitivity. This is a
+   common one-component fix.
+
+2. **Verify the RF switch IC's LNA-path matching network.** The switch →
+   LNA path likely has a Π or T matching network on the module. A wrong
+   component value, a missing component, or a stuffing error in
+   production can leave the LNA poorly matched, reducing sensitivity to
+   where the module appears to "not receive" even though TX still works
+   (TX has its own matching).
+
+3. **Add a control-pin bias network if the RF switch control DIOs require
+   defined pull-down / pull-up resistors.** If DIO5/6/7 boot floating
+   (high-impedance) before the host MCU issues `SetDioAsRfSwitch`, the
+   switch state at power-on is indeterminate. Defined pull-downs ensure
+   RX is the safe default state.
+
+4. **Improve RF shielding / grounding around the antenna port.** Our
+   PCB-coupling observation — the chip "hears" only signals coming
+   through the substrate from a near PA — suggests poor isolation
+   between the antenna pin and the chip's substrate / supply. A proper
+   RF guard ring with stitching vias around the antenna trace and a
+   solid ground pour under the RF section would block substrate paths.
+
+5. **Expose DIO5, DIO6, DIO7 on solder-down test pads** (not necessarily
+   on the module's pinout — too pin-expensive — but as test pads on the
+   module's PCB die side). This would let developers and Seeed support
+   engineers probe switch behavior with a logic analyzer when debugging.
+
+6. **Add a hardware revision marker.** The KiCad library mentions
+   "Wio LR1121 Module v0.9". If our modules are an early-revision and
+   there's a v1.x in the pipeline with this issue fixed, users have no
+   way to tell from the unit. A visible revision marker plus a
+   published change-log fixes this.
+
+7. **Consider re-evaluating the integrated TCXO voltage choice** if the
+   module ships with the LR1121's `tcxoVoltage` configured for a value
+   that is unusual or non-default. Some LR1121 reference designs use
+   1.8 V, others 3.0 V — picking a non-standard value forces users to
+   guess unless documented.
+
+## Tier 4 — Process improvements
+
+1. **Add Wio-LR1121 to Seeed's CI / nightly test rig** so any future
+   firmware reference, production-revision change, or chip-firmware
+   update is automatically validated against a real RX test. This
+   catches regressions before they ship to customers.
+
+2. **Maintain a public errata page** for the Wio-LR1121 — even a
+   one-line "v0.9 modules: RX path is sensitive to X, fixed in v1.0" is
+   far more useful than silence. Developers spend significant time
+   chasing issues that Seeed engineering may already know are
+   revision-specific.
+
+3. **Provide a swap policy** for users who purchased early-revision units
+   with known issues. We bought two units in good faith for product
+   development; if v1.0 fixes our issue, a clearly-published swap path
+   would be appreciated and would build customer trust.
+
+4. **Consider publishing the Wio-LR1121's design files** (schematic, BoM,
+   PCB layout) under the same open-hardware terms as Seeed's other Wio
+   modules. Closed reference designs force the developer community to
+   reverse-engineer behavior. Open hardware accelerates adoption and
+   surfaces issues faster.
+
+5. **Expand the Wio-LR1121 wiki page** with an integration guide that
+   covers at least:
+   - Pinout and minimum required external components for a typical
+     Arduino-style host.
+   - Antenna selection guidance (the IPEX variant ships without an
+     antenna; what gain / impedance characteristics are recommended for
+     each band the module supports?)
+   - Power supply requirements during TX peaks (the datasheet shows
+     124.5 mA at 22 dBm — recommend appropriate bulk capacitance on
+     VDD_RF to handle this transient).
+   - Multi-radio coexistence guidance — what minimum separation between
+     a Wio-LR1121 and an adjacent strong-TX radio is recommended to
+     avoid desensitization?
+
+---
+
+## Closing note
+
+The Wio-LR1121 is a compelling module — compact, capable, broadband
+(sub-GHz + 2.4 GHz + S-band + GNSS + WiFi-scan), and well-priced. We
+want to use it in production. The TX path works. The chip and host
+plumbing all work. With Tier 1 documentation in place — even just the
+switch truth table and a verified reference example — most of the
+developer bring-up pain would disappear. We hope this feedback is taken
+in the constructive spirit in which it is offered.
+
+If Seeed engineering would like to set up a direct conversation,
+inspect our serial logs and source code in detail, or have us run any
+additional bench tests, please reach out via
+<jrussell328@gmail.com> or via the project repository:
+<https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater>.
+
+Thank you for your time.

@@ -137,6 +137,9 @@ SemaphoreHandle_t spiMutex = NULL;
 // ============================================================
 LoraRadio *radio1 = nullptr;
 LoraRadio *radio2 = nullptr;
+// Diagnostic: when Radio 2 is the LR1121, this points to the same object so
+// radio2Task can read the ISR counter for the heartbeat. nullptr otherwise.
+WioLR1121 *radio2_lr_diag = nullptr;
 
 // ============================================================
 //  Per-radio channel context — g_chan[0] = radio1, g_chan[1] = radio2.
@@ -611,9 +614,28 @@ void radio1Task(void *pvParameters)
 // ============================================================
 void radio2Task(void *pvParameters)
 {
-    uint8_t buf[LORA_MAX_PACKET];
+    uint8_t  buf[LORA_MAX_PACKET];
+    uint32_t nextHeartbeatMs = 5000;   // first beat 5 s after task start
+    uint32_t lastIsrCount    = 0;
 
     for (;;) {
+        // Diagnostic heartbeat — only when Radio 2 is LR1121. Prints the ISR
+        // counter, current _rxFlag, and the delta since the last beat. If the
+        // counter is stuck at 1 across multiple beats while R1 is receiving
+        // packets, DIO9 is wedged HIGH and the IRQ-clear path is the bug.
+        if (radio2_lr_diag && (int32_t)(millis() - nextHeartbeatMs) >= 0) {
+            uint32_t cnt   = radio2_lr_diag->_isrCount;
+            bool     flag  = radio2_lr_diag->_rxFlag;
+            uint32_t delta = cnt - lastIsrCount;
+            Serial.printf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d\n",
+                          millis(),
+                          (unsigned long)cnt,
+                          (unsigned long)delta,
+                          flag ? 1 : 0);
+            lastIsrCount    = cnt;
+            nextHeartbeatMs = millis() + 5000;
+        }
+
         if (radio2->available()) {
             size_t len  = sizeof(buf);
             float  rssi = 0.0f;
@@ -634,6 +656,13 @@ void radio2Task(void *pvParameters)
 
             } else if (state != RADIOLIB_ERR_NONE) {
                 Serial.printf("[%8lu ms][R2 RX] ERROR %d\n", millis(), state);
+                radio2->startReceive();
+            } else {
+                // state==ERR_NONE but len==0: ISR fired and read() succeeded
+                // but returned zero bytes — getPacketLength() was 0 at read
+                // time. Phase B-2 instrumentation to surface this case.
+                Serial.printf("[%8lu ms][R2 RX EMPTY] state=%d len=%u\n",
+                              millis(), state, (unsigned)len);
                 radio2->startReceive();
             }
         }
@@ -769,6 +798,9 @@ void setup()
                        R1_ANT_SW, "Radio1-B2B", radio1Config);
     radio2 = makeRadio(chip1, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
                        R2_ANT_SW, "Radio2-Edge", radio2Config);
+    if (chip1 == BridgeConfig::CHIP_LR1121) {
+        radio2_lr_diag = static_cast<WioLR1121 *>(radio2);
+    }
 
     // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
     delay(150);
