@@ -1,6 +1,13 @@
 # LR1121 Spec — Sub-GHz ↔ 2.4 GHz Cross-Band Bridging
 
-Status: **draft — pending review.** No code yet. Tracked as a roadmap item.
+Status: **Phase 1 hardware-verified, shipped v9.0 (2026-05-25).**
+LR1121 chip detection, init, and RX confirmed on real hardware at MT
+LongFast (sync 0x2B, BW250, SF11) — bridge's own NodeInfo received at
+-44 dBm SNR 9.8 dB. RadioLib 7.0.0 required (6.6.0 had an LR11x0
+chip-detection bug). MC reception on the LR1121's MC RF profile
+(BW62.5 / SF7 / sync 0x12) carries forward as a known limitation to
+bench-isolate. Phase 2 (DUAL_LR1121) compile-verified, hardware
+verification pending.
 
 ## Goal
 
@@ -180,9 +187,16 @@ TX-power cap logic gains a 2.4 GHz ceiling.
 
 ## Open questions — confirm before code
 
-- **(a)** RadioLib `LR1121` API: confirm the `begin()` signature, TCXO
-  voltage argument, and how the band / RF-path is selected for 2.4 GHz vs
-  sub-GHz on this module.
+- **(a)** ~~RadioLib `LR1121` API.~~ **RESOLVED** — `LR1121` derives
+  `LR1120`→`LR11x0`. `begin(bw, sf, cr, syncWord, preambleLength,
+  tcxoVoltage, bool high)` — no frequency arg; `high=true` for >1 GHz
+  (2.4 GHz). Frequency is set separately via `setFrequency(float)` (valid
+  150–960 / 1900–2200 / 2400–2500 MHz, auto image calibration).
+  `setOutputPower(int8_t)` −9…22 dBm. The `WioLR1121` wrapper derives
+  `high` from `LoraConfig.frequency > 1000 MHz`. Two bench items remain:
+  the module's exact TCXO voltage (datasheet silent — assume 1.6 V,
+  verify) and the RF-switch table config (`setRfSwitchTable` /
+  `setDioAsRfSwitch` — the LR1121 drives the on-module switch).
 - **(b)** ~~Breakout board for the castellated Wio-LR1121?~~ **CONFIRMED**
   — a 1:1 breakout/carrier board is used, so the wiring table maps the
   module pads directly to the carrier pins.

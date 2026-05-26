@@ -44,6 +44,13 @@ enum Protocol : uint8_t {
     PROTO_CUSTOM = 4,   // user-entered RF; decoder derived from sync word
 };
 
+// Radio chip per slot. In the MIXED build profile Radio 2's chip is
+// portal-selectable; the DUAL_* profiles fix both at compile time.
+enum Chip : uint8_t {
+    CHIP_SX1262 = 0,
+    CHIP_LR1121 = 1,
+};
+
 // Global device region — governs the sub-GHz band. A 2.4 GHz radio is
 // region-exempt (ISM 2400-2483.5 MHz, licence-free worldwide).
 enum Region : uint8_t {
@@ -86,6 +93,7 @@ uint8_t  radioSf(int radio);
 uint8_t  radioCr(int radio);
 uint8_t  radioSyncWord(int radio);
 int8_t   radioTxPower(int radio);
+uint8_t  radioChip(int radio);
 
 // Setters — used by the captive portal. Bounds-clamp + null-terminate only.
 void setMtNodeId(uint32_t v);
@@ -107,6 +115,7 @@ void setRadioSf(int radio, uint8_t v);
 void setRadioCr(int radio, uint8_t v);
 void setRadioSyncWord(int radio, uint8_t v);
 void setRadioTxPower(int radio, int8_t v);
+void setRadioChip(int radio, uint8_t v);
 
 void debugDump();
 

@@ -5,31 +5,8 @@
 #include <RadioLib.h>
 #include "LoraRadio.h"
 
-// Compile-time RF constants — board facts, not user settings (v8 spec §6).
-// The per-radio RF plan (frequency, bandwidth, SF, CR, sync word, TX power)
-// is resolved at runtime from BridgeConfig; there is deliberately NO hard
-// fallback chain for those values — an unconfigured radio resolves to null
-// and forces the captive portal rather than guessing 915.0f / SF9 / 0x12.
-#ifndef LORA_PREAMBLE_LEN
-  #define LORA_PREAMBLE_LEN  8        // symbols — universal
-#endif
-#ifndef LORA_TCXO_VOLTAGE
-  #define LORA_TCXO_VOLTAGE  1.8f     // Wio SX1262 hardware property
-#endif
-#ifndef LORA_MAX_PACKET
-  #define LORA_MAX_PACKET    256
-#endif
-
-struct LoraConfig {
-    float    frequency;
-    float    bandwidth;
-    uint8_t  spreadFactor;
-    uint8_t  codingRate;
-    uint8_t  syncWord;
-    int8_t   txPower;
-    uint16_t preambleLen;
-    float    tcxoVoltage;
-};
+// LoraConfig + the compile-time board constants now live in LoraRadio.h,
+// shared by every radio wrapper.
 
 class WioSX1262 : public LoraRadio {
 public:

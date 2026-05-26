@@ -24,6 +24,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include "WioSX1262.h"
+#include "WioLR1121.h"
+#include "RadioProfile.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
 #include "MeshCoreConfig.h"
@@ -42,7 +44,8 @@
 // constants (board facts — WioSX1262.h §6).
 
 // Build a LoraConfig for one radio (index 0 or 1) from the live BridgeConfig.
-static LoraConfig makeLoraConfig(int radio)
+// TCXO voltage is chip-dependent (SX1262 module vs LR1121 module).
+static LoraConfig makeLoraConfig(int radio, uint8_t chip)
 {
     LoraConfig c;
     c.frequency    = BridgeConfig::radioFrequency(radio);
@@ -52,7 +55,8 @@ static LoraConfig makeLoraConfig(int radio)
     c.syncWord     = BridgeConfig::radioSyncWord(radio);
     c.txPower      = BridgeConfig::radioTxPower(radio);
     c.preambleLen  = LORA_PREAMBLE_LEN;
-    c.tcxoVoltage  = LORA_TCXO_VOLTAGE;
+    c.tcxoVoltage  = (chip == BridgeConfig::CHIP_LR1121)
+                         ? LR1121_TCXO_VOLTAGE : LORA_TCXO_VOLTAGE;
     return c;
 }
 
@@ -638,6 +642,17 @@ void radio2Task(void *pvParameters)
     }
 }
 
+// Construct the radio wrapper for a slot, picking SX1262 vs LR1121 by chip.
+// The LR1121 module has an integrated RF switch, so antSw is unused for it.
+static LoraRadio *makeRadio(uint8_t chip, int nss, int irqDio, int reset,
+                            int busy, int antSw, const char *name,
+                            const LoraConfig &cfg)
+{
+    if (chip == BridgeConfig::CHIP_LR1121)
+        return new WioLR1121(nss, irqDio, reset, busy, spi, spiMutex, name, cfg);
+    return new WioSX1262(nss, irqDio, reset, busy, antSw, spi, spiMutex, name, cfg);
+}
+
 // ============================================================
 //  setup()
 // ============================================================
@@ -729,15 +744,31 @@ void setup()
     spiMutex = xSemaphoreCreateMutex();
     configASSERT(spiMutex != NULL);
 
-    // Construct radio objects now the mutex and SPI bus are ready. RF comes
-    // from BridgeConfig at runtime (makeLoraConfig).
-    LoraConfig radio1Config = makeLoraConfig(0);
-    LoraConfig radio2Config = makeLoraConfig(1);
-    radio1 = new WioSX1262(R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
-                            R1_ANT_SW, spi, spiMutex, "Radio1-B2B", radio1Config);
+    // Resolve each radio's chip. DUAL_* profiles fix it at compile time;
+    // the MIXED profile fixes Radio 1 = SX1262 and reads Radio 2 from
+    // BridgeConfig (build-flag default or portal-saved).
+    uint8_t chip0, chip1;
+#if defined(RADIO_PROFILE_DUAL_LR1121)
+    chip0 = chip1 = BridgeConfig::CHIP_LR1121;
+#elif defined(RADIO_PROFILE_DUAL_SX1262)
+    chip0 = chip1 = BridgeConfig::CHIP_SX1262;
+#else  // MIXED
+    chip0 = BridgeConfig::CHIP_SX1262;
+    chip1 = BridgeConfig::radioChip(1);
+#endif
+    Serial.printf("[setup] Radio1 = %s, Radio2 = %s\n",
+                  chip0 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262",
+                  chip1 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262");
 
-    radio2 = new WioSX1262(R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
-                            R2_ANT_SW, spi, spiMutex, "Radio2-Edge", radio2Config);
+    // Construct radio objects now the mutex and SPI bus are ready. RF comes
+    // from BridgeConfig at runtime (makeLoraConfig); the chip wrapper is
+    // picked by makeRadio().
+    LoraConfig radio1Config = makeLoraConfig(0, chip0);
+    LoraConfig radio2Config = makeLoraConfig(1, chip1);
+    radio1 = makeRadio(chip0, R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
+                       R1_ANT_SW, "Radio1-B2B", radio1Config);
+    radio2 = makeRadio(chip1, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
+                       R2_ANT_SW, "Radio2-Edge", radio2Config);
 
     // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
     delay(150);

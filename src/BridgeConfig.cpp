@@ -1,6 +1,7 @@
 // BridgeConfig.cpp — see BridgeConfig.h for design notes.
 
 #include "BridgeConfig.h"
+#include "RadioProfile.h"
 
 #include <Preferences.h>
 #include <string.h>
@@ -86,7 +87,7 @@
 
 namespace BridgeConfig {
 
-static constexpr uint8_t SCHEMA_VERSION = 4;
+static constexpr uint8_t SCHEMA_VERSION = 5;
 
 // Schema v2 — kept verbatim so a v2 blob (v6.1 build) can be migrated.
 struct PersistedV2 {
@@ -120,20 +121,24 @@ struct PersistedV3 {
     char     r2ChannelKey [RADIO_CHANNEL_KEY_MAX  + 1];
 };
 
-// Per-radio protocol + full RF plan (v8 schema v4).
+// Per-radio protocol + full RF plan + chip. The `chip` byte occupies what
+// was a pad byte in schema v4, so v4 and v5 blobs are byte-identical in
+// layout — a v4 blob's zero pad reads as CHIP_SX1262, the correct default.
 struct RadioRf {
     uint8_t  protocol;     // BridgeConfig::Protocol
     uint8_t  sf;           // spreading factor 5..12
     uint8_t  cr;           // coding rate 5..8
     uint8_t  syncWord;     // LoRa sync word
     int8_t   txPower;      // dBm
-    uint8_t  _pad[3];
+    uint8_t  chip;         // BridgeConfig::Chip (v5; was pad in v4)
+    uint8_t  _pad[2];
     float    frequency;    // MHz
     float    bandwidth;    // kHz
 };
 
-// Schema v4 — global region + per-radio protocol/RF.
-struct PersistedV4 {
+// Schema v5 — global region + per-radio protocol/RF/chip. Layout is
+// identical to v4 (the chip byte reuses a v4 pad byte).
+struct PersistedV5 {
     uint8_t  version;
     uint8_t  configured;
     uint8_t  positionEnabled;
@@ -151,7 +156,7 @@ struct PersistedV4 {
     RadioRf  radio[2];
 };
 
-static PersistedV4 s_cfg;
+static PersistedV5 s_cfg;
 
 static const char *NVS_NAMESPACE = "bridgecfg";
 static const char *NVS_KEY_BLOB  = "v1";   // opaque key; schema version lives in the blob
@@ -221,6 +226,20 @@ static void loadDefaults() {
     s_cfg.radio[1].sf        = (uint8_t)(LORA_RADIO2_SPREAD_FACTOR);
     s_cfg.radio[1].cr        = (uint8_t)(LORA_RADIO2_CODING_RATE);
     s_cfg.radio[1].txPower   = (int8_t)(LORA_RADIO2_TX_POWER);
+
+    // Per-radio chip — fixed by the build profile (DUAL_*) or, for MIXED,
+    // Radio 2 defaults to the RADIO2_CHIP build flag (portal-overridable).
+#if defined(RADIO_PROFILE_DUAL_LR1121)
+    s_cfg.radio[0].chip = CHIP_LR1121;
+    s_cfg.radio[1].chip = CHIP_LR1121;
+#elif defined(RADIO_PROFILE_DUAL_SX1262)
+    s_cfg.radio[0].chip = CHIP_SX1262;
+    s_cfg.radio[1].chip = CHIP_SX1262;
+#else  // MIXED
+    s_cfg.radio[0].chip = CHIP_SX1262;
+    s_cfg.radio[1].chip = (RADIO2_CHIP == RADIO_CHIP_LR1121)
+                              ? CHIP_LR1121 : CHIP_SX1262;
+#endif
 }
 
 static void terminateAll() {
@@ -262,16 +281,26 @@ void begin() {
     }
     size_t blobSize = prefs.getBytesLength(NVS_KEY_BLOB);
 
-    if (blobSize == sizeof(PersistedV4)) {
-        PersistedV4 tmp;
+    if (blobSize == sizeof(PersistedV5)) {
+        PersistedV5 tmp;
         size_t got = prefs.getBytes(NVS_KEY_BLOB, &tmp, sizeof(tmp));
-        if (got == sizeof(PersistedV4) && tmp.version == 4) {
+        if (got == sizeof(PersistedV5) && (tmp.version == 4 || tmp.version == 5)) {
             s_cfg = tmp;
             terminateAll();
-            Serial.printf("[BridgeConfig] loaded v4 blob from NVS (configured=%u)\n",
-                          (unsigned)s_cfg.configured);
+            if (s_cfg.version == 4) {
+                // v4 -> v5: schema v4 and v5 are byte-identical; the v5
+                // radio[].chip byte was a zero pad byte in v4, which equals
+                // CHIP_SX1262 — correct for any v4 (SX1262-built) device.
+                s_cfg.version = SCHEMA_VERSION;
+                prefs.putBytes(NVS_KEY_BLOB, &s_cfg, sizeof(s_cfg));
+                Serial.printf("[BridgeConfig] migrated v4 blob -> v5 (configured=%u)\n",
+                              (unsigned)s_cfg.configured);
+            } else {
+                Serial.printf("[BridgeConfig] loaded v5 blob from NVS (configured=%u)\n",
+                              (unsigned)s_cfg.configured);
+            }
         } else {
-            Serial.printf("[BridgeConfig] v4-sized blob bad (got %u B, ver %u); keeping defaults\n",
+            Serial.printf("[BridgeConfig] v5-sized blob bad (got %u B, ver %u); keeping defaults\n",
                           (unsigned)got, (unsigned)tmp.version);
         }
     } else if (blobSize == sizeof(PersistedV3)) {
@@ -378,6 +407,7 @@ uint8_t  radioSf(int radio)        { return s_cfg.radio[clampRadio(radio)].sf; }
 uint8_t  radioCr(int radio)        { return s_cfg.radio[clampRadio(radio)].cr; }
 uint8_t  radioSyncWord(int radio)  { return s_cfg.radio[clampRadio(radio)].syncWord; }
 int8_t   radioTxPower(int radio)   { return s_cfg.radio[clampRadio(radio)].txPower; }
+uint8_t  radioChip(int radio)      { return s_cfg.radio[clampRadio(radio)].chip; }
 
 void setMtNodeId(uint32_t v)           { s_cfg.mtNodeId = v; }
 void setMtNodeIdStr(const char *s)     { copyStr(s_cfg.mtNodeIdStr, sizeof(s_cfg.mtNodeIdStr), s); }
@@ -398,6 +428,7 @@ void setRadioSf(int radio, uint8_t v)       { s_cfg.radio[clampRadio(radio)].sf 
 void setRadioCr(int radio, uint8_t v)       { s_cfg.radio[clampRadio(radio)].cr        = v; }
 void setRadioSyncWord(int radio, uint8_t v) { s_cfg.radio[clampRadio(radio)].syncWord  = v; }
 void setRadioTxPower(int radio, int8_t v)   { s_cfg.radio[clampRadio(radio)].txPower   = v; }
+void setRadioChip(int radio, uint8_t v)     { s_cfg.radio[clampRadio(radio)].chip      = v; }
 
 void debugDump() {
     Serial.printf("[BridgeConfig] v%u configured=%u region=%u\n"
@@ -418,9 +449,10 @@ void debugDump() {
                   (unsigned)s_cfg.telemetryEnabled);
     for (int i = 0; i < 2; i++) {
         const RadioRf &r = s_cfg.radio[i];
-        Serial.printf("  radio%d RF     = proto=%u sync=0x%02X "
+        Serial.printf("  radio%d RF     = chip=%s proto=%u sync=0x%02X "
                       "%.3f MHz BW%.1f SF%u CR%u TX%ddBm\n",
-                      i + 1, (unsigned)r.protocol, (unsigned)r.syncWord,
+                      i + 1, r.chip == CHIP_LR1121 ? "LR1121" : "SX1262",
+                      (unsigned)r.protocol, (unsigned)r.syncWord,
                       r.frequency, r.bandwidth, (unsigned)r.sf,
                       (unsigned)r.cr, (int)r.txPower);
     }

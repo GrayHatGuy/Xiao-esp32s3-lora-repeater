@@ -80,23 +80,31 @@ static inline bool regionHasBand(uint8_t region) {
     return r.freqEnd > r.freqStart;
 }
 
-// Resolve a modem preset to its non-wideLora BW(kHz)/SF/CR bundle. Verbatim
-// from meshtastic/firmware MeshRadio.h modemPresetToParams().
+// Resolve a modem preset to its BW(kHz)/SF/CR bundle. Verbatim from
+// meshtastic/firmware MeshRadio.h modemPresetToParams(). `wideLora` selects
+// the 2.4 GHz wide-bandwidth variant (used by LR1121 2.4 GHz radios); SF/CR
+// are identical between the two, only the bandwidth widens.
 static inline void modemPresetParams(uint8_t preset, float &bwKHz,
-                                     uint8_t &sf, uint8_t &cr) {
+                                     uint8_t &sf, uint8_t &cr,
+                                     bool wideLora = false) {
     switch (preset) {
-        case PRESET_SHORT_TURBO:   bwKHz = 500.0f; sf = 7;  cr = 5; break;
-        case PRESET_SHORT_FAST:    bwKHz = 250.0f; sf = 7;  cr = 5; break;
-        case PRESET_SHORT_SLOW:    bwKHz = 250.0f; sf = 8;  cr = 5; break;
-        case PRESET_MEDIUM_FAST:   bwKHz = 250.0f; sf = 9;  cr = 5; break;
-        case PRESET_MEDIUM_SLOW:   bwKHz = 250.0f; sf = 10; cr = 5; break;
-        case PRESET_LONG_MODERATE: bwKHz = 125.0f; sf = 11; cr = 8; break;
-        case PRESET_LONG_SLOW:     bwKHz = 125.0f; sf = 12; cr = 8; break;
-        case PRESET_LONG_TURBO:    bwKHz = 500.0f; sf = 11; cr = 8; break;
+        case PRESET_SHORT_TURBO:   bwKHz = wideLora ? 1625.0f : 500.0f; sf = 7;  cr = 5; break;
+        case PRESET_SHORT_FAST:    bwKHz = wideLora ? 812.5f  : 250.0f; sf = 7;  cr = 5; break;
+        case PRESET_SHORT_SLOW:    bwKHz = wideLora ? 812.5f  : 250.0f; sf = 8;  cr = 5; break;
+        case PRESET_MEDIUM_FAST:   bwKHz = wideLora ? 812.5f  : 250.0f; sf = 9;  cr = 5; break;
+        case PRESET_MEDIUM_SLOW:   bwKHz = wideLora ? 812.5f  : 250.0f; sf = 10; cr = 5; break;
+        case PRESET_LONG_MODERATE: bwKHz = wideLora ? 406.25f : 125.0f; sf = 11; cr = 8; break;
+        case PRESET_LONG_SLOW:     bwKHz = wideLora ? 406.25f : 125.0f; sf = 12; cr = 8; break;
+        case PRESET_LONG_TURBO:    bwKHz = wideLora ? 1625.0f : 500.0f; sf = 11; cr = 8; break;
         case PRESET_LONG_FAST:
-        default:                   bwKHz = 250.0f; sf = 11; cr = 5; break;
+        default:                   bwKHz = wideLora ? 812.5f  : 250.0f; sf = 11; cr = 5; break;
     }
 }
+
+// 2.4 GHz ISM band — licence-free worldwide, region-exempt. Used by LR1121
+// radios; the SX1262 cannot reach it.
+static constexpr float BAND_2G4_START = 2400.0f;   // MHz
+static constexpr float BAND_2G4_END   = 2483.5f;   // MHz
 
 static inline const char *modemPresetName(uint8_t preset) {
     switch (preset) {
@@ -146,6 +154,23 @@ static inline float bandCenterMHz(uint8_t region) {
     const RegionInfo &r = regionInfo(region);
     if (r.freqEnd <= r.freqStart) return 0.0f;
     return r.freqStart + (r.freqEnd - r.freqStart) / 2.0f;
+}
+
+// Meshtastic channel-slot frequency on the 2.4 GHz band — same djb2 + slot
+// formula as the sub-GHz path, but over the fixed 2400-2483.5 MHz band.
+// `bwKHz` should be a wideLora bandwidth (modemPresetParams wideLora=true).
+static inline float slotFrequency2G4(const char *channelName, float bwKHz) {
+    if (bwKHz <= 0.0f) return 0.0f;
+    float bwMHz = bwKHz / 1000.0f;
+    uint32_t numChannels = (uint32_t)floorf((BAND_2G4_END - BAND_2G4_START) / bwMHz);
+    if (numChannels == 0) return 0.0f;
+    uint32_t channelNum = djb2(channelName) % numChannels;
+    return BAND_2G4_START + (bwMHz / 2.0f) + ((float)channelNum * bwMHz);
+}
+
+// Flat 2.4 GHz band-centre default.
+static inline float bandCenter2G4() {
+    return BAND_2G4_START + (BAND_2G4_END - BAND_2G4_START) / 2.0f;
 }
 
 // Convenience: full RF resolution for one radio.

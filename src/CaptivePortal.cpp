@@ -10,6 +10,7 @@
 #include "CaptivePortal.h"
 #include "BridgeConfig.h"
 #include "RegionPreset.h"
+#include "RadioProfile.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -133,6 +134,22 @@ static void appendRadio(String &page, int n) {
     page += F("<h2>Radio ");
     page += n;
     page += F("</h2>");
+
+#if defined(RADIO_PROFILE_MIXED)
+    // Radio chip picker — MIXED profile only, Radio 2 only. Radio 1 is
+    // always SX1262; the DUAL_* profiles fix both chips at compile time.
+    if (n == 2) {
+        uint8_t curChip = BridgeConfig::radioChip(1);
+        page += F("<label>Radio chip</label>"
+                  "<select name=\"r2chip\"><option value=\"0\"");
+        if (curChip == BridgeConfig::CHIP_SX1262) page += F(" selected");
+        page += F(">SX1262 (sub-GHz)</option><option value=\"1\"");
+        if (curChip == BridgeConfig::CHIP_LR1121) page += F(" selected");
+        page += F(">LR1121 (sub-GHz + 2.4 GHz)</option></select>"
+                  "<div class=\"hint\">LR1121 also accepts a 2.4 GHz "
+                  "frequency (2400-2500 MHz). Reboot applies a chip change.</div>");
+    }
+#endif
 
     // Protocol picker.
     page += F("<label>Protocol</label><select id=\"r");
@@ -442,11 +459,29 @@ static uint8_t syncForProtocol(uint8_t proto) {
     return 0x00;
 }
 
+// Resolve a radio slot's chip. DUAL_* profiles are compile-time fixed; the
+// MIXED profile reads Radio 2 from the form (Radio 1 is always SX1262).
+static uint8_t radioChipForSlot(int n) {
+#if defined(RADIO_PROFILE_DUAL_LR1121)
+    (void)n; return BridgeConfig::CHIP_LR1121;
+#elif defined(RADIO_PROFILE_DUAL_SX1262)
+    (void)n; return BridgeConfig::CHIP_SX1262;
+#else
+    if (n == 2) {
+        uint8_t c = (uint8_t)s_http.arg("r2chip").toInt();
+        return (c == BridgeConfig::CHIP_LR1121) ? BridgeConfig::CHIP_LR1121
+                                                : BridgeConfig::CHIP_SX1262;
+    }
+    return BridgeConfig::CHIP_SX1262;
+#endif
+}
+
 // Resolve + validate one radio's protocol/RF/channel from the POSTed form,
 // writing straight into BridgeConfig. Returns nullptr on success, or an
 // error string to flash back.
-static const char *applyRadio(int n, uint8_t region) {
+static const char *applyRadio(int n, uint8_t region, uint8_t chip) {
     int idx = n - 1;
+    BridgeConfig::setRadioChip(idx, chip);
     String pStr = s_http.arg(String("r") + n + "proto");
     uint8_t proto = (uint8_t)pStr.toInt();
 
@@ -462,8 +497,13 @@ static const char *applyRadio(int n, uint8_t region) {
 
     String freqStr = s_http.arg(String("r") + n + "Freq");
     float  freq    = freqStr.toFloat();
-    if (freq < SX1262_FREQ_MIN || freq > SX1262_FREQ_MAX)
-        return "Frequency out of the SX1262 range (150-960 MHz).";
+    bool   freqOk  = (freq >= SX1262_FREQ_MIN && freq <= SX1262_FREQ_MAX);
+    if (chip == BridgeConfig::CHIP_LR1121 && freq >= 2400.0f && freq <= 2500.0f)
+        freqOk = true;   // LR1121 2.4 GHz band — region-exempt
+    if (!freqOk)
+        return (chip == BridgeConfig::CHIP_LR1121)
+            ? "Frequency must be 150-960 MHz or 2400-2500 MHz (LR1121)."
+            : "Frequency out of the SX1262 range (150-960 MHz).";
 
     String txStr = s_http.arg(String("r") + n + "Tx");
     int    txp   = txStr.toInt();
@@ -515,9 +555,12 @@ static const char *applyRadio(int n, uint8_t region) {
         bw = 250.0f; sf = 11; cr = 5;
     }
 
-    // Region-aware TX power cap.
+    // TX power cap. The 2.4 GHz band is region-exempt and the LR1121's
+    // 2.4 GHz PA tops out far below the sub-GHz ceiling.
     int8_t cap = SX1262_TX_MAX;
-    if (RegionPreset::regionHasBand(region)) {
+    if (freq >= 2400.0f) {
+        cap = 13;   // LR1121 2.4 GHz output ceiling
+    } else if (RegionPreset::regionHasBand(region)) {
         int8_t rc = RegionPreset::regionInfo(region).powerLimit;
         if (rc < cap) cap = rc;
     }
@@ -542,6 +585,10 @@ static const char *applyRadio(int n, uint8_t region) {
 }
 
 static void handleSave() {
+    Serial.printf("[CP] POST args: r2chip='%s' r2proto='%s' region='%s'\n",
+              s_http.arg("r2chip").c_str(),
+              s_http.arg("r2proto").c_str(),
+              s_http.arg("region").c_str());
     // --- Meshtastic identity ---
     String mtNodeIdRaw  = s_http.arg("mtNodeId");
     String mtNodeIdStr  = s_http.arg("mtNodeIdStr");
@@ -576,10 +623,10 @@ static void handleSave() {
     uint8_t region = (uint8_t)s_http.arg("region").toInt();
     if (region >= RegionPreset::kRegionCount) region = BridgeConfig::REGION_UNSET;
 
-    // --- per-radio protocol / RF / channel ---
-    const char *e1 = applyRadio(1, region);
+    // --- per-radio chip + protocol / RF / channel ---
+    const char *e1 = applyRadio(1, region, radioChipForSlot(1));
     if (e1) { fail(e1); return; }
-    const char *e2 = applyRadio(2, region);
+    const char *e2 = applyRadio(2, region, radioChipForSlot(2));
     if (e2) { fail(e2); return; }
 
     uint8_t p1 = BridgeConfig::radioProtocol(0);

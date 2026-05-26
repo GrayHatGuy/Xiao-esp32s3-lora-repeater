@@ -1,17 +1,41 @@
 // LoraRadio.h
 // ---------------------------------------------------------------------------
-// Abstract interface for a LoRa radio wrapper. Lets the bridge pipeline hold
-// radios as LoraRadio* without knowing the underlying chip — WioSX1262 today,
-// WioLR1121 in the future (see LR1121-SPEC.md). The bridge dispatcher is
-// already RF-agnostic: it branches on the LoRa sync word, not the chip.
-//
-// All methods are also the surface a future WioLR1121 must implement, so the
-// two radio slots can be any mix of supported chips.
+// Abstract interface for a LoRa radio wrapper, plus the shared LoraConfig
+// struct and the compile-time board constants. Lets the bridge pipeline hold
+// radios as LoraRadio* without knowing the underlying chip — WioSX1262 and
+// WioLR1121 both implement this. The bridge dispatcher is RF-agnostic: it
+// branches on the LoRa sync word, not the chip.
 // ---------------------------------------------------------------------------
 
 #pragma once
 
 #include <Arduino.h>
+
+// Compile-time RF constants — board facts, not user settings.
+#ifndef LORA_PREAMBLE_LEN
+  #define LORA_PREAMBLE_LEN   8        // symbols — universal
+#endif
+#ifndef LORA_TCXO_VOLTAGE
+  #define LORA_TCXO_VOLTAGE   1.8f     // Wio SX1262 module TCXO
+#endif
+#ifndef LR1121_TCXO_VOLTAGE
+  #define LR1121_TCXO_VOLTAGE 3.0f     // Wio-LR1121 module TCXO (bench-verify)
+#endif
+#ifndef LORA_MAX_PACKET
+  #define LORA_MAX_PACKET     256
+#endif
+
+// Resolved RF plan for one radio. Built at runtime from BridgeConfig.
+struct LoraConfig {
+    float    frequency;     // MHz
+    float    bandwidth;     // kHz
+    uint8_t  spreadFactor;
+    uint8_t  codingRate;
+    uint8_t  syncWord;
+    int8_t   txPower;       // dBm
+    uint16_t preambleLen;
+    float    tcxoVoltage;   // V — chip-dependent
+};
 
 class LoraRadio {
 public:

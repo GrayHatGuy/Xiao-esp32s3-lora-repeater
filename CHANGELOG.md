@@ -1,5 +1,89 @@
 # Changelog
 
+## v9.0 — 2026-05-25 — Phase 1: Wio-LR1121 cross-band hardware bring-up
+
+The LR1121 (Seeed Wio-LR1121, SKU 113991415) joins the project as Radio 2
+in the **MIXED** build profile — the headline next step toward sub-GHz ↔
+2.4 GHz cross-band bridging. Specced in [`LR1121-SPEC.md`](LR1121-SPEC.md).
+
+This release lands all the firmware infrastructure for the LR1121 path
+plus the verified hardware bring-up on real silicon. **MT reception is
+hardware-verified end-to-end on the LR1121**; full MeshCore reception
+is the next bench item.
+
+### What's new
+
+- **`LoraRadio` abstract interface** — `begin/available/read/transmit/`
+  `startReceive` virtual base. `WioSX1262` and `WioLR1121` both implement
+  it; the bridge pipeline holds radios as `LoraRadio *`. SX1262 path is
+  hardware-verified unchanged (Phase 0 / v8.1 regression OK).
+- **`WioLR1121` wrapper** — `LoraRadio` implementation on RadioLib's
+  `LR1121` class. Manual NRESET pulse + extended BUSY-poll with 1 s
+  timeout, instrumented with serial logging — empirically the Wio-LR1121
+  boot ROM holds BUSY high for ~141 ms after reset (LA-confirmed),
+  longer than RadioLib's internal wait. Own IRAM ISR trampolines for
+  DIO9 packet-received interrupts.
+- **`RADIO_PROFILE` build flag** — three mutually-exclusive profiles
+  enforced by `static_assert`:
+  - **`RADIO_PROFILE_MIXED`** *(default for v9.0)* — Radio 1 fixed
+    SX1262; Radio 2 portal-selectable SX1262/LR1121; both drivers
+    linked for hot-swap.
+  - **`RADIO_PROFILE_DUAL_SX1262`** — both compile-time SX1262, only
+    that driver linked (Phase 0 size profile preserved).
+  - **`RADIO_PROFILE_DUAL_LR1121`** — both compile-time LR1121 (Phase 2
+    target, code path verified compile-clean).
+- **`BridgeConfig` schema v4 → v5** — per-radio `chip` byte (reuses a v4
+  pad byte, so layouts are byte-identical). v4 NVS blobs migrate in
+  place; `0x00` pad reads as `CHIP_SX1262`, correct for any v4 device.
+- **Portal "Radio 2 chip" picker** — MIXED profile only, with hint about
+  the 2.4 GHz frequency band. DUAL_* profiles hide the control entirely.
+- **Chip-aware frequency validation** — `handleSave()` accepts
+  150–960 MHz for SX1262, plus **2400–2500 MHz for LR1121 radios**.
+  Region-exempt 13 dBm TX-power ceiling applied on the 2.4 GHz band.
+- **`RegionPreset.h` 2.4 GHz extensions** — `modemPresetParams()` gained
+  a `wideLora` arg for the Meshtastic 2.4 GHz BWs (812.5 / 406.25 /
+  1625 kHz); new `slotFrequency2G4()` + `bandCenter2G4()` helpers.
+- **MAC-derived defaults** for node ID, long name, portal SSID — every
+  vanilla device uniquely addressable from first boot.
+- **RadioLib 6.6.0 → 7.0.0** — the LR11x0 driver in 6.6.0 had a
+  chip-detection bug that timed out `GET_VERSION` on the Wio-LR1121; 7.x
+  resolves it. The LR11x0 `begin()` API changed in 7.0.0 (added `freq`
+  and `power` to the signature, removed the `bool high` flag); the
+  `WioLR1121` wrapper is built against the 7.x signature. The SX126x
+  API in 7.0.0 is unchanged — Radio 1 (Wio SX1262) works without
+  modification.
+
+### Hardware verification
+
+Bench bring-up sequence completed methodically:
+
+- ✅ Chip detection — `Found LR11x0: 0x03 Base FW version: 1.3`
+- ✅ Powered cleanly (3.27 V steady at VDD_RF, no brown-out)
+- ✅ End-to-end DMM continuity on every signal pad → Xiao GPIO
+- ✅ Initial bench-debug ruled out: TCXO voltage (1.6 / 3.0 / 3.3 V), Xiao
+  damage from earlier short, breadboard contact, wiring topology
+- ✅ Logic analyzer (Hiletgo / PulseView) SPI capture confirmed bus health
+- ✅ **LR1121 RX verified at MT LongFast (sync `0x2B`, BW250, SF11)** —
+  bridge's own NodeInfo received at -44 dBm / SNR 9.8 dB
+
+### Known limitation (carried into v9.x)
+
+- MeshCore reception on the LR1121 at MC's standard RF profile
+  (910.525 MHz / BW62.5 / SF7 / sync `0x12`) is **not yet verified**
+  despite confirmed MT reception working. SX1262 ↔ MC bridging
+  unaffected. Next bench session: head-to-head SX1262/LR1121 comparison
+  on identical MC RF to isolate whether this is an LR11x0 7.0.0 driver
+  issue or a downstream decoder/packet-params gap. Tracked under task #33.
+
+### Migration notes
+
+- **v8.1 → v9.0 NVS**: schema v4 blobs auto-upgrade to v5 on first boot.
+  No user action required. Radio 2 chip defaults to SX1262 (preserving
+  Phase 0 behaviour); portal "Radio 2 chip" select changes it to LR1121.
+- **Build dependency**: `platformio.ini` now pins `RadioLib @ 7.0.0`.
+  A `pio pkg uninstall --library "jgromes/RadioLib"` followed by
+  `pio pkg install` may be needed if you have a cached 6.6.0.
+
 ## v8.1 — 2026-05-21 — Compile-time build-flag validation
 
 A small follow-up to v8.0 — build-time safety for source builds, plus docs.
