@@ -37,12 +37,68 @@
 //          25 = 11001 (T3S3-DIO5 + DIO8 + DIO10)
 //          31 = 11111 (all 5 HIGH — catch-all)
 //      Default: 1 (T3S3-style, DIO5 HIGH).
+//
+//   -DLR1121_RX_AUDIT_RUN=<0..5>
+//      Select which DOE row in LR1121-RX-INIT-AUDIT.md to execute. Used for
+//      the Phase-1 RX bring-up bench session — each value applies a
+//      different combination of chip-level init treatments:
+//          0 = Baseline (no extra treatments) + getErrors() diagnostic only
+//          1 = + explicit _radio->standby(STANDBY_RC) before setRfSwitchTable
+//              (verifies SetDioAsRfSwitch isn't silently failing per UM
+//              v2.2 §4.2.1 "only works with the chip in Standby RC mode,
+//              otherwise it returns a CMD_FAIL on the next GetStatus")
+//          2 = + setRssiCalibration with UM v2.2 Table 7-21 "From 600 MHz
+//              to 2 GHz" reference tunes — TOP CANDIDATE per UM §7.2.15:
+//              "An incorrect gain can result in a missed detection
+//              (packet loss)... The RSSI must be calibrated for each
+//              hardware type. By default, the chip is calibrated for the
+//              868-915MHz band on the LR1121 EVK."
+//          3 = + explicit _radio->calibrateImageRejection(902.0f, 928.0f)
+//              for the US sub-GHz band (UM §2.1.3: POR image cal "fails"
+//              on chips with TCXO fitted — Wio-LR1121 has integrated TCXO,
+//              so re-calibrating explicitly may be required)
+//          4 = + setRxBoostedGainMode(true) — small ~2 dB benefit per UM
+//              §7.2.12, not expected to solve alone
+//          5 = Kitchen-sink stack (1+2+3+4 combined)
+//      Default: 0 (baseline + diagnostic).
+//
+//      Walk this value sequentially 0,1,2,3,4,5 across bench runs per the
+//      DOE table in LR1121-RX-INIT-AUDIT.md. The instrumentation below
+//      prints each treatment's chip return code on the serial port so the
+//      test outcome can be recorded per DOE row.
 
 #include "WioLR1121.h"
 
 #ifndef LR1121_BRUTEFORCE_RX_DIOMASK
   #define LR1121_BRUTEFORCE_RX_DIOMASK 1   // T3S3-style: DIO5 HIGH for RX
 #endif
+
+#ifndef LR1121_RX_AUDIT_RUN
+  #define LR1121_RX_AUDIT_RUN 0            // baseline + getErrors() diagnostic
+#endif
+
+// Per-treatment compile-time booleans decoded from LR1121_RX_AUDIT_RUN.
+// Each is true for its dedicated solo run AND for run 5 (kitchen-sink).
+// See LR1121-RX-INIT-AUDIT.md "Run plan" table for the full DOE.
+namespace {
+  constexpr bool RX_AUDIT_PRE_STANDBY = (LR1121_RX_AUDIT_RUN == 1) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_RSSI_CAL    = (LR1121_RX_AUDIT_RUN == 2) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_CALIB_IMG   = (LR1121_RX_AUDIT_RUN == 3) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_RX_BOOSTED  = (LR1121_RX_AUDIT_RUN == 4) || (LR1121_RX_AUDIT_RUN == 5);
+
+  // UM v2.2 Table 7-21 reference RSSI calibration tunes for the
+  // "From 600 MHz to 2 GHz" band. Index order matches RadioLib's
+  // setRssiCalibration buffer packing in LR11x0_commands.cpp:
+  //   tune[0]=G4,  [1]=G5,  [2]=G6,  [3]=G7,   [4]=G8,   [5]=G9,
+  //   tune[6]=G10, [7]=G11, [8]=G12, [9]=G13,  [10..16]=G13hp1..hp7,
+  //   tune[17]=unused (high nibble of byte 8 set to 0).
+  constexpr int8_t LR1121_RSSI_TUNE_600M_2G[18] = {
+      2, 2, 2, 3, 3, 4, 5, 4, 4, 6,   // G4..G13
+      5, 5, 6, 6, 6, 7, 6,            // G13hp1..hp7
+      0,                              // unused, packed as high nibble of byte 8
+  };
+  constexpr int16_t LR1121_RSSI_GAIN_OFFSET_600M_2G = 0;
+}
 
 // Static ISR trampolines — supports up to 2 simultaneous instances.
 // Each ISR just sets a flag; SPI reads happen later in the polling task.
@@ -122,6 +178,20 @@ bool WioLR1121::begin()
     }
     // --- end pre-init wait -------------------------------------------------
 
+    // ----- RX-init-audit Run 1 / 5: Pre-standby treatment -------------------
+    // Per UM v2.2 §4.2.1: "SetDioAsRfSwitch ... only works with the chip in
+    // Standby RC mode, otherwise it returns a CMD_FAIL on the next GetStatus
+    // command." Per UM §2.2 the chip ends startup in STBY_RC, so the post-
+    // reset path SHOULD be in STBY_RC by the time we call setRfSwitchTable.
+    // But RadioLib's setRfSwitchTable discards the return value, so silent
+    // CMD_FAIL would be invisible to us. This treatment explicitly forces
+    // STBY_RC before the switch table install to remove all doubt.
+    if (RX_AUDIT_PRE_STANDBY) {
+        int16_t sbState = _radio->standby(RADIOLIB_LR11X0_STANDBY_RC);
+        Serial.printf("[%s] [RX-AUDIT Run %d] pre-setRfSwitchTable standby(STBY_RC) = %d\n",
+                      _name, (int)LR1121_RX_AUDIT_RUN, (int)sbState);
+    }
+
     // ----- Install the LR1121 RF switch truth table BEFORE begin() -------
     // Per LR1121 user manual §4.5.2 the chip supports up to 5 RFSWx outputs
     // mappable to DIO5 (RFSW0), DIO6 (RFSW1), DIO7 (RFSW2), DIO8 (RFSW3),
@@ -171,6 +241,22 @@ bool WioLR1121::begin()
                   (unsigned)LR1121_BRUTEFORCE_RX_DIOMASK);
     _radio->setRfSwitchTable(rfswitch_pins, rfswitch_table);
 
+#ifdef LR1121_DEBUG
+    // RX-init-audit diagnostic (always on under LR1121_DEBUG): check the
+    // chip's error register after setRfSwitchTable. Per UM v2.2 §4.2.1
+    // SetDioAsRfSwitch returns CMD_FAIL if not in STBY_RC mode — RadioLib's
+    // setRfSwitchTable discards the return value. If devErrors has the
+    // CMD_FAIL bit set, the entire 12-iteration RFSWx sweep evidence is
+    // invalidated and we need to re-run with the pre-standby treatment.
+    {
+        uint16_t devErrors = 0;
+        int16_t errState = _radio->getErrors(&devErrors);
+        Serial.printf("[%s] [RX-AUDIT diag] post-setRfSwitchTable getErrors() "
+                      "state=%d errors=0x%04X\n",
+                      _name, (int)errState, (unsigned)devErrors);
+    }
+#endif
+
     // RadioLib 7.x LR11x0 begin() signature (via LR1120 parent class):
     //   begin(freq, bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage)
     // setFrequency() inside begin() accepts 150-960 MHz, 1900-2200 MHz, and
@@ -203,6 +289,44 @@ bool WioLR1121::begin()
                   _config.spreadFactor, _config.codingRate,
                   _config.txPower, _config.syncWord,
                   is2g4 ? "2.4GHz" : "sub-GHz");
+
+    // ----- RX-init-audit Runs 2/3/4/5: post-begin() chip-level treatments --
+    // Each treatment is enabled by the LR1121_RX_AUDIT_RUN build flag (see
+    // doc block at top of file). The treatments apply in defined order so
+    // that the kitchen-sink Run 5 composes them deterministically.
+
+    if (RX_AUDIT_RSSI_CAL) {
+        // UM v2.2 §7.2.15: per-PCB calibration via Table 7-21 "From 600 MHz
+        // to 2 GHz" reference tunes. Top candidate root cause for the RX
+        // failure — the chip ships calibrated for the LR1121 EVK, not the
+        // Wio-LR1121's matching network.
+        int16_t rssiState = _radio->setRssiCalibration(LR1121_RSSI_TUNE_600M_2G,
+                                                       LR1121_RSSI_GAIN_OFFSET_600M_2G);
+        Serial.printf("[%s] [RX-AUDIT Run %d] setRssiCalibration(UM 600M-2G) = %d\n",
+                      _name, (int)LR1121_RX_AUDIT_RUN, (int)rssiState);
+    }
+
+    if (RX_AUDIT_CALIB_IMG) {
+        // UM v2.2 §2.1.3: POR image calibration "fails" on chips with TCXO
+        // fitted. The Wio-LR1121 has integrated TCXO, so explicit re-cal
+        // for the application band may be required. Sub-GHz US ISM band.
+        int16_t imgState = _radio->calibrateImageRejection(902.0f, 928.0f);
+        Serial.printf("[%s] [RX-AUDIT Run %d] calibrateImageRejection(902, 928) = %d\n",
+                      _name, (int)LR1121_RX_AUDIT_RUN, (int)imgState);
+    }
+
+    if (RX_AUDIT_RX_BOOSTED) {
+        // UM v2.2 §7.2.12: ~2 dB boost. Small effect; included for
+        // completeness — not expected to solve the RX block alone.
+        int16_t boostState = _radio->setRxBoostedGainMode(true);
+        Serial.printf("[%s] [RX-AUDIT Run %d] setRxBoostedGainMode(true) = %d\n",
+                      _name, (int)LR1121_RX_AUDIT_RUN, (int)boostState);
+    }
+
+    Serial.printf("[%s] RX-AUDIT run = %d (pre_standby=%d rssi_cal=%d calib_img=%d rx_boosted=%d)\n",
+                  _name, (int)LR1121_RX_AUDIT_RUN,
+                  (int)RX_AUDIT_PRE_STANDBY, (int)RX_AUDIT_RSSI_CAL,
+                  (int)RX_AUDIT_CALIB_IMG, (int)RX_AUDIT_RX_BOOSTED);
 
 #ifdef LR1121_DEBUG
     // Dump the chip's IRQ flags right after begin() so we can see what (if
