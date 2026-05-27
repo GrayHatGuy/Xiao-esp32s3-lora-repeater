@@ -25,15 +25,23 @@ config step, the documentation around this module makes it nearly
 impossible for users to bring up RX correctly. Seeed can close these gaps
 unilaterally without any bench work.
 
-1. **Publish the RF switch truth table.** The Wio-LR1121 Module Datasheet
+1. **Publish (a) which DIO pins drive the internal RF switch, and (b)
+   the truth table for those DIOs.** The Wio-LR1121 Module Datasheet
    (v1.0, 2025-07-01) confirms "integrated TCXO and RF switch" but does
-   not publish the truth table for the switch. Add a table to the
-   datasheet specifying, for each LR1121 operating mode (STBY / sub-GHz
-   RX / sub-GHz TX low-power / sub-GHz TX high-power / 2.4 GHz TX /
-   2.4 GHz RX / GNSS / WiFi), what state DIO5, DIO6, DIO7 (and DIO8 if
-   relevant) should be driven to. This is exactly the table that needs
-   to be passed to `setRfSwitchTable()` in RadioLib, or the equivalent
-   in any LR1121 driver.
+   not publish either piece of information. Inspecting the published
+   KiCad library we discovered that **DIO5/6/7 are routed to
+   bottom-side test pads named `MCU_DIO5/6/7`** — the `MCU_` naming
+   convention consistently denotes host-MCU expansion lines elsewhere
+   in the design, which strongly suggests DIO5/6/7 are **not** the
+   internal switch controls (and our 12-iteration bench sweep of all
+   RadioLib-reachable RFSWx-capable DIOs — DIO5/6/7/8/10 — confirms
+   this: zero variation in behavior). The documentation should therefore
+   answer first: *which* chip DIOs (likely DIO11 or none) actually
+   drive the switch, before answering what state they should be in for
+   each operating mode (STBY / sub-GHz RX / sub-GHz TX low-power /
+   sub-GHz TX high-power / 2.4 GHz TX / 2.4 GHz RX / GNSS / WiFi).
+   This is the single most impactful piece of documentation Seeed can
+   publish for LR1121-based product development.
 
 2. **Publish or link to a known-good reference firmware example.** A
    simple Arduino / PlatformIO + RadioLib sketch that initializes the
@@ -48,15 +56,23 @@ unilaterally without any bench work.
    silent. We've bench-tested 1.6 V, 3.0 V, and 3.3 V — guessing at this
    value is unprofessional and a developer time-sink.
 
-4. **Publish the module's internal RF schematic** (or at minimum a block
-   diagram showing antenna → switch → chip-pin wiring). The OPL KiCad
-   library at `Seeed-Studio/OPL_Kicad_Library/Seeed Studio Wio LR1121
-   Module v0.9` only shows the part footprint, not the internal RF
-   front-end. A simplified block diagram showing which switch IC part
-   number is populated (or whether the switch is fully integrated into
-   the LR1121 silicon vs implemented externally on the module PCB) and
-   how DIO5/6/7 connect to it would let firmware authors verify behavior
-   with a logic analyzer.
+4. **Publish the module's internal RF schematic** (or at minimum a
+   block diagram showing the antenna → switch → chip-RF-pin wiring).
+   The published OPL KiCad library at `Seeed-Studio/OPL_Kicad_Library/
+   Seeed Studio Wio LR1121 Module v0.9` shows the chip's DIO routing
+   to test pads but **does not show the actual RF switch topology** —
+   the section between the LR1121's RFI / RFO_LP / RFO_HP / RFIO_HF
+   pins and the SUBG_RF / 2.4G_RF module pads is opaque. A block
+   diagram answering at minimum:
+   - Is there a discrete RF switch IC on the module (and if so, what
+     part number)?
+   - Or is the front-end a passive combining network (diplexer /
+     matching) with the chip's internal mode handling everything?
+   - If a switch IC, which DIO(s) control it, and what's the truth
+     table?
+
+   ...would let firmware authors verify behavior with a logic analyzer
+   instead of guessing.
 
 5. **Document any required chip-level initialization beyond
    `SetDioAsRfSwitch` (cmd 0x0112).** If the Wio-LR1121's integrated
@@ -70,6 +86,21 @@ unilaterally without any bench work.
    Seeed knows that certain firmware versions have RX-path bugs that are
    fixed in later revisions, please publish the version compatibility
    matrix and a firmware-update procedure.
+
+7. **Document the bottom-side `MCU_DIO5/6/7` test pads.** The published
+   KiCad layout brings DIO5, DIO6, DIO7 (chip pins 20, 19, 11 per
+   Semtech UM Table 4-1) out to bottom-side pads named `MCU_DIO5`,
+   `MCU_DIO6`, `MCU_DIO7` — but the v1.0 datasheet pinout (page 3)
+   lists only the 24-pin perimeter, omitting these test pads entirely.
+   This is a significant undocumented capability: users implementing
+   multi-IO designs would benefit enormously from knowing these
+   additional GPIOs are accessible on the module bottom side. Add them
+   to the datasheet pinout table with their pad coordinates, intended
+   use ("host-MCU expansion"), and any electrical limits / cautions
+   (e.g. "internal pull state at boot," "max sink/source current,"
+   "ESD rating"). The KiCad naming convention `MCU_DIO*` strongly
+   suggests these are deliberately exposed for user use, not just
+   production-test probe points — make that intent explicit.
 
 ## Tier 2 — Engineering verification (1–2 days of bench work)
 
@@ -89,13 +120,17 @@ these tests will localize the root cause:
    units of the current revision.
 
 2. **Probe DIO5, DIO6, DIO7 on a powered unit during TX → RX transitions**
-   with a logic analyzer. The Wio-LR1121's module pads don't expose
-   these pins, so this requires a populated test point or a needle probe
-   on the die side. Confirm whether the LR1121 actually toggles those
-   pins on mode transitions when `SetDioAsRfSwitch` has been issued
-   (RadioLib 7.7.0 calls this command via `setRfSwitchTable()`). If they
-   don't toggle, there's either a chip-firmware bug or our
-   `SetDioAsRfSwitch` arguments are being silently rejected by the chip.
+   with a logic analyzer — using the bottom-side `MCU_DIO5/6/7` test
+   pads already present on the module (per Tier 1 item 7). Confirm
+   whether the LR1121 actually toggles those pins on mode transitions
+   when `SetDioAsRfSwitch` has been issued (RadioLib 7.7.0 calls this
+   command via `setRfSwitchTable()`). Given the KiCad naming
+   convention strongly suggests DIO5/6/7 are *not* the switch
+   controls, the expected result is **observable toggling that
+   doesn't affect the antenna path** — confirming the antenna routing
+   uses some other mechanism. If the DIOs *do* affect RF behavior on
+   Seeed's bench (and don't on ours), that would point to a unit
+   variance worth investigating.
 
 3. **Replicate the dual-radio bench setup** — Wio-SX1262 + Wio-LR1121 on
    the same carrier ~10 cm apart, both transmitting at +20 dBm — and
@@ -154,10 +189,17 @@ limitation that an existing-stock fix cannot address:
    RF guard ring with stitching vias around the antenna trace and a
    solid ground pour under the RF section would block substrate paths.
 
-5. **Expose DIO5, DIO6, DIO7 on solder-down test pads** (not necessarily
-   on the module's pinout — too pin-expensive — but as test pads on the
-   module's PCB die side). This would let developers and Seeed support
-   engineers probe switch behavior with a logic analyzer when debugging.
+5. **Document the existing bottom-side `MCU_DIO5/6/7` test pads** —
+   they are already present on the module per the KiCad layout (see
+   Tier 1 item 7). The Tier 3 ask here is twofold:
+   (a) Move "document this" from "nice-to-have" to "mandatory in the
+   datasheet pinout table" for future revisions, and
+   (b) Confirm whether these pads are intentionally exposed
+   (host-MCU expansion) or unintentionally exposed (production-test
+   probe points). If intentional, the module's positioning shifts from
+   "minimal pinout sub-GHz / 2.4 GHz module" to "compact sub-GHz /
+   2.4 GHz module with 3 bonus host GPIOs" — a real differentiator for
+   product designers. Either answer is fine; just publish it.
 
 6. **Add a hardware revision marker.** The KiCad library mentions
    "Wio LR1121 Module v0.9". If our modules are an early-revision and
