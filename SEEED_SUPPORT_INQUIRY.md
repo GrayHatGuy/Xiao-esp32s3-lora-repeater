@@ -206,31 +206,65 @@ reports zero `RX_DONE` for the duration of the test.
 ## Questions for Seeed engineering
 
 1. **What is the correct RF switch truth table for the Wio-LR1121's
-   integrated front-end?** Specifically, what state should DIO5, DIO6,
-   DIO7 (and DIO8 if applicable) be driven to for each of the LR1121
-   operating modes — STBY, sub-GHz RX, sub-GHz TX (low power), sub-GHz TX
-   (high power), 2.4 GHz TX, 2.4 GHz RX? The Wio-LR1121 Module Datasheet
-   (v1.0, 2025-07-01) does not publish this table, and the KiCad library
-   on the Seeed Studio OPL repository only contains the part footprint,
-   not the module's internal schematic.
+   integrated front-end?** Specifically:
+
+   - **Which DIO pins are used internally to drive the RF switch?** The
+     Semtech LR1121 user manual (Table 4-1 / §4.5.2) confirms the chip
+     supports up to 5 RFSWx outputs (RFSW0=DIO5, RFSW1=DIO6, RFSW2=DIO7,
+     RFSW3=DIO8, RFSW4=DIO10/DIO11), with all outputs defaulting to
+     High-Z until `SetDioAsRfSwitch` (cmd 0x0112) is called. The
+     Wio-LR1121 datasheet pinout (v1.0, 2025-07-01) only exposes
+     DIO0/BUSY, DIO8 (pad 11), and DIO9 (pad 12, our IRQ) on module
+     pads — leaving 9 chip DIOs (DIO1–DIO7, DIO10, DIO11) **potentially
+     wired to the integrated RF switch internally on the module PCB**.
+     We have now bench-swept all five RadioLib-reachable RFSWx-capable
+     DIOs (DIO5/DIO6/DIO7/DIO8/DIO10) — see "Extended sweep" table in
+     the next section — with **no change in behavior** across any of
+     12 tested combinations. **Can you confirm which DIOs are actually
+     wired to the module's internal switch, and whether any of them
+     (e.g. DIO11) lie outside RadioLib's `RADIOLIB_LR11X0_DIOx(0..4)`
+     mapping?**
+
+   - **DIO10 and DIO11 are of particular interest.** They serve dual
+     purpose on the chip (32.768 kHz crystal alternates vs. RFSW3 /
+     RFSW4), and since the Wio-LR1121 datasheet states the module has
+     an **integrated TCXO**, DIO10 and DIO11 are not needed for a 32k
+     crystal and are likely candidates for the internal RF switch.
+     **Can you confirm whether RFSW3 (DIO10) and/or RFSW4 (DIO11) are
+     used by the module's RF switch?** We have tested DIO10 = RFSW4
+     via RadioLib in isolation, in combination with DIO8, and in
+     combination with DIO5/6/7 — all states produced identical failure.
+     We cannot test DIO11 through the RadioLib API because RadioLib's
+     LR11x0 driver does not include DIO11 in its
+     `RADIOLIB_LR11X0_DIOx(0..4)` mapping (DIO5/6/7/8/10 only).
+
+   - **For each LR1121 operating mode** (STBY / sub-GHz RX / sub-GHz TX
+     low-power / sub-GHz TX high-power / 2.4 GHz TX / 2.4 GHz RX),
+     **what state should each switch-control DIO be driven to?** The
+     Wio-LR1121 Module Datasheet does not publish this table, and the
+     KiCad library on the Seeed Studio OPL repository contains only
+     the part footprint, not the module's internal schematic.
 
 2. **Is there a chip-level command sequence required to activate the
    sub-GHz RX path** beyond `SetDioAsRfSwitch` (0x0112) + `SetRx`
-   (0x0209)? Some Semtech reference designs require additional steps such
-   as setting `SetLnaConfig` or selecting the RFI input — our reading of
-   the LR1121 user manual suggests these should be defaults, but our
-   bench evidence indicates otherwise.
+   (0x0209)? Some Semtech reference designs require additional steps
+   such as setting `SetLnaConfig` or selecting the RFI input — our
+   reading of the LR1121 user manual suggests these should be defaults,
+   but our bench evidence (12 RFSWx combinations all failing identically)
+   indicates either an undocumented init step is needed, or something
+   in the chip's RX path is not engaging.
 
 3. **Has Seeed seen this symptom on the Wio-LR1121 in customer reports?**
    If so, is there a known workaround, errata, or recommended firmware
-   pattern?
+   pattern? Our modules report `Base FW version: 1.3` via `GET_VERSION`
+   (cmd 0x0303).
 
-4. **Can you confirm whether DIO5, DIO6, and DIO7 are in fact wired to
-   the on-module RF switch on the Wio-LR1121?** The datasheet pinout
-   confirms DIO5/6/7 are not exposed on module pads (i.e. they are
-   reserved for internal use), but does not state which pins drive which
-   switch input — or even confirm that DIO5/6/7 are the switch-control
-   pins (vs, say, DIO8 + an internal pull network).
+4. **Can you confirm whether DIO5/6/7 (or any other internal DIOs) are
+   in fact wired to the on-module RF switch on the Wio-LR1121?** The
+   datasheet pinout confirms these DIOs are not exposed on module pads,
+   but does not state which pins drive which switch input — or even
+   confirm that DIO5/6/7 are the switch-control pins (vs, say, DIO11
+   + an internal pull network we cannot test from software).
 
 5. **Is the second Wio-LR1121 module we ordered likely from the same
    production lot as the first?** If you can confirm or deny this, it
