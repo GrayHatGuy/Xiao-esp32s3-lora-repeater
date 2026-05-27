@@ -4,7 +4,28 @@
 **Re:** Wio-LR1121 Module (SKU 113991415, IPEX antenna variant) — sub-GHz
 RX produces no `RX_DONE` events; TX confirmed working.
 **Hardware:** Two units, ordered on separate occasions, identical behavior.
-**Date:** 2026-05-26
+**Date:** 2026-05-26 (rev 2 — 2026-05-27: full chip-init DOE complete; all UM v2.2 firmware remedies tested and refuted)
+
+---
+
+## Reference documents
+
+This inquiry cites the following Semtech and Seeed reference documents. Both direct PDF and stable product-page links are given for each (use the stable link if the Semtech direct PDF tokens expire).
+
+- **Semtech LR1121 User Manual v2.2** (rev 2.2, Apr 2026, 140 pages — referred to as "UM v2.2" below). Chip-level command spec.
+  - Direct PDF: https://semtech.my.salesforce.com/sfc/p/#E0000000JelG/a/RQ00000DClgP/D.pNG5l4FviPI634eCx8GFURZEwDO2ZBA33MpriB_FU
+  - Stable product page: https://www.semtech.com/products/wireless-rf/lora-connect/lr1121
+
+- **Semtech LR1121 Datasheet** (rev 2.1, Dec 2023 — referred to as "LR1121 Datasheet v2.1" below). Chip electrical/RF specification.
+  - Direct PDF: https://semtech.my.salesforce.com/sfc/p/#E0000000JelG/a/RQ0000093ZiP/RV4Ba6LROsFrFjnAAVK2av5W11RGmCms_3Q2cyKHdDA
+  - Stable product page: https://www.semtech.com/products/wireless-rf/lora-connect/lr1121
+
+- **Seeed Wio-LR1121 Module Datasheet v1.0 (2025-07-01)** — referred to as "Module Datasheet" below.
+  - Direct PDF: https://files.seeedstudio.com/wiki/Wio-LR1121/Wio-LR1121_Module_Datasheet_v1.0.pdf
+  - Stable wiki page: https://wiki.seeedstudio.com/wio_lr1121_module/
+
+- **Seeed Wio-LR1121 KiCad library** (used for the `MCU_DIO5/6/7` test-pad finding documented below).
+  - https://github.com/Seeed-Studio/OPL_Kicad_Library/tree/master/Seeed%20Studio%20Wio%20LR1121%20Module%20v0.9
 
 ---
 
@@ -259,6 +280,111 @@ distinguish these cases; only Seeed engineering does.
 R1 (SX1262) receives the touching phone at -35 dBm. R2 (LR1121, antenna
 under the phone) sees the same RF energy at roughly -10 to -20 dBm. R2
 reports zero `RX_DONE` for the duration of the test.
+
+## Phase B — Chip initialization DOE (added 2026-05-27)
+
+Following the 12-iteration RFSWx sweep (above), we ran a second structured
+Design-of-Experiments phase covering every chip-level RX initialization
+remedy that UM v2.2 prescribes. All four runs were executed on the same
+bench setup (R1 = SX1262 LongFast 906.875 MHz, R2 = LR1121 LongFast2
+906.875 MHz, same modem params, Meshtastic phone within ~1 m for OTA
+traffic). Each run was controlled by a single `LR1121_RX_AUDIT_RUN` build
+flag (0..5) compiled into `WioLR1121::begin()`. The full bench plan with
+serial-log excerpts is in
+[`LR1121-RX-INIT-AUDIT.md`](LR1121-RX-INIT-AUDIT.md).
+
+### DOE results table
+
+| Run | Treatments applied | Chip return codes | OTA `RX_DONE` | Outcome |
+|---|---|---|---|---|
+| **0** | None (baseline + `GetErrors()` always-on diagnostic) | — | **0** | **`errors=0x0020` = `HF_XOSC_START_ERR` persistent at POR**; zero real OTA RX |
+| **2** | `SetRssiCalibration` using UM v2.2 Table 7-21 "600 MHz – 2 GHz" reference tunes, gain offset = 0 | `setRssiCalibration = 0` | **0** | Cal accepted; self-echo RSSI shifted +4 dB; zero real OTA RX |
+| **3** | `CalibImage(902, 928)` after `SetTcxoMode` | `calibrateImageRejection = 0` | **0** | Cal accepted; zero real OTA RX |
+| **5** | Combined: pre-`Standby(STBY_RC)` + RSSI cal + image cal + `SetRxBoostedGainMode(true)` | All four `= 0` | **0** | All accepted; persistent `errors=0x0020` unchanged; **one `RADIOLIB_ERR_CRC_MISMATCH` event observed** (signal of life) |
+
+Runs 1 (pre-standby alone) and 4 (RxBoosted alone) were folded into Run 5
+after Run 0's `errors=0x0020` was confirmed as `HF_XOSC_START_ERR`
+(bit 5), **not** the `CMD_FAIL` (which lives in a different status register)
+predicted by the Run 1 rationale — and after the ~2 dB benefit from
+RxBoosted was confirmed insufficient alone against a sensitivity gap of
+tens of dB. Both effects are present in Run 5.
+
+### New evidence from Phase B
+
+**1. `errors=0x0020` = `HF_XOSC_START_ERR` persistent at every POR.**
+Per UM v2.2 Errors register bitfield, bit 5 (mask `0x0020`) is
+`HF_XOSC_START_ERR`. The Wio-LR1121 has an integrated TCXO. Per
+UM v2.2 §2.1.3, automatic POR calibration fails on TCXO-fitted chips.
+The HF crystal start error appears to be a downstream symptom of the
+same root cause.
+
+- The bit is set on **every boot** of **every unit** tested.
+- Pre-standby (Run 5) does **not** clear it — it is sticky from POR;
+  pre-standby only changes chip mode. Would require explicit
+  `ClearErrors` (UM v2.2 §7.2.11) to clear.
+- Explicit `CalibImage(902, 928)` after `SetTcxoMode` (Runs 3 and 5)
+  does **not** clear it and does **not** recover RX.
+
+This is the first hard evidence we have observed of any non-zero state
+in the chip's own error register during our investigation.
+
+**2. Signal of life — `RADIOLIB_ERR_CRC_MISMATCH` event in Run 5.**
+
+```
+[148963 ms] [Radio2-Edge] read: pktLen=52 state=-7 len=0
+[148963 ms] [R2 RX] ERROR -7
+```
+
+RadioLib error `-7` is `RADIOLIB_ERR_CRC_MISMATCH`. The LR1121 detected
+a preamble and header **strongly enough to attempt CRC validation**,
+but the payload failed CRC. This event occurred during Run 5 (with all
+four treatments active), not during Runs 0 / 2 / 3, and only once in
+roughly 5 minutes of OTA-strength activity from a phone within ~1 m of
+the antenna.
+
+**Interpretation:** the RX chain is **partially functional but with
+severely degraded sensitivity** — estimated **40–50 dB above LR1121
+datasheet spec** (LR1121 Datasheet v2.1 §6.3, sensitivity table for
+sub-GHz LoRa BW 250 / SF 11). This is not a complete RX wall. It is
+consistent with either an LNA-gain / matching-network mismatch
+(firmware-side already exhausted) or a hardware-side issue (matching
+network, switch insertion loss, LNA isolation, RF trace impedance).
+
+**3. Self-echo RSSI across all runs (control reading).**
+
+| Run | Self-echo RSSI (R1 NodeInfo TX at +20 dBm, ~10 cm from R2 antenna) |
+|---|---|
+| 0 (baseline) | –46 dBm |
+| 2 (RSSI cal applied) | –42 dBm (+4 dB from cal table change) |
+| 3 (image cal applied) | –46 dBm (back to baseline) |
+| 5 (kitchen-sink) | –45 dBm |
+
+The 4 dB shift on Run 2 confirms `SetRssiCalibration` took effect at
+the AGC level. It still did not recover OTA-strength RX. **RSSI
+calibration is therefore not the bottleneck.**
+
+### Updated refuted-hypothesis list
+
+| # | Hypothesis | Refuted by |
+|---|---|---|
+| 1 | Single defective unit | Two units, identical behavior |
+| 2 | RF switch table mis-set | 12-iter sweep + Run 5 |
+| 3 | Stale IRQ at boot | `getIrqFlags()` = `0x00000000` |
+| 4 | `startReceive()` rejected | Returns 0 every call |
+| 5 | Sensitivity floor (lab-grade noise) | Zero RX at antenna touch (–20 dBm at port) |
+| 6 | Wrong RSSI calibration (LR EVK default) | Run 2 |
+| 7 | POR image cal failure on TCXO chips | Run 3 |
+| 8 | RX gain mode | Run 4 (in Run 5) |
+| 9 | Switch table install outside STBY_RC | Run 1 (in Run 5) |
+| 10 | Combined firmware remedies (UM v2.2) | Run 5 |
+
+**Provisional conclusion:** the LR1121's antenna → integrated-switch →
+LNA → demodulator chain is electrically intact, but RX sensitivity is
+degraded by tens of dB. All firmware remedies prescribed by UM v2.2
+have been tested. None resolves the failure. Remaining hypothesis
+space is **hardware-design issue** (matching network, switch insertion
+loss, LNA isolation, RF trace impedance) or **LR1121 chip firmware
+errata** at base FW version 1.3.
 
 ## Questions for Seeed engineering
 
