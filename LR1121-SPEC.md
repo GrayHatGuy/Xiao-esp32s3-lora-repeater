@@ -322,18 +322,56 @@ up at -52 to -56 dBm (4 dB variance across all 8 states, i.e. noise).
 No real distant OTA traffic ever reached the demodulator on R2, despite
 R1 (SX1262, same carrier) hearing the same RF at -34 to -40 dBm.
 
-**Interpretation.** The self-echo RSSI is **independent** of the
-switch-control DIO state. That means the signal reaching the LR1121
-demodulator is **not** routed through the antenna→switch→LNA path —
-it's coupling in via the PCB substrate, supply rail, or ground from
-R1's adjacent +20 dBm PA. The proper antenna→LNA chain is electrically
-broken (or never connected) on this module variant, regardless of how
-DIO5/6/7 are programmed.
+### Extended sweep — DIO5/6/7 + DIO8 (RFSW3) + DIO10 (RFSW4)
 
-**This conclusively rules out switch-table-as-fix.** No software-driven
-DIO configuration can resolve the issue. The Wio-LR1121's RX path is
-non-functional in our setup at the hardware / chip-internal-config
-level.
+After confirming the LR1121 chip supports **up to 5 RFSWx outputs** per
+Semtech user manual §4.5.2 (RFSW0=DIO5, RFSW1=DIO6, RFSW2=DIO7,
+RFSW3=DIO8, RFSW4=DIO10), the brute-force flag was extended from
+3-bit to 5-bit and four additional targeted combinations were tested.
+DIO10 is particularly interesting because it serves dual purpose on
+the chip (32 kHz crystal alt **or** RFSW4 alt), and the Wio-LR1121's
+integrated TCXO frees DIO10 from the 32 kHz crystal role — making it
+a plausible RF-switch candidate.
+
+| `DIOMASK` | D5 D6 D7 D8 D10 | Self-echo RSSI | Real OTA RX |
+|---|---|---|---|
+| 8  | 0 0 0 1 0 (DIO8 / RFSW3 alone) | -49 dBm | 0 |
+| 16 | 0 0 0 0 1 (DIO10 / RFSW4 alone) | (no self-echo captured) | 0 |
+| 24 | 0 0 0 1 1 (DIO8 + DIO10) | -50 dBm | 0 |
+| 31 | 1 1 1 1 1 (all 5 HIGH) | -50 dBm | 0 |
+
+**All four extended combinations fail identically to the 3-DIO sweep.**
+Self-echo RSSI variance across the full 12-iteration sweep is **-49 to
+-56 dBm — about 7 dB**, pure noise, **completely independent of any
+RFSWx-capable DIO state.**
+
+(DIO11 is also an RFSW4 alternate per the LR1121 datasheet, but
+RadioLib 7.7.0's LR11x0 driver does not map DIO11 in its
+`RADIOLIB_LR11X0_DIOx(0..4)` set — only DIO5/6/7/8/10 are reachable
+via `setRfSwitchTable()`. DIO11 cannot be tested via this software
+path.)
+
+### Final interpretation
+
+The Wio-LR1121's antenna → switch → LNA → demodulator chain is
+**non-functional independent of any RFSWx programming RadioLib can
+apply.** The signal reaching the demodulator (only ever the bridge's
+own R1 NodeInfo at extreme near-field) couples in through PCB
+substrate / supply rail / ground, **not** through the antenna path.
+
+**This conclusively rules out switch-table-as-fix.** Any software
+resolution must come from either:
+
+- A chip-level init step Semtech / Seeed has not documented (e.g. an
+  undocumented LNA-enable command, a `SetRxBoosted` quirk, or a
+  configuration that has to precede `SetDioAsRfSwitch`);
+- A RadioLib LR11x0 driver bug (specifically the bit-encoding
+  inconsistency in `setRfSwitchTable()` flagged earlier);
+- A chip-firmware-1.3-specific issue that newer firmware fixes; or
+- A hardware-level fault that no software can resolve.
+
+The Seeed support inquiry asks for definitive guidance from Seeed
+engineering on which of these is the case.
 
 ### Path forward
 

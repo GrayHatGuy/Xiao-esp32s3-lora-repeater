@@ -141,7 +141,37 @@ strongly suggests this signal is reaching the LR1121 via PCB substrate /
 supply rail / ground coupling, **not** through the
 antenna→switch→LNA chain. The chain through the antenna appears to be
 electrically disconnected (or its routing is independent of the
-DIO5/6/7 state). No real distant OTA traffic is ever decoded by R2,
+DIO5/6/7 state).
+
+### Extended sweep — DIO5/6/7 + DIO8 (RFSW3) + DIO10 (RFSW4)
+
+After confirming via the Semtech LR1121 user manual §4.5.2 that the
+chip supports up to 5 RFSWx outputs (RFSW0=DIO5, RFSW1=DIO6,
+RFSW2=DIO7, RFSW3=DIO8, RFSW4=DIO10), the brute-force flag was
+extended from 3-bit to 5-bit and four additional targeted
+combinations were tested. DIO10 is particularly interesting because
+the Wio-LR1121's integrated TCXO frees it from the 32 kHz crystal
+role, making it a plausible internal RF-switch candidate.
+
+| `DIOMASK` | D5 D6 D7 D8 D10 | Self-echo RSSI | Real OTA RX |
+|---|---|---|---|
+| 8  | 0 0 0 1 0 (DIO8 alone — RFSW3) | -49 dBm | 0 |
+| 16 | 0 0 0 0 1 (DIO10 alone — RFSW4) | (none in window) | 0 |
+| 24 | 0 0 0 1 1 (DIO8 + DIO10 — top hypothesis) | -50 dBm | 0 |
+| 31 | 1 1 1 1 1 (all five HIGH — catch-all) | -50 dBm | 0 |
+
+**All four extended combinations fail identically to the 3-DIO sweep.**
+Self-echo RSSI variance across the full **12-iteration sweep**
+(8 × 3-bit + 4 × 5-bit) is **-49 to -56 dBm — about 7 dB**, pure noise
+level, completely independent of any RFSWx-capable DIO state.
+
+This rules out **every RFSWx switch configuration that RadioLib
+`setRfSwitchTable()` can apply.** (DIO11 is also an RFSW4 alternate
+per the LR1121 datasheet but is not in RadioLib's
+`RADIOLIB_LR11X0_DIOx(0..4)` mapping, so it cannot be reached via
+the standard API.)
+
+No real distant OTA traffic is ever decoded by R2,
 even when the same RF is being received cleanly by R1 at -35 dBm.
 
 ## Serial-log excerpt — the decisive touch-test

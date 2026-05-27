@@ -9,17 +9,33 @@
 //      under investigation. Flip OFF (delete the flag) for quiet production
 //      builds once the Wio-LR1121 RX path is resolved.
 //
-//   -DLR1121_BRUTEFORCE_RX_DIOMASK=<0..7>
+//   -DLR1121_BRUTEFORCE_RX_DIOMASK=<0..31>
 //      Override the MODE_RX entry of the LR1121 RF switch table with an
-//      explicit DIO5/DIO6/DIO7 bitmask. Encoding:
-//          bit 0 → DIO5,  bit 1 → DIO6,  bit 2 → DIO7
+//      explicit 5-bit DIO bitmask covering all 5 LR1121 RFSWx outputs:
+//          bit 0 → DIO5 (RFSW0)
+//          bit 1 → DIO6 (RFSW1)
+//          bit 2 → DIO7 (RFSW2)
+//          bit 3 → DIO8 (RFSW3)
+//          bit 4 → DIO10 (RFSW4)
+//      Per LR1121 user manual §4.5.2, the chip supports up to 5 external
+//      RF switch / LNA control lines, all defaulting to High-Z until
+//      SetDioAsRfSwitch is configured. The Wio-LR1121 module exposes
+//      only DIO8 and DIO9 on user pads — DIO5/6/7 and DIO10 are internal
+//      to the module and the candidate set for its integrated RF switch.
+//      (DIO11 is not in RadioLib's RFSWx mapping.)
+//
+//      First-pass swept values 0..7 (DIO5/6/7 only) — all identical failure
+//      on the Wio-LR1121. Extended sweep adds DIO8/DIO10 as candidates.
 //      Examples:
-//          0 = 000 (femtofox config — passive RX)
-//          1 = 001 (DIO5 HIGH — LilyGO T3S3 production)
-//          2 = 010 (DIO6 HIGH)
-//          3 = 011, 4 = 100, 5 = 101, 6 = 110, 7 = 111
-//      Use this to walk through all 8 combinations on the bench if neither
-//      femtofox nor T3S3 tables produce RX_DONE events on a Wio-LR1121.
+//          0  = 00000 (passive, all LOW — femtofox config)
+//          1  = 00001 (DIO5 HIGH — LilyGO T3S3 production)
+//          8  = 01000 (DIO8 HIGH only — RFSW3)
+//          16 = 10000 (DIO10 HIGH only — RFSW4, free for RFSW use because
+//                       module has integrated TCXO, no 32k crystal needed)
+//          24 = 11000 (DIO8 + DIO10 — most likely if module uses RFSW3+RFSW4
+//                       per Semtech multi-band reference design)
+//          25 = 11001 (T3S3-DIO5 + DIO8 + DIO10)
+//          31 = 11111 (all 5 HIGH — catch-all)
 //      Default: 1 (T3S3-style, DIO5 HIGH).
 
 #include "WioLR1121.h"
@@ -107,40 +123,51 @@ bool WioLR1121::begin()
     // --- end pre-init wait -------------------------------------------------
 
     // ----- Install the LR1121 RF switch truth table BEFORE begin() -------
-    // The Wio-LR1121 module's DIO5/6/7 are not broken out on module pads —
-    // they drive the internal RF switch. RadioLib's setRfSwitchTable() must
-    // be called before begin() so internal mode transitions use it.
+    // Per LR1121 user manual §4.5.2 the chip supports up to 5 RFSWx outputs
+    // mappable to DIO5 (RFSW0), DIO6 (RFSW1), DIO7 (RFSW2), DIO8 (RFSW3),
+    // DIO10 (RFSW4). All outputs default to High-Z until SetDioAsRfSwitch
+    // is called via setRfSwitchTable(). The Wio-LR1121 module exposes only
+    // DIO8 and DIO9 on user pads; DIO5/6/7 and DIO10 are internal to the
+    // module and the candidate set for its integrated RF switch.
+    //
+    // DIO10 is dual-purposed with the 32k crystal (32k_N) on the chip, but
+    // the Wio-LR1121 has an integrated TCXO (per datasheet) — no 32k
+    // crystal needed, so DIO10 is free for RFSW4 use.
     //
     // MODE_RX is the variable under test (see LR1121_BRUTEFORCE_RX_DIOMASK
-    // build flag). Other modes use the LilyGO T3S3 production reference:
+    // build flag). Other modes use the LilyGO T3S3 production reference
+    // for DIO5/6/7 with DIO8/DIO10 held LOW:
     //   - STBY:  all LOW
     //   - TX:    DIO6 HIGH (low power PA)
-    //   - TX_HP: DIO6 HIGH (high power PA, same as low)
+    //   - TX_HP: DIO6 HIGH (high power PA, same as low — T3S3 reference)
     //   - TX_HF: all LOW (2.4 GHz, unused on this module)
     //   - GNSS:  all LOW (not exercised)
     //   - WIFI:  all LOW (not exercised)
     static const uint32_t rfswitch_pins[Module::RFSWITCH_MAX_PINS] = {
         RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6, RADIOLIB_LR11X0_DIO7,
-        RADIOLIB_NC, RADIOLIB_NC
+        RADIOLIB_LR11X0_DIO8, RADIOLIB_LR11X0_DIO10
     };
-    // Decode the brute-force MODE_RX bitmask into per-DIO values.
-    constexpr uint8_t RX_D5 = (LR1121_BRUTEFORCE_RX_DIOMASK >> 0) & 1;
-    constexpr uint8_t RX_D6 = (LR1121_BRUTEFORCE_RX_DIOMASK >> 1) & 1;
-    constexpr uint8_t RX_D7 = (LR1121_BRUTEFORCE_RX_DIOMASK >> 2) & 1;
+    // Decode the 5-bit brute-force MODE_RX bitmask into per-DIO values.
+    // bit 0=DIO5 / bit 1=DIO6 / bit 2=DIO7 / bit 3=DIO8 / bit 4=DIO10
+    constexpr uint8_t RX_D5  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 0) & 1;
+    constexpr uint8_t RX_D6  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 1) & 1;
+    constexpr uint8_t RX_D7  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 2) & 1;
+    constexpr uint8_t RX_D8  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 3) & 1;
+    constexpr uint8_t RX_D10 = (LR1121_BRUTEFORCE_RX_DIOMASK >> 4) & 1;
     static const Module::RfSwitchMode_t rfswitch_table[] = {
-        // mode                        DIO5    DIO6    DIO7    -  -
-        { LR11x0::MODE_STBY,         { 0,      0,      0,      0, 0 } },
-        { LR11x0::MODE_RX,           { RX_D5,  RX_D6,  RX_D7,  0, 0 } },
-        { LR11x0::MODE_TX,           { 0,      1,      0,      0, 0 } },
-        { LR11x0::MODE_TX_HP,        { 0,      1,      0,      0, 0 } },
-        { LR11x0::MODE_TX_HF,        { 0,      0,      0,      0, 0 } },
-        { LR11x0::MODE_GNSS,         { 0,      0,      0,      0, 0 } },
-        { LR11x0::MODE_WIFI,         { 0,      0,      0,      0, 0 } },
+        // mode                        DIO5    DIO6    DIO7    DIO8    DIO10
+        { LR11x0::MODE_STBY,         { 0,      0,      0,      0,      0      } },
+        { LR11x0::MODE_RX,           { RX_D5,  RX_D6,  RX_D7,  RX_D8,  RX_D10 } },
+        { LR11x0::MODE_TX,           { 0,      1,      0,      0,      0      } },
+        { LR11x0::MODE_TX_HP,        { 0,      1,      0,      0,      0      } },
+        { LR11x0::MODE_TX_HF,        { 0,      0,      0,      0,      0      } },
+        { LR11x0::MODE_GNSS,         { 0,      0,      0,      0,      0      } },
+        { LR11x0::MODE_WIFI,         { 0,      0,      0,      0,      0      } },
         { LR11x0::MODE_END_OF_TABLE, {} },
     };
     Serial.printf("[%s] installing RF switch table: MODE_RX = "
-                  "D5=%u D6=%u D7=%u (BRUTEFORCE_RX_DIOMASK=%u)\n",
-                  _name, RX_D5, RX_D6, RX_D7,
+                  "D5=%u D6=%u D7=%u D8=%u D10=%u (BRUTEFORCE_RX_DIOMASK=%u)\n",
+                  _name, RX_D5, RX_D6, RX_D7, RX_D8, RX_D10,
                   (unsigned)LR1121_BRUTEFORCE_RX_DIOMASK);
     _radio->setRfSwitchTable(rfswitch_pins, rfswitch_table);
 
