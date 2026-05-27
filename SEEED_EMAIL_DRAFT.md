@@ -32,9 +32,9 @@ Reference documents used in this investigation (direct PDF + stable fallback lin
 
 ## 1. Project context
 
-The contest entry ([issue #2](https://github.com/Seeed-Projects/meshtastic-build-off-2026/issues/2) in `Seeed-Projects/meshtastic-build-off-2026`) is a multi-protocol LoRa mesh bridge. The host MCU is Seeed Xiao ESP32-S3.
+The contest entry (issue #2 in `Seeed-Projects/meshtastic-build-off-2026`) - https://github.com/Seeed-Projects/meshtastic-build-off-2026/issues/2 is a multi-protocol LoRa mesh bridge. The host MCU is Seeed Xiao ESP32-S3.
 
-- **Phase 0** — Two Wio-SX1262 modules. Production-stable. [Released as v8.1](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.1). This is the contest deliverable.
+- **Phase 0** — Two Wio-SX1262 modules. Production-stable. Released as v8.1 - https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.1 This is the contest deliverable.
 - **Phase 1** — One Wio-SX1262 + one Wio-LR1121, for sub-GHz ↔ 2.4 GHz cross-band bridging. **This is where the bug is.**
 
 ## 2. Bug summary
