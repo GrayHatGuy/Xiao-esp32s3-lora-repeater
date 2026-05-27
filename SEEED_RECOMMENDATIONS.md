@@ -27,21 +27,40 @@ unilaterally without any bench work.
 
 1. **Publish (a) which DIO pins drive the internal RF switch, and (b)
    the truth table for those DIOs.** The Wio-LR1121 Module Datasheet
-   (v1.0, 2025-07-01) confirms "integrated TCXO and RF switch" but does
-   not publish either piece of information. Inspecting the published
-   KiCad library we discovered that **DIO5/6/7 are routed to
-   bottom-side test pads named `MCU_DIO5/6/7`** — the `MCU_` naming
-   convention consistently denotes host-MCU expansion lines elsewhere
-   in the design, which strongly suggests DIO5/6/7 are **not** the
-   internal switch controls (and our 12-iteration bench sweep of all
-   RadioLib-reachable RFSWx-capable DIOs — DIO5/6/7/8/10 — confirms
-   this: zero variation in behavior). The documentation should therefore
-   answer first: *which* chip DIOs (likely DIO11 or none) actually
-   drive the switch, before answering what state they should be in for
-   each operating mode (STBY / sub-GHz RX / sub-GHz TX low-power /
-   sub-GHz TX high-power / 2.4 GHz TX / 2.4 GHz RX / GNSS / WiFi).
-   This is the single most impactful piece of documentation Seeed can
-   publish for LR1121-based product development.
+   (v1.0, 2025-07-01) confirms "integrated TCXO and RF switch" but
+   does not publish either piece of information.
+
+   The **Semtech LR1121 v2.1 datasheet** (rev 2.1, Dec 2023, §4.5.1 /
+   Table 4-1) establishes the chip-level RFSWx pin mapping: **RFSW4
+   on chip pin 7 (DIO11 / 32k_P alt); RFSW3 on chip pin 8 (DIO10 /
+   32k_N alt); RFSW2 on chip pin 9 (DIO9); RFSW0 on chip pin 10
+   (DIO8)** — with all RFSWx outputs defaulting to High-Z until
+   `SetDioAsRfSwitch` (cmd 0x0112) is called. The Wio-LR1121 module
+   datasheet should restate this chip-level mapping in the module's
+   own reference section, then add the module-specific question: *of
+   those 5 chip-level RFSWx outputs, which one(s) does the Wio-LR1121
+   PCB actually wire to its integrated front-end switch?*
+
+   Inspecting the published KiCad library, we found that **DIO5/6/7
+   are routed to bottom-side test pads named `MCU_DIO5/6/7`** — the
+   `MCU_` naming convention consistently denotes host-MCU expansion
+   lines elsewhere in the design, which strongly suggests DIO5/6/7
+   are **not** the internal switch controls. Our 12-iteration bench
+   sweep of all RadioLib-reachable RFSWx-capable DIOs (DIO5/6/7/8/10)
+   confirms this: zero variation in behavior. **The most likely
+   remaining switch candidate is DIO11 / RFSW4** (chip pin 7), which
+   the Wio-LR1121's integrated TCXO frees from its 32k_P role and
+   which RadioLib's standard `setRfSwitchTable()` API does not
+   expose — neatly explaining why our 12-iteration sweep found no
+   working state.
+
+   The documentation should therefore answer: *which* chip DIOs
+   (most likely DIO11/RFSW4) actually drive the module's switch, and
+   then what state they should be in for each operating mode (STBY /
+   sub-GHz RX / sub-GHz TX low-power / sub-GHz TX high-power / 2.4 GHz
+   TX / 2.4 GHz RX / GNSS / WiFi). This is the single most impactful
+   piece of documentation Seeed can publish for LR1121-based product
+   development.
 
 2. **Publish or link to a known-good reference firmware example.** A
    simple Arduino / PlatformIO + RadioLib sketch that initializes the
