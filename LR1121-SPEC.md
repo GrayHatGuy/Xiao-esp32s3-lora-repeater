@@ -326,26 +326,20 @@ R1 (SX1262, same carrier) hearing the same RF at -34 to -40 dBm.
 
 After confirming via the **Semtech LR1121 v2.1 datasheet** (rev 2.1,
 Dec 2023, §4.5.1 and Table 4-1) that the chip supports up to 5 RFSWx
-outputs with the chip-fixed pin mapping **RFSW4 = DIO11 (pin 7,
-shared with 32k_P) / RFSW3 = DIO10 (pin 8, shared with 32k_N) /
-RFSW2 = DIO9 (pin 9) / RFSW0 = DIO8 (pin 10)**, all defaulting to
-High-Z until `SetDioAsRfSwitch` (cmd 0x0112) is called, the
-brute-force flag was extended from 3-bit to 5-bit and four
-additional targeted combinations were tested.
+outputs with the chip-fixed pin mapping **RFSW0=DIO5, RFSW1=DIO6,
+RFSW2=DIO7, RFSW3=DIO8, RFSW4=DIO10** (DIO9 = IRQ only; DIO11 = NC
+in DIO mode — neither is RFSWx-capable), all defaulting to High-Z
+until `SetDioAsRfSwitch` (cmd 0x0112) is called, the brute-force
+flag was extended from 3-bit to 5-bit covering all 5 chip-level
+RFSWx outputs and four additional targeted combinations were tested.
 
-(Note: RadioLib 7.7.0's LR11x0 driver names its RFSWx macros
-`RADIOLIB_LR11X0_DIO5/6/7/8/10` — **these names are inconsistent
-with the Semtech chip-level mapping above**, and the library has
-no macro for DIO11 / RFSW4 at all. RadioLib's macro audit is a
-separate upstream finding flagged in the project's planned PR. For
-the purposes of this section the only operationally-relevant
-fact is that DIO11/RFSW4 is the one chip-level RFSWx-capable DIO
-that the standard `setRfSwitchTable()` API cannot drive.)
+RadioLib 7.7.0's `RADIOLIB_LR11X0_DIOx(0..4)` macros correctly
+cover all 5 chip-level RFSWx-capable DIOs per Table 4-1 — there is
+no missing-pin gap in RadioLib's RFSWx coverage.
 
-DIO10 and DIO11 are particularly interesting because the
-Wio-LR1121's integrated TCXO (no 32 kHz crystal) frees both from
-the 32k crystal role, making them plausible internal RF-switch
-candidates.
+DIO10 is particularly interesting because the Wio-LR1121's
+integrated TCXO (no 32 kHz crystal) frees it from the 32k crystal
+role, making it directly available as RFSW4.
 
 | `DIOMASK` | D5 D6 D7 D8 D10 | Self-echo RSSI | Real OTA RX |
 |---|---|---|---|
