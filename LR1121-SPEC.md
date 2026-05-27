@@ -437,9 +437,19 @@ Captured in detail in `LR1121-RX-INIT-AUDIT.md`; summary here:
 - **Hardware-level fault** on the LNA path that no software can
   resolve.
 
-The Seeed support inquiry (already sent to `sensecap@seeed.cc`, CC
-Violet at Seeed BD) asks for definitive guidance — most importantly,
-for the Wio-LR1121's recommended `SetRssiCalibration` values.
+The Seeed support inquiry (drafted in `SEEED_SUPPORT_INQUIRY.md`,
+ready to send to `sensecap@seeed.cc` with CC to Violet at Seeed BD —
+**send is being held pending completion of the bench DOE in
+[`LR1121-RX-INIT-AUDIT.md`](LR1121-RX-INIT-AUDIT.md)**) asks for
+definitive guidance — most importantly, for the Wio-LR1121's
+recommended `SetRssiCalibration` values per UM v2.2 §7.2.15. If the
+bench DOE Run 2 (`SetRssiCalibration` with UM Table 7-21 "From 600 MHz
+to 2 GHz" reference tunes) resolves the RX block locally, the inquiry
+framing will pivot to "we found a working calibration — please
+confirm and share the *exact* per-PCB tune values measured against a
+production Wio-LR1121 unit." If the DOE exhausts without a passing
+run, the inquiry sends as drafted with the DOE results appended as
+supplementary evidence.
 
 ### Path forward
 
