@@ -367,19 +367,79 @@ apply.** The signal reaching the demodulator (only ever the bridge's
 own R1 NodeInfo at extreme near-field) couples in through PCB
 substrate / supply rail / ground, **not** through the antenna path.
 
-**This conclusively rules out switch-table-as-fix.** Any software
-resolution must come from either:
+**This conclusively rules out switch-table-as-fix.** With the
+chip-level RFSWx possibility space exhausted, the diagnostic question
+shifts from "what's the switch table?" to "what chip-level RX
+initialization step is RadioLib's `begin()` not performing?" See
+[`LR1121-RX-INIT-AUDIT.md`](LR1121-RX-INIT-AUDIT.md) for the
+structured 5-candidate test plan (DOE) prepared from the **Semtech
+LR1121 User Manual v2.2** (rev 2.2, Apr 2026).
 
-- A chip-level init step Semtech / Seeed has not documented (e.g. an
-  undocumented LNA-enable command, a `SetRxBoosted` quirk, or a
-  configuration that has to precede `SetDioAsRfSwitch`);
-- A RadioLib LR11x0 driver bug (specifically the bit-encoding
-  inconsistency in `setRfSwitchTable()` flagged earlier);
-- A chip-firmware-1.3-specific issue that newer firmware fixes; or
-- A hardware-level fault that no software can resolve.
+### Top candidate root cause — RSSI calibration mismatch
 
-The Seeed support inquiry asks for definitive guidance from Seeed
-engineering on which of these is the case.
+**UM v2.2 §7.2.15 SetRssiCalibration** (verbatim):
+
+> *"The LR1121 internal LNA has a set of predefined gains (G4, G5,
+> ... G13)... In normal usage of the chip, the LNA gain control is
+> automatic."*
+>
+> *"The power seen by the LR1121 analog front-end is affected by
+> external components such as the matching network, or RF switches."*
+>
+> *"**An incorrect RSSI results in a sensitivity degradation in (G)FSK
+> mode and an incorrect gain selection in LoRa and GFSK mode.**"*
+>
+> *"**An incorrect gain can result in a missed detection (packet
+> loss) or decreased resistance to interference.**"*
+>
+> *"**By default, the chip is calibrated for the 868-915MHz band on
+> the LR1121 EVK.** Therefore, in order to have a correct reading of
+> the RSSI value of the chip integrated in the application PCB, the
+> RSSI must be calibrated. **The RSSI must be calibrated for each
+> hardware type.**"*
+
+This directly matches our symptom: missed packets, decreased
+reception, TX unaffected. The Wio-LR1121's matching network is
+materially different from the LR1121 EVK reference, and RadioLib's
+`begin()` does not call `setRssiCalibration` — so the chip ships with
+EVK calibration, AGC picks the wrong LNA gain on incoming signals,
+and packets are missed. This is the most plausible single explanation
+for the observed symptom pattern.
+
+UM Table 7-21 provides reference tunes for the "From 600 MHz to 2 GHz"
+band that we can try as a first approximation (Run 2 in the audit
+DOE). The proper per-PCB calibration requires an RF generator; the
+ask to Seeed (Tier 1 item 7 in `SEEED_RECOMMENDATIONS.md`) is for them
+to run the procedure once on a Wio-LR1121 production unit and publish
+the result.
+
+### Other candidates (lower priority)
+
+Captured in detail in `LR1121-RX-INIT-AUDIT.md`; summary here:
+
+- **Verify `SetDioAsRfSwitch` actually succeeded.** UM v2.2 §4.2.1
+  notes the command "*only works with the chip in Standby RC mode,
+  otherwise it returns a CMD_FAIL on the next GetStatus command.*"
+  RadioLib discards the return value. If the chip wasn't in STBY_RC
+  when we called it, our entire 12-iteration sweep evidence is
+  invalidated. Diagnostic test: `getErrors()` post-`setRfSwitchTable`.
+- **Explicit `CalibImage(902, 928)`.** UM v2.2 §2.1.3: "*If a TCXO is
+  fitted, the calibration [POR image cal] fails.*" The Wio-LR1121 has
+  integrated TCXO. RadioLib triggers `calibrateImageRejection` on
+  first `setFrequency` so this is probably covered, but worth verifying.
+- **`setRxBoostedGainMode(true)`.** UM v2.2 §7.2.12 quantifies the
+  benefit as **only ~2 dB**. Not enough alone to explain the gross RX
+  failure (earlier audit doc rev-1 had over-stated this; corrected).
+- **Chip-firmware-1.3-specific bug.** UM v2.2 §2.3.1 notes "*shipping
+  versions of the LR1121 after production test is rev 01.01. It is
+  advised to update the firmware with the latest firmware.*" Worth
+  asking Seeed about (Seeed inquiry question 4).
+- **Hardware-level fault** on the LNA path that no software can
+  resolve.
+
+The Seeed support inquiry (already sent to `sensecap@seeed.cc`, CC
+Violet at Seeed BD) asks for definitive guidance — most importantly,
+for the Wio-LR1121's recommended `SetRssiCalibration` values.
 
 ### Path forward
 
