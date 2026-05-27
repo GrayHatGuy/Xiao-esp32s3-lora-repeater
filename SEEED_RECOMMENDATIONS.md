@@ -115,7 +115,25 @@ unilaterally without any bench work.
    fixed in later revisions, please publish the version compatibility
    matrix and a firmware-update procedure.
 
-7. **Document the bottom-side `MCU_DIO5/6/7` test pads.** The published
+7. **Publish the recommended `SetRssiCalibration` (cmd 0x0229) values
+   for the Wio-LR1121 PCB.** Per Semtech LR1121 User Manual v2.2
+   §7.2.15, the chip's automatic LNA gain control uses RSSI to pick a
+   gain level, and the UM explicitly warns: *"An incorrect gain can
+   result in a missed detection (packet loss) or decreased resistance
+   to interference... By default, the chip is calibrated for the
+   868-915MHz band on the LR1121 EVK... The RSSI must be calibrated
+   for each hardware type."* The Wio-LR1121's matching network is
+   different from the LR1121 EVK; the default calibration is therefore
+   incorrect for this module. Seeed should run the per-PCB
+   calibration procedure (UM §7.2.15 step-by-step using an RF generator)
+   once during the Wio-LR1121 design qualification, and publish the
+   resulting Gain Tune values (G4..G13, G13hp1..hp7) and Gain Offset
+   in the Wio-LR1121 datasheet. This is a one-time measurement that
+   benefits **every** Wio-LR1121 customer; without it, all such
+   customers ship products with potentially-degraded RX sensitivity
+   due to wrong AGC gain selection.
+
+8. **Document the bottom-side `MCU_DIO5/6/7` test pads.** The published
    KiCad layout brings DIO5, DIO6, DIO7 (chip pins 20, 19, 11 per
    Semtech UM Table 4-1) out to bottom-side pads named `MCU_DIO5`,
    `MCU_DIO6`, `MCU_DIO7` — but the v1.0 datasheet pinout (page 3)

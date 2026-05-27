@@ -320,28 +320,55 @@ reports zero `RX_DONE` for the duration of the test.
    with DIO11 in the bitmask), or a fundamentally different RX-bring-up
    procedure.
 
-2. **Is there a chip-level command sequence required to activate the
-   sub-GHz RX path** beyond `SetDioAsRfSwitch` (0x0112) + `SetRx`
-   (0x0209)? Some Semtech reference designs require additional steps
-   such as setting `SetLnaConfig` or selecting the RFI input — our
-   reading of the LR1121 user manual suggests these should be defaults,
-   but our bench evidence (12 RFSWx combinations all failing identically)
-   indicates either an undocumented init step is needed, or something
-   in the chip's RX path is not engaging.
+2. **What are the recommended `SetRssiCalibration` (cmd 0x0229) values
+   for the Wio-LR1121's PCB?** Per Semtech LR1121 User Manual v2.2
+   §7.2.15, the LR1121's automatic LNA gain control uses RSSI to pick
+   a gain level, and "*An incorrect gain can result in a missed
+   detection (packet loss) or decreased resistance to interference.*"
+   The UM further states: "*By default, the chip is calibrated for
+   the 868-915MHz band on the LR1121 EVK... **The RSSI must be
+   calibrated for each hardware type.***"
 
-3. **Has Seeed seen this symptom on the Wio-LR1121 in customer reports?**
+   The Wio-LR1121's matching network and front-end are different from
+   the LR1121 EVK reference, so the default calibration is incorrect
+   for our PCB. Without per-PCB calibration, the AGC picks the wrong
+   LNA gain, causing the missed-packet symptom we observe — this is a
+   strong candidate root cause and directly matches our bench
+   observation. **Can Seeed provide the Gain Tune values (G4..G13,
+   G13hp1..hp7) and Gain Offset that the Wio-LR1121's hardware design
+   requires, ideally measured on a production unit per the procedure
+   in UM §7.2.15?** This would let LR1121-on-Wio-LR1121 firmware ship
+   with the correct calibration baked in.
+
+3. **Is there a chip-level command sequence required to activate the
+   sub-GHz RX path** beyond `SetDioAsRfSwitch` (0x0112) + `SetRssiCalibration`
+   (0x0229) + `SetRx` (0x0209)? Some Semtech reference designs require
+   additional steps such as setting `SetLnaConfig` or selecting the
+   RFI input — our reading of the LR1121 UM v2.2 suggests these
+   should be defaults, but our bench evidence (12 RFSWx combinations
+   all failing identically) indicates either an undocumented init
+   step is needed, or something in the chip's RX path is not engaging.
+
+4. **Has Seeed seen this symptom on the Wio-LR1121 in customer reports?**
    If so, is there a known workaround, errata, or recommended firmware
    pattern? Our modules report `Base FW version: 1.3` via `GET_VERSION`
-   (cmd 0x0303).
+   (cmd 0x0303). Per UM v2.2 §2.3.1, "*Shipping versions of the LR1121
+   after production test is rev 01.01. It is advised to update the
+   firmware with the latest firmware.*" — has firmware been updated
+   beyond 01.03 since our modules shipped, and if so does it address
+   any known RX-path issue?
 
-4. **Can you confirm whether DIO5/6/7 (or any other internal DIOs) are
+5. **Can you confirm whether DIO5/6/7 (or any other internal DIOs) are
    in fact wired to the on-module RF switch on the Wio-LR1121?** The
-   datasheet pinout confirms these DIOs are not exposed on module pads,
-   but does not state which pins drive which switch input — or even
-   confirm that DIO5/6/7 are the switch-control pins (vs, say, DIO11
-   + an internal pull network we cannot test from software).
+   datasheet pinout confirms DIO5/6/7 are exposed as `MCU_DIO5/6/7`
+   on bottom-side test pads (per Seeed's published KiCad library),
+   suggesting they are not the switch-control pins. UM v2.2 §4.2.1
+   confirms RFSW0..RFSW4 map to DIO5/6/7/8/10 at the chip level — but
+   the *module's* internal antenna routing (between the chip's RF pins
+   and the module's SUBG_RF / 2.4G_RF pads) is opaque to us. Is there
+   an active switch IC, or is the front-end passive combining?
 
-5. **Is the second Wio-LR1121 module we ordered likely from the same
+6. **Is the second Wio-LR1121 module we ordered likely from the same
    production lot as the first?** If you can confirm or deny this, it
    helps us decide whether to order a third unit from a separate
    distributor (different lot likely) or pivot to a different LR1121
