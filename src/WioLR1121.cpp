@@ -80,6 +80,19 @@
 // Per-treatment compile-time booleans decoded from LR1121_RX_AUDIT_RUN.
 // Each is true for its dedicated solo run AND for run 5 (kitchen-sink).
 // See LR1121-RX-INIT-AUDIT.md "Run plan" table for the full DOE.
+// RadioLib 7.7.0 marks LR11x0::getErrors() and LR11x0::setRssiCalibration() as
+// protected, so they are unreachable through a plain LR1121* pointer. Use the
+// standard access-promoting subclass idiom to re-expose them as public — this
+// adds no data members and no virtuals, so static_cast<LR1121Access*>(_radio)
+// is well-defined for any LR1121 instance.
+struct LR1121Access : public LR1121 {
+  using LR11x0::getErrors;
+  using LR11x0::setRssiCalibration;
+  // LR1121Access is never instantiated directly; this ctor exists only to
+  // satisfy the compiler if it ever is.
+  LR1121Access(Module* mod) : LR1121(mod) {}
+};
+
 namespace {
   constexpr bool RX_AUDIT_PRE_STANDBY = (LR1121_RX_AUDIT_RUN == 1) || (LR1121_RX_AUDIT_RUN == 5);
   constexpr bool RX_AUDIT_RSSI_CAL    = (LR1121_RX_AUDIT_RUN == 2) || (LR1121_RX_AUDIT_RUN == 5);
@@ -250,7 +263,7 @@ bool WioLR1121::begin()
     // invalidated and we need to re-run with the pre-standby treatment.
     {
         uint16_t devErrors = 0;
-        int16_t errState = _radio->getErrors(&devErrors);
+        int16_t errState = static_cast<LR1121Access*>(_radio)->getErrors(&devErrors);
         Serial.printf("[%s] [RX-AUDIT diag] post-setRfSwitchTable getErrors() "
                       "state=%d errors=0x%04X\n",
                       _name, (int)errState, (unsigned)devErrors);
@@ -300,8 +313,9 @@ bool WioLR1121::begin()
         // to 2 GHz" reference tunes. Top candidate root cause for the RX
         // failure — the chip ships calibrated for the LR1121 EVK, not the
         // Wio-LR1121's matching network.
-        int16_t rssiState = _radio->setRssiCalibration(LR1121_RSSI_TUNE_600M_2G,
-                                                       LR1121_RSSI_GAIN_OFFSET_600M_2G);
+        int16_t rssiState = static_cast<LR1121Access*>(_radio)->setRssiCalibration(
+                                LR1121_RSSI_TUNE_600M_2G,
+                                LR1121_RSSI_GAIN_OFFSET_600M_2G);
         Serial.printf("[%s] [RX-AUDIT Run %d] setRssiCalibration(UM 600M-2G) = %d\n",
                       _name, (int)LR1121_RX_AUDIT_RUN, (int)rssiState);
     }
