@@ -282,3 +282,40 @@ Remaining hypothesis space:
 - **LR1121 chip firmware errata** — base FW version 1.3 may have a known RX-path issue
 
 Next action: send the Seeed engineering inquiry (`SEEED_SUPPORT_INQUIRY.md`) with this DOE results table appended as definitive supplementary evidence. The inquiry has been held since 2026-05-26 pending these bench outcomes.
+
+---
+
+# Run 6 — "Meshtastic-style" follow-up (added 2026-05-27)
+
+After sending the Seeed inquiry, a final sanity-check pass was made by mining the **stock Meshtastic firmware** (`meshtastic/firmware` repo) for how it initializes the LR1121 on the LilyGO T3S3 LR1121 — a known-good reference platform actively running on the same bench as a Meshtastic OTA source.
+
+## Why this is informative even though board layout differs
+
+The Meshtastic T3S3 LR1121 init is dramatically **simpler** than what our DOE was testing — it skips `SetRssiCalibration`, `CalibImage`, `ClearErrors`, pre-`Standby`, and `RxBoosted=true` entirely. The bulk of the difference is in the **RF switch table**, which is genuinely board-specific (T3S3 routes through different DIOs than the Wio-LR1121's integrated switch). However, three deltas are **board-layout-independent**:
+
+| # | Meshtastic does | Our code does | Board-dependent? |
+|---|---|---|---|
+| A | `setRegulatorDCDC()` after `begin()` | RadioLib default LDO | **No** — purely electrical |
+| B | Switch table declares **only DIO5 + DIO6** (DIO7/8/10 = `RADIOLIB_NC`) | 5-DIO table | Mostly no — if the Wio uses any of D7/8/10 internally, driving them as outputs could commandeer them. NC policy is universal. |
+| C | `setPreambleLength()` immediately before **every** `startReceive()` | Not done | **No** — pure logic. Meshtastic comment in source: *"Solve RX ack fail after direct message sent. Not sure why this is needed."* — undocumented workaround they rely on. |
+
+## Run 6 treatment
+
+Behind `LR1121_RX_AUDIT_RUN=6` (build-flag-selectable):
+
+1. Switch table installs **DIO5 + DIO6 only**, with DIO7/D8/D10 forced to `RADIOLIB_NC`.
+2. `setRegulatorDCDC()` called after `begin()` returns success.
+3. `setPreambleLength(_config.preambleLen)` called immediately before every `startReceive()` (post-read re-arm, post-transmit auto-re-arm, and post-begin initial arm).
+4. `setRxBoostedGainMode(true)` **not** called (matches Meshtastic default).
+5. `setRssiCalibration`, `calibrateImageRejection`, `clearErrors`, pre-standby — all skipped.
+
+TCXO voltage stays at **3.0 V** (already aligned with Meshtastic's T3S3 default; previously bench-swept with no effect).
+
+## Pass criterion
+
+Same as previous DOE runs: any `[Radio2-Edge] read: pktLen=N>0` for real OTA traffic from the phone. If Run 6 passes, the fix is permanent and the inquiry framing inverts to "found it via Meshtastic comparison."
+
+## Decision outcomes
+
+- **Run 6 PASSES** → Implement Meshtastic-style init permanently in `WioLR1121::begin()`. Update Seeed correspondence to note the resolution. Release v9.1.
+- **Run 6 FAILS** → Definitive firmware-side closure. Even mirroring a known-good Meshtastic LR1121 path cannot recover RX on the Wio module → confirms hardware-design issue or chip-firmware errata. Awaiting Seeed reply (no further bench iterations planned firmware-side).

@@ -94,10 +94,21 @@ struct LR1121Access : public LR1121 {
 };
 
 namespace {
-  constexpr bool RX_AUDIT_PRE_STANDBY = (LR1121_RX_AUDIT_RUN == 1) || (LR1121_RX_AUDIT_RUN == 5);
-  constexpr bool RX_AUDIT_RSSI_CAL    = (LR1121_RX_AUDIT_RUN == 2) || (LR1121_RX_AUDIT_RUN == 5);
-  constexpr bool RX_AUDIT_CALIB_IMG   = (LR1121_RX_AUDIT_RUN == 3) || (LR1121_RX_AUDIT_RUN == 5);
-  constexpr bool RX_AUDIT_RX_BOOSTED  = (LR1121_RX_AUDIT_RUN == 4) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_PRE_STANDBY      = (LR1121_RX_AUDIT_RUN == 1) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_RSSI_CAL         = (LR1121_RX_AUDIT_RUN == 2) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_CALIB_IMG        = (LR1121_RX_AUDIT_RUN == 3) || (LR1121_RX_AUDIT_RUN == 5);
+  constexpr bool RX_AUDIT_RX_BOOSTED       = (LR1121_RX_AUDIT_RUN == 4) || (LR1121_RX_AUDIT_RUN == 5);
+  // Run 6 — "Meshtastic-style" init, mirroring stock Meshtastic firmware's
+  // working LR1121 path (proven on LilyGO T3S3 LR1121 on the same bench):
+  //   - RF switch table declares only DIO5 + DIO6 (others = RADIOLIB_NC)
+  //   - setRegulatorDCDC() called after begin() (RadioLib default is LDO)
+  //   - setPreambleLength() called immediately before every startReceive()
+  //     (per Meshtastic LR11x0Interface.cpp comment: "Solve RX ack fail
+  //      after direct message sent. Not sure why this is needed.")
+  //   - setRxBoostedGainMode stays OFF (Meshtastic default)
+  // These three deltas are board-layout-INDEPENDENT and worth a final test
+  // even though the T3S3 board's switch wiring differs from the Wio-LR1121.
+  constexpr bool RX_AUDIT_MESHTASTIC_STYLE = (LR1121_RX_AUDIT_RUN == 6);
 
   // UM v2.2 Table 7-21 reference RSSI calibration tunes for the
   // "From 600 MHz to 2 GHz" band. Index order matches RadioLib's
@@ -226,7 +237,20 @@ bool WioLR1121::begin()
     //   - TX_HF: all LOW (2.4 GHz, unused on this module)
     //   - GNSS:  all LOW (not exercised)
     //   - WIFI:  all LOW (not exercised)
-    static const uint32_t rfswitch_pins[Module::RFSWITCH_MAX_PINS] = {
+    // Pin arrays for the RF switch table. RadioLib's setRfSwitchTable takes
+    // a reference to a fixed-size 5-array, so we cannot select via pointer —
+    // each branch passes its own array directly to setRfSwitchTable below.
+    //
+    // Run 6 (Meshtastic-style): declare only DIO5 + DIO6 as switch outputs;
+    // leave DIO7/8/10 as RADIOLIB_NC so the chip never drives them. This
+    // matches Meshtastic's stock T3S3 LR1121 rfswitch.h. If the Wio module
+    // uses DIO7/8/10 internally for any purpose (LNA bias, etc.), driving
+    // them as outputs in the 5-pin table could be commandeering them.
+    static const uint32_t rfswitch_pins_meshtastic[Module::RFSWITCH_MAX_PINS] = {
+        RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6,
+        RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC
+    };
+    static const uint32_t rfswitch_pins_5pin[Module::RFSWITCH_MAX_PINS] = {
         RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6, RADIOLIB_LR11X0_DIO7,
         RADIOLIB_LR11X0_DIO8, RADIOLIB_LR11X0_DIO10
     };
@@ -249,10 +273,15 @@ bool WioLR1121::begin()
         { LR11x0::MODE_END_OF_TABLE, {} },
     };
     Serial.printf("[%s] installing RF switch table: MODE_RX = "
-                  "D5=%u D6=%u D7=%u D8=%u D10=%u (BRUTEFORCE_RX_DIOMASK=%u)\n",
+                  "D5=%u D6=%u D7=%u D8=%u D10=%u (BRUTEFORCE_RX_DIOMASK=%u)%s\n",
                   _name, RX_D5, RX_D6, RX_D7, RX_D8, RX_D10,
-                  (unsigned)LR1121_BRUTEFORCE_RX_DIOMASK);
-    _radio->setRfSwitchTable(rfswitch_pins, rfswitch_table);
+                  (unsigned)LR1121_BRUTEFORCE_RX_DIOMASK,
+                  RX_AUDIT_MESHTASTIC_STYLE ? " [Run 6: D7/D8/D10 forced NC]" : "");
+    if (RX_AUDIT_MESHTASTIC_STYLE) {
+        _radio->setRfSwitchTable(rfswitch_pins_meshtastic, rfswitch_table);
+    } else {
+        _radio->setRfSwitchTable(rfswitch_pins_5pin, rfswitch_table);
+    }
 
 #ifdef LR1121_DEBUG
     // RX-init-audit diagnostic (always on under LR1121_DEBUG): check the
@@ -337,10 +366,21 @@ bool WioLR1121::begin()
                       _name, (int)LR1121_RX_AUDIT_RUN, (int)boostState);
     }
 
-    Serial.printf("[%s] RX-AUDIT run = %d (pre_standby=%d rssi_cal=%d calib_img=%d rx_boosted=%d)\n",
+    if (RX_AUDIT_MESHTASTIC_STYLE) {
+        // Meshtastic LR11x0Interface.cpp calls setRegulatorDCDC() right after
+        // begin(). RadioLib's begin() defaults to LDO via setRegulatorLDO().
+        // The Wio-LR1121 module datasheet does not specify which regulator
+        // mode it expects — Seeed's reference assumes the chip default.
+        int16_t dcdcState = _radio->setRegulatorDCDC();
+        Serial.printf("[%s] [RX-AUDIT Run 6] setRegulatorDCDC() = %d\n",
+                      _name, (int)dcdcState);
+    }
+
+    Serial.printf("[%s] RX-AUDIT run = %d (pre_standby=%d rssi_cal=%d calib_img=%d rx_boosted=%d mt_style=%d)\n",
                   _name, (int)LR1121_RX_AUDIT_RUN,
                   (int)RX_AUDIT_PRE_STANDBY, (int)RX_AUDIT_RSSI_CAL,
-                  (int)RX_AUDIT_CALIB_IMG, (int)RX_AUDIT_RX_BOOSTED);
+                  (int)RX_AUDIT_CALIB_IMG, (int)RX_AUDIT_RX_BOOSTED,
+                  (int)RX_AUDIT_MESHTASTIC_STYLE);
 
 #ifdef LR1121_DEBUG
     // Dump the chip's IRQ flags right after begin() so we can see what (if
@@ -397,6 +437,12 @@ int16_t WioLR1121::read(uint8_t *buf, size_t &len, float *rssi, float *snr)
     // belt-and-braces sequence the chip stops receiving after one packet.
     int16_t clrSt = _radio->clearIrqFlags(RADIOLIB_LR11X0_IRQ_ALL);
     int16_t sbSt  = _radio->standby();
+    if (RX_AUDIT_MESHTASTIC_STYLE) {
+        // Meshtastic LR11x0Interface.cpp:272 — "Solve RX ack fail after
+        // direct message sent. Not sure why this is needed." Undocumented
+        // workaround that Meshtastic relies on. Run 6 tests it on the Wio.
+        _radio->setPreambleLength(_config.preambleLen);
+    }
     int16_t rxSt  = _radio->startReceive();
 #ifdef LR1121_DEBUG
     if (clrSt != RADIOLIB_ERR_NONE || sbSt != RADIOLIB_ERR_NONE ||
@@ -419,6 +465,9 @@ int16_t WioLR1121::transmit(const uint8_t *buf, size_t len)
     // Auto-return to RX so the bridge keeps listening without the caller
     // having to explicitly call startReceive() on the transmitting radio.
     _rxFlag = false;
+    if (RX_AUDIT_MESHTASTIC_STYLE) {
+        _radio->setPreambleLength(_config.preambleLen);
+    }
     int16_t rxSt = _radio->startReceive();
 #ifdef LR1121_DEBUG
     Serial.printf("[%s] transmit(%u B) tx=%d post-rx=%d\n",
@@ -434,6 +483,9 @@ void WioLR1121::startReceive()
 {
     _rxFlag = false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (RX_AUDIT_MESHTASTIC_STYLE) {
+        _radio->setPreambleLength(_config.preambleLen);
+    }
     int16_t st = _radio->startReceive();
 #ifdef LR1121_DEBUG
     Serial.printf("[%s] startReceive() = %d\n", _name, (int)st);
