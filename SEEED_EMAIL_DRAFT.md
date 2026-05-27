@@ -1,20 +1,15 @@
 # Seeed Engineering Email — LOCKED-IN DRAFT
 
-**Status:** Ready to send. Held pending completion of post-bench cleanup
-(see SEEED_SUPPORT_INQUIRY.md "Phase B" section for the DOE evidence
-this email cites).
 
 **To:** sensecap@seeed.cc
-**CC:** iot@seeed.cc, violet.su@seeed.cc
+**CC:** iot@seeed.cc, techsupport@seeed.cc
 **Subject:** Wio-LR1121 (SKU 113991415) RX path not working — full DOE test results from Seeed/Meshtastic Build-Off 2026 entry
 
 ---
 
 Hello Seeed Studio team,
 
-好久不见 Violet — thank you for being on this thread.
-
-This email reports a bug in the Seeed Wio-LR1121 module (SKU 113991415, IPEX antenna variant). We found it during the Seeed/Meshtastic Build-Off 2026 contest. Violet — please help route this email to the correct RF or module engineer. We have prepared a complete test data package (see links below) so engineering review can be fast.
+This email reports a bug in the Seeed Wio-LR1121 module (SKU 113991415, IPEX antenna variant). We found it during the Seeed/Meshtastic Build-Off 2026 contest. We have prepared a complete test data package (see links below) so engineering review can be fast.
 
 Reference documents used in this investigation (direct PDF + stable fallback link for each):
 
