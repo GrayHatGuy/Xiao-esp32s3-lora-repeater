@@ -261,11 +261,26 @@ bool WioLR1121::begin()
     constexpr uint8_t RX_D7  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 2) & 1;
     constexpr uint8_t RX_D8  = (LR1121_BRUTEFORCE_RX_DIOMASK >> 3) & 1;
     constexpr uint8_t RX_D10 = (LR1121_BRUTEFORCE_RX_DIOMASK >> 4) & 1;
+    // 2026-05-28: Seeed (David Du, Sensecap Support) confirmed the SKY13373-460LF
+    // truth table for the Wio-LR1121 integrated RF switch:
+    //   V1 (DIO5)  V2 (DIO6)  Path
+    //       0          0      Shutdown (>20 us → 20 us recovery to active)
+    //       1          0      RFI_P_LF & RFI_N_LF  (RX)
+    //       0          1      RFO_HP_LF            (TX high-power)
+    //       1          1      RFO_LP_LF            (TX low-power)
+    // DIO7/DIO8/DIO10 are NOT connected to the switch on this module — only
+    // DIO5/DIO6 (V1/V2) are wired. RX_D5..RX_D10 macros remain in place so the
+    // archived LR1121_BRUTEFORCE_RX_DIOMASK sweep machinery still compiles, but
+    // the table itself is now locked to Seeed's authoritative values. The
+    // MODE_RX entry under the default mask (=1) matches the confirmed RX path.
+    // MODE_STBY latches the RX path rather than dropping to 0/0 shutdown — the
+    // repeater is in continuous-listen, so paying 20 us per re-arm has no
+    // benefit; switch idle current at (1,0) is negligible vs. the chip itself.
     static const Module::RfSwitchMode_t rfswitch_table[] = {
         // mode                        DIO5    DIO6    DIO7    DIO8    DIO10
-        { LR11x0::MODE_STBY,         { 0,      0,      0,      0,      0      } },
+        { LR11x0::MODE_STBY,         { 1,      0,      0,      0,      0      } },
         { LR11x0::MODE_RX,           { RX_D5,  RX_D6,  RX_D7,  RX_D8,  RX_D10 } },
-        { LR11x0::MODE_TX,           { 0,      1,      0,      0,      0      } },
+        { LR11x0::MODE_TX,           { 1,      1,      0,      0,      0      } },
         { LR11x0::MODE_TX_HP,        { 0,      1,      0,      0,      0      } },
         { LR11x0::MODE_TX_HF,        { 0,      0,      0,      0,      0      } },
         { LR11x0::MODE_GNSS,         { 0,      0,      0,      0,      0      } },

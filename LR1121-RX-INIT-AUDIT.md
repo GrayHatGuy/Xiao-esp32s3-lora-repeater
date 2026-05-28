@@ -319,3 +319,113 @@ Same as previous DOE runs: any `[Radio2-Edge] read: pktLen=N>0` for real OTA tra
 
 - **Run 6 PASSES** → Implement Meshtastic-style init permanently in `WioLR1121::begin()`. Update Seeed correspondence to note the resolution. Release v9.1.
 - **Run 6 FAILS** → Definitive firmware-side closure. Even mirroring a known-good Meshtastic LR1121 path cannot recover RX on the Wio module → confirms hardware-design issue or chip-firmware errata. Awaiting Seeed reply (no further bench iterations planned firmware-side).
+
+
+---
+
+# Run 7 — Authoritative Seeed reply received (2026-05-28)
+
+David Du (Sensecap Support, Application Engineer) provided the **definitive** SKY13373-460LF truth table for the Wio-LR1121's integrated RF switch and confirmed the internal LR1121 wiring:
+
+> *"In our LR1121 module, pins 4 (V1) and 5 (V2) of the RF switch are connected internally to DIO5 and DIO6, respectively."*
+
+| V1 (DIO5) | V2 (DIO6) | Switch state |
+|---|---|---|
+| 0 | 0 | Shutdown |
+| 1 | 0 | RFI_P_LF & RFI_N_LF (**RX**) |
+| 0 | 1 | RFO_HP_LF (**TX high-power**) |
+| 1 | 1 | RFO_LP_LF (**TX low-power**) |
+
+> *"Please note that if V1 = V2 = 0 for more than 20 us, the switch will enter shutdown mode; after exiting this mode, it will take 20 us to resume normal operation."*
+
+Attachment supplied: Skyworks SKY13373-460LF datasheet (document 310060742).
+
+## Impact on the bench DOE
+
+1. **Switch hypothesis is now officially closed.** The 12-iteration RFSWx sweep at `LR1121_BRUTEFORCE_RX_DIOMASK=1` was driving D5=1, D6=0 — exactly the RX path Seeed has now confirmed. RX failure cannot be a switch-routing error.
+2. **The RX-failure root cause is therefore confined to:** hardware-design issue (matching network / LNA isolation / RF trace impedance) **or** LR1121 chip-firmware errata in base FW 1.3. Both are outside the application-firmware scope.
+3. **DIO7/DIO8/DIO10 are not wired to the switch on this module.** The five-pin table (`rfswitch_pins_5pin`) was a worst-case probe; the production table uses the two-pin Meshtastic-style array `rfswitch_pins_meshtastic`.
+
+## Code changes applied (commit follows this doc update)
+
+- `WioLR1121.cpp` MODE_RX  → {1,0,0,0,0} (unchanged; matches Seeed)
+- `WioLR1121.cpp` MODE_TX  → {1,1,0,0,0} (**fix**: was {0,1,0,0,0} which is the HP path)
+- `WioLR1121.cpp` MODE_TX_HP → {0,1,0,0,0} (unchanged; matches Seeed)
+- `WioLR1121.cpp` MODE_STBY → {1,0,0,0,0} (**change**: latch RX rather than (0,0) shutdown — avoids the 20 us shutdown→active recovery on every re-arm; repeater is continuous-listen so idle-current cost is irrelevant)
+- The `LR1121_BRUTEFORCE_RX_DIOMASK` and `LR1121_RX_AUDIT_RUN` build flags are retained behind `#ifdef` for archival reproducibility; once Run 7 bench-confirms the new table doesn't regress RX (it should be a no-op for RX since the value is unchanged from the default mask), they can be stripped.
+
+## Pass criterion for Run 7
+
+Same as prior runs: any `[Radio2-Edge] read: pktLen=N>0` for real OTA traffic. Expected outcome: **unchanged from Runs 0/2/3/5/6** — RX still dead. The MODE_TX fix and MODE_STBY change are correctness-only edits; they do not address the suspected hardware/firmware-errata root cause. A pass here would be a surprise.
+
+## Next steps regardless of Run 7 outcome
+
+- Update `SEEED_RECOMMENDATIONS.md` to cite the authoritative truth table.
+- Forward this DOE summary back to Seeed asking for the **exact RSSI calibration values** they recommend for the Wio-LR1121 matching network (since the RSSI cal in Run 2 used UM Table 7-21 generic defaults, not Seeed PCB-specific values).
+- If Run 7 fails, the project transitions from "firmware bring-up" to "hardware/errata escalation" — no further firmware iterations planned.
+
+## Run 7 bench result (2026-05-28, ~146 s capture)
+
+Platform: `LR1121_RX_AUDIT_RUN=0` with locked Seeed-authoritative switch table.
+Build: Espressif32 6.13.0, RadioLib 7.7.0, LR1121 Base FW 1.3.
+
+| Metric | Value |
+|---|---|
+| Switch-table install log | `MODE_RX = D5=1 D6=0 D7=0 D8=0 D10=0` (Seeed-confirmed RX path) |
+| `getErrors()` post-setRfSwitchTable | `state=0 errors=0x0020` (HF_XOSC_START_ERR sticky, unchanged from prior runs) |
+| LR1121 detection | OK — Base FW 1.3 detected |
+| `startReceive()` return | 0 (OK) |
+| `getIrqFlags()` post-begin | `0x00000000` (clean) |
+| R2 OTA RX events | **1** (a near-field self-echo capture of the bridge's own NodeInfo TX from R1) |
+| Sole R2 RX line | `[16787 ms][R2 RX] 57 bytes  RSSI -63.0 dBm  SNR 11.2 dB` (Meshtastic NodeInfo, src=0x75D7AC1C — the bridge ID) |
+| R2 ISR counter over ~140 s | climbed 0 → 13, all increments correlate with R2's own post-TX auto-fallback re-arm, not real packet receptions |
+| R2 post-TX `pktLen=0` empties | every `Radio2-Edge transmit()` followed by `R2 RX EMPTY state=0 len=0` — same false-IRQ pattern observed in Runs 0/5 |
+| R1 (SX1262) reference RX over same window | ~20+ OTA packets demodulated, RSSI -54 to -79 dBm, sources `!62D90E80`, `!75D7AC1C`, `!67A923CA` |
+
+**Interpretation.** The Seeed-authoritative truth table is bench-proven correct (RX path installed without chip-level error, one near-field self-echo successfully demodulated at -63 dBm SNR 11.2 dB). However, the gross sensitivity deficit persists: R1 captured Meshpoint-Mprns traffic out to -79 dBm on the same antenna chain over the same 146 s window, while R2 missed every one of those packets. The sensitivity asymmetry between the two radios remains roughly **30+ dB**, consistent with Runs 0/2/3/5 conclusions.
+
+**Conclusion.** The corrected switch table fixes the MODE_TX HP/LP labeling and the MODE_STBY recovery-cost issue, but is not the RX-failure root cause. Firmware-side options remaining: Run 6 (Meshtastic-style init: `setRegulatorDCDC` + `setPreambleLength`-before-every-`startReceive`) which was defined but never bench-executed prior to Run 7. Run 8 will stack Run 6 treatments on top of the now-locked switch table.
+
+## Run 8 bench result (2026-05-28, ~136 s capture) — FAIL
+
+Platform: `LR1121_RX_AUDIT_RUN=6` (Meshtastic-style stack) on top of the Seeed-authoritative locked switch table.
+
+| Metric | Value |
+|---|---|
+| Mode confirmation | `RX-AUDIT run = 6 (pre_standby=0 rssi_cal=0 calib_img=0 rx_boosted=0 mt_style=1)` |
+| `setRegulatorDCDC()` return | 0 (OK — DCDC mode switch accepted) |
+| Per-arm `setPreambleLength()` calls | active before every `startReceive()` |
+| `getErrors()` post-setRfSwitchTable | `state=0 errors=0x0020` (HF_XOSC_START_ERR sticky, unchanged) |
+| LR1121 Base FW | 1.3 |
+| R2 OTA RX events | **1** — bridge self-echo `id=0x3871682C` src `0x75D7AC1C` at `RSSI -63.0 dBm SNR 11.0 dB` (only |
+| R2 post-TX `pktLen=0` empties | 1 (post R2 `transmit(49 B)` at 85509 ms) |
+| R1 (SX1262) reference RX over same window | ~12 OTA packets demodulated, RSSI **-53 to -80 dBm**, sources `!62D90E80` (Run 8 1/2/3 text), `!148F4D57` (MadW telemetry), `!3D3A87A3` (Meshpoint Glasgow NodeInfo at -80 dBm) |
+| R2 caught any of R1's OTA traffic? | **No.** Same ~30+ dB sensitivity asymmetry as Runs 0/2/3/5/7 |
+
+**Interpretation.** Both Meshtastic-style treatments — `setRegulatorDCDC()` and `setPreambleLength()`-before-every-`startReceive()` — are confirmed inert on the Wio-LR1121 RX failure. The latter is particularly informative: stock Meshtastic's source-code comment ("Solve RX ack fail after direct message sent. Not sure why this is needed.") is *not* papering over the failure mode we are seeing. Whatever undocumented RX-path quirk that workaround addresses on the T3S3 LR1121, it is not the same quirk affecting this module.
+
+**Conclusion.** All firmware-side hypotheses defined in this audit document have now been bench-tested:
+
+| # | Hypothesis | Status |
+|---|---|---|
+| 1 | Single defective unit | Refuted (two units, identical) |
+| 2 | RF switch table mis-set | Refuted (12-iter sweep + Run 7 with Seeed-confirmed table) |
+| 3 | Stale IRQ at boot | Refuted |
+| 4 | `startReceive()` rejected | Refuted (returns 0 every call) |
+| 5 | Sensitivity floor (lab-grade) | Refuted (zero RX even at antenna touch) |
+| 6 | Wrong RSSI calibration | Refuted (Run 2) |
+| 7 | POR image cal failure on TCXO chips | Refuted (Run 3) |
+| 8 | RX boosted gain mode | Refuted (Run 4 in Run 5) |
+| 9 | Switch table install outside STBY_RC | Refuted (Run 1 in Run 5) |
+| 10 | Combined firmware remedies | Refuted (Run 5) |
+| 11 | Switch table wrong by Seeed's authoritative truth table | Refuted (Run 7 — table was already correct) |
+| 12 | `setRegulatorDCDC()` (Meshtastic-style) | Refuted (Run 8) |
+| 13 | `setPreambleLength()` per-startReceive (Meshtastic-style) | Refuted (Run 8) |
+
+**Remaining open hypotheses (all hardware / chip-firmware, outside application-firmware scope):**
+
+- **H-A: Hardware-design issue** in the Wio-LR1121 module — matching network mistune, RF switch insertion loss higher than spec, LNA-to-switch isolation, RF trace impedance mismatch
+- **H-B: LR1121 base FW 1.3 RX-path errata** — Semtech may publish a newer LR1121 base firmware that fixes an undocumented RX-path bug. Updating chip FW from the host is supported via RadioLib's `updateFirmware()` but requires the binary blob from Semtech/Seeed and carries brick risk; should only be attempted with Seeed's explicit recommendation
+- **H-C: Wio-LR1121-specific `SetRssiCalibration` byte values** — Run 2 used UM Table 7-21 generic 600 MHz–2 GHz defaults, not Seeed's PCB-specific calibration. If Seeed has measured calibration values for the production PCB, those could differ enough to materially shift AGC behaviour. Cheap to try once received
+
+**Application firmware-side bring-up is therefore paused** pending Seeed engineering feedback (`SEEED_EMAIL_DRAFT.md` — Run 8 follow-up reply).
