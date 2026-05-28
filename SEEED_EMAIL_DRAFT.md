@@ -1,5 +1,18 @@
-# Seeed Engineering Email — LOCKED-IN DRAFT
+# Seeed Engineering Email — Initial Inquiry (SENT)
 
+## Correspondence chain
+
+| Date | Direction | Subject | Document |
+|---|---|---|---|
+| 2026-05-26 | Outbound (sent) | Wio-LR1121 RX path not working — full DOE test results | **this file**, body below |
+| 2026-05-28 | **Inbound (David Du, Sensecap Support)** | SKY13373-460LF truth table + internal V1=DIO5, V2=DIO6 wiring confirmed | this file, "Inbound replies received" section at bottom |
+| 2026-05-28 | Outbound (drafted, not yet sent) | Re: SKY13373 truth table confirmed; RX deficit persists; three follow-up questions | [`SEEED_EMAIL_REPLY_2026-05-28.md`](SEEED_EMAIL_REPLY_2026-05-28.md) |
+
+The original sent-message body below is preserved unchanged as the historical record of what was actually sent. The inbound reply from David Du and reference materials he provided are appended at the bottom under "Inbound replies received." All future correspondence rounds get their own dated file and one line added to this chain table.
+
+---
+
+# Original sent message (2026-05-26)
 
 **To:** sensecap@seeed.cc
 **CC:** iot@seeed.cc, techsupport@seeed.cc
@@ -149,3 +162,50 @@ Best regards,
 GrayHatGuy
 grayhatguyllc@protonmail.com
 https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
+
+
+---
+
+# Inbound replies received
+
+## 2026-05-28 — David Du (Sensecap Support, Application Engineer)
+
+**Authoritative confirmation of the Wio-LR1121 integrated RF switch routing.** This is the engineering information that was missing from the published Wio-LR1121 Module Datasheet v1.0 and that our entire 12-iteration RFSWx switch-table brute-force sweep had been trying to reverse-engineer.
+
+### Verbatim reply
+
+> Hi there,
+>
+> Thank you for reaching out and for your continuous support for the Seeed product. The issue you reported highlights a critical omission in our module's specifications. We deeply regret this oversight and sincerely appreciate your thorough investigation and prompt feedback. We will update the relevant documentation as soon as possible.
+>
+> I have summarized the truth table information for the RF switch you need in the table below. I have also attached the RF switch datasheet for your reference. **In our LR1121 module, pins 4 (V1) and 5 (V2) of the RF switch are connected internally to DIO5 and DIO6, respectively.**
+>
+> | V1 (DIO5) | V2 (DIO6) | Status |
+> |---|---|---|
+> | 0 | 0 | Shutdown |
+> | 1 | 0 | RFI_P_LF & RFI_N_LF |
+> | 0 | 1 | RFO_HP_LF |
+> | 1 | 1 | RFO_LP_LF |
+>
+> Please note that if V1 = V2 = 0 for more than 20 µs, the switch will enter shutdown mode; after exiting this mode, it will take 20 µs to resume normal operation.
+>
+> If you have any further questions about this matter, please let me know.
+>
+> Best Regards!
+> Sensecap Support Team
+> David Du
+> Application Engineer
+
+### Reference material supplied with the reply
+
+- **Skyworks SKY13373-460LF Datasheet**, Skyworks document number **310060742**
+  - Part: SKY13373-460LF — 0.1 to 6.0 GHz SP3T (single-pole / three-throw) antenna switch
+  - Saved locally: [`docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
+  - Vendor page: https://www.skyworksinc.com/Products/Switches/SKY13373-460LF
+
+### Impact on the project
+
+- **Switch-routing hypothesis officially closed.** The default `LR1121_BRUTEFORCE_RX_DIOMASK=1` setting (D5=1, D6=0) used throughout the DOE bench runs already matched the authoritative RX path. Our 12-iteration sweep was therefore valid evidence against the switch-as-fix theory, not invalidated by mis-routing.
+- **MODE_TX entry in our RF switch table was wrong** (used the HP path's {0,1} for both TX and TX_HP). Fixed in commit 949176a to use {1,1} for low-power TX per Seeed's authoritative table.
+- **MODE_STBY changed from (0,0) shutdown to (1,0) RX-latched** to avoid the 20 µs shutdown→active recovery penalty on every re-arm. Application is a continuous-listen mesh repeater; switch idle current at (1,0) is negligible.
+- **RX-sensitivity deficit persists** after the corrected table (Run 7 + Run 8, see `LR1121-RX-INIT-AUDIT.md`). Firmware-side hypothesis space now fully exhausted across 13 refuted hypotheses. Drafted follow-up [`SEEED_EMAIL_REPLY_2026-05-28.md`](SEEED_EMAIL_REPLY_2026-05-28.md) asks David three concrete questions (Wio-LR1121-specific RSSI calibration values, LR1121 base FW update path, expected POR `HF_XOSC_START_ERR` behaviour).
