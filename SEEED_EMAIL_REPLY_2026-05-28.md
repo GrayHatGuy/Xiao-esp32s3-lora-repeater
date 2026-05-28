@@ -23,7 +23,7 @@ We implemented your truth table verbatim in our LR1121 driver:
 
 Note on standby: per your warning about the 20 µs shutdown timer at V1=V2=0 plus 20 µs recovery, we elected to latch the standby state to the RX path (1,0) so that every re-arm avoids the recovery penalty. Our application is a continuous-listen mesh repeater, so the switch idle current at (1,0) is negligible compared to the LR1121 chip's own STBY_RC current.
 
-The corrected switch table installed cleanly on bench (Run 7, 2026-05-28):
+The corrected switch table installed cleanly on bench (Run 7, 2026-05-28 — full bench evidence with serial-log excerpts is captured in our public audit document at [LR1121-RX-INIT-AUDIT.md § Run 7 — Authoritative Seeed reply received](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/blob/lr1121-phase1/LR1121-RX-INIT-AUDIT.md#run-7--authoritative-seeed-reply-received-2026-05-28)):
 
 - `setRfSwitchTable()` returned without error
 - Subsequent `getErrors()` returned `state=0 errors=0x0020` (HF_XOSC_START_ERR sticky bit — see question 3 below)
@@ -68,5 +68,5 @@ Thank you again for your continued support.
 Best regards,
 
 Jeremy Russell
-jrussell328@gmail.com
+grayhatguyllc@protonmail.com
 Seeed/Meshtastic Build-Off 2026 entry — Cross-Protocol Dual-Radio Bridge

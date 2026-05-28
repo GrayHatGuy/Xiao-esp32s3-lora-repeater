@@ -388,7 +388,39 @@ errata** at base FW version 1.3.
 
 ## Questions for Seeed engineering
 
-1. **Where IS the Wio-LR1121's RF switch, and how is it controlled?**
+**Status legend (added 2026-05-28 after David Du's reply — see [`SEEED_EMAIL_DRAFT.md`](SEEED_EMAIL_DRAFT.md) "Inbound replies received" for the full verbatim response):**
+
+- ✅ **ANSWERED** — Seeed engineering provided a definitive answer; question is closed.
+- 🟡 **PARTIALLY ANSWERED** — Reply addressed the question implicitly or partially; remaining detail re-asked in the 2026-05-28 follow-up at [`SEEED_EMAIL_REPLY_2026-05-28.md`](SEEED_EMAIL_REPLY_2026-05-28.md).
+- ⏳ **OPEN** — No reply yet; re-asked in the 2026-05-28 follow-up.
+
+| # | Topic | Status |
+|---|---|---|
+| 1 | Where IS the RF switch and how is it controlled | ✅ **ANSWERED 2026-05-28** |
+| 2 | Recommended `SetRssiCalibration` values for Wio-LR1121 PCB | ⏳ **OPEN** (re-asked) |
+| 3 | Additional chip-level command sequence for sub-GHz RX | 🟡 **PARTIALLY ANSWERED** (no additional command implied; re-confirmation requested) |
+| 4 | Customer-report history / firmware-update availability | ⏳ **OPEN** (re-asked as base FW 1.3 update path question) |
+| 5 | Are DIO5/6/7 wired to the on-module RF switch | ✅ **ANSWERED 2026-05-28** (DIO5/6 wired as V1/V2 of SKY13373-460LF; DIO7 not used by the switch) |
+| 6 | Lot-number commonality across the two test units | ⏳ **OPEN** |
+
+---
+
+### 1. ✅ ANSWERED 2026-05-28 — Where IS the Wio-LR1121's RF switch, and how is it controlled?
+
+**Seeed reply (David Du, Sensecap Support):** the on-module RF switch is a **Skyworks SKY13373-460LF SP3T antenna switch** (Skyworks document 310060742; datasheet attached to David's reply, copy saved at [`docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)). Internal wiring per David: **switch pin 4 (V1) is wired to LR1121 DIO5, switch pin 5 (V2) is wired to LR1121 DIO6.** The authoritative truth table is:
+
+| V1 (DIO5) | V2 (DIO6) | Switch state |
+|---|---|---|
+| 0 | 0 | Shutdown (with 20 µs entry/recovery timing — see SKY13373 datasheet) |
+| 1 | 0 | RFI_P_LF & RFI_N_LF (**RX**) |
+| 0 | 1 | RFO_HP_LF (**TX high-power**) |
+| 1 | 1 | RFO_LP_LF (**TX low-power**) |
+
+Our pre-reply 12-iteration RFSWx sweep had already been driving DIO5=1, DIO6=0 (the confirmed RX state) under `LR1121_BRUTEFORCE_RX_DIOMASK=1`, so the switch was correctly configured during all earlier bench runs. The sweep evidence against the switch-as-fix hypothesis stands; David's reply confirms it independently. **The switch hypothesis is officially closed.** See bench evidence at [`LR1121-RX-INIT-AUDIT.md` § Run 7 — Authoritative Seeed reply received](LR1121-RX-INIT-AUDIT.md#run-7--authoritative-seeed-reply-received-2026-05-28).
+
+**Original question text retained below for the inquiry record:**
+
+   
 
    Per the **Semtech LR1121 v2.1 datasheet** (rev 2.1, Dec 2023, §4.5.1
    and Table 4-1), the chip supports up to 5 RFSWx outputs with the
@@ -446,7 +478,9 @@ errata** at base FW version 1.3.
    with DIO11 in the bitmask), or a fundamentally different RX-bring-up
    procedure.
 
-2. **What are the recommended `SetRssiCalibration` (cmd 0x0229) values
+### 2. ⏳ OPEN (re-asked in 2026-05-28 follow-up) — Recommended `SetRssiCalibration` (cmd 0x0229) values for the Wio-LR1121's PCB
+
+**What are the recommended `SetRssiCalibration` (cmd 0x0229) values
    for the Wio-LR1121's PCB?** Per Semtech LR1121 User Manual v2.2
    §7.2.15, the LR1121's automatic LNA gain control uses RSSI to pick
    a gain level, and "*An incorrect gain can result in a missed
@@ -466,7 +500,11 @@ errata** at base FW version 1.3.
    in UM §7.2.15?** This would let LR1121-on-Wio-LR1121 firmware ship
    with the correct calibration baked in.
 
-3. **Is there a chip-level command sequence required to activate the
+### 3. 🟡 PARTIALLY ANSWERED 2026-05-28 — Additional chip-level command sequence for sub-GHz RX
+
+David's reply confirmed the SKY13373 switch-routing question definitively but did not explicitly state whether any *additional* chip-level command sequence is required beyond `SetDioAsRfSwitch` + `SetRssiCalibration` + `SetRx`. By implication (no other command was mentioned as missing) the answer appears to be "no, nothing else is needed at the chip level." The 2026-05-28 follow-up re-asks this implicitly through question 3 ("HF_XOSC_START_ERR expected behaviour") which targets the same chip-init-completeness concern. **Original question text:**
+
+**Is there a chip-level command sequence required to activate the
    sub-GHz RX path** beyond `SetDioAsRfSwitch` (0x0112) + `SetRssiCalibration`
    (0x0229) + `SetRx` (0x0209)? Some Semtech reference designs require
    additional steps such as setting `SetLnaConfig` or selecting the
@@ -475,7 +513,9 @@ errata** at base FW version 1.3.
    all failing identically) indicates either an undocumented init
    step is needed, or something in the chip's RX path is not engaging.
 
-4. **Has Seeed seen this symptom on the Wio-LR1121 in customer reports?**
+### 4. ⏳ OPEN (re-asked in 2026-05-28 follow-up) — Customer-report history and firmware update path
+
+**Has Seeed seen this symptom on the Wio-LR1121 in customer reports?**
    If so, is there a known workaround, errata, or recommended firmware
    pattern? Our modules report `Base FW version: 1.3` via `GET_VERSION`
    (cmd 0x0303). Per UM v2.2 §2.3.1, "*Shipping versions of the LR1121
@@ -484,7 +524,11 @@ errata** at base FW version 1.3.
    beyond 01.03 since our modules shipped, and if so does it address
    any known RX-path issue?
 
-5. **Can you confirm whether DIO5/6/7 (or any other internal DIOs) are
+### 5. ✅ ANSWERED 2026-05-28 — Are DIO5/6/7 wired to the on-module RF switch
+
+**Seeed reply:** **DIO5 and DIO6 are wired** to the SKY13373-460LF switch (as V1 and V2 respectively — see question 1 above for the full truth table). **DIO7 is not used by the on-module RF switch** on this module variant. This is consistent with the published Seeed KiCad library showing DIO5/6/7 exposed as `MCU_DIO*` test pads — DIO7 is genuinely free for host-MCU use; DIO5/6 are used internally by the switch despite also being exposed on bottom-side pads. **Original question text:**
+
+**Can you confirm whether DIO5/6/7 (or any other internal DIOs) are
    in fact wired to the on-module RF switch on the Wio-LR1121?** The
    datasheet pinout confirms DIO5/6/7 are exposed as `MCU_DIO5/6/7`
    on bottom-side test pads (per Seeed's published KiCad library),
@@ -494,7 +538,9 @@ errata** at base FW version 1.3.
    and the module's SUBG_RF / 2.4G_RF pads) is opaque to us. Is there
    an active switch IC, or is the front-end passive combining?
 
-6. **Is the second Wio-LR1121 module we ordered likely from the same
+### 6. ⏳ OPEN — Production-lot commonality across the two test units
+
+**Is the second Wio-LR1121 module we ordered likely from the same
    production lot as the first?** If you can confirm or deny this, it
    helps us decide whether to order a third unit from a separate
    distributor (different lot likely) or pivot to a different LR1121
@@ -512,7 +558,7 @@ errata** at base FW version 1.3.
 
 ## Contact
 
-GrayHatGuy — `jrussell328@gmail.com`
+GrayHatGuy — `grayhatguyllc@protonmail.com`
 Project repository: <https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater>
 Relevant source files (for engineering review if useful):
 - `src/WioLR1121.cpp` — module driver wrapper.

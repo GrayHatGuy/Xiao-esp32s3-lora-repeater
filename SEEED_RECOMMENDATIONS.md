@@ -312,7 +312,7 @@ in the constructive spirit in which it is offered.
 If Seeed engineering would like to set up a direct conversation,
 inspect our serial logs and source code in detail, or have us run any
 additional bench tests, please reach out via
-<jrussell328@gmail.com> or via the project repository:
+<grayhatguyllc@protonmail.com> or via the project repository:
 <https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater>.
 
 Thank you for your time.
