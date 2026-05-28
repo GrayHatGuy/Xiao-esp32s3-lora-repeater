@@ -67,6 +67,6 @@ Thank you again for your continued support.
 
 Best regards,
 
-Jeremy Russell
+GrayHatGuy
 grayhatguyllc@protonmail.com
 Seeed/Meshtastic Build-Off 2026 entry — Cross-Protocol Dual-Radio Bridge
