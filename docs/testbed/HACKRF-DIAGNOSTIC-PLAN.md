@@ -8,16 +8,30 @@
 
 - HackRF One SDR (1 MHz – 6 GHz, ±13 dBm TX max, 8-bit ADC, ~9 dB noise figure)
 - SDRAngel (latest release) with both **ChirpChat Demodulator** and **ChirpChat Modulator** plugins enabled. The demod page documents the plugin's parameter coverage and confirms a matching modulator exists.
-- A single **5 dB SMA attenuator pad** (used as HackRF VSWR protection only)
-- HackRF stock telescoping whip antenna
+- **KT3-2N-90/1S step attenuator** — 0 to 90 dB in 1 dB steps, N-female connectors both ends, DC–3 GHz typical. Primary instrument for Test B.
+- **5 dB SMA fixed pad** — lives permanently on the HackRF TX port as VSWR protection during Test B.
+- **2× SMA-to-N adapters** (one SMA-male → N-male; one N-male → SMA-female) — to interface the KT3 (N-type) with the rest of the SMA-based bench. ~$10–15 on Amazon, DC–6 GHz rated.
+- **1× short SMA male/male jumper** (6–12 inches, RG-316 or better) — to connect the post-KT3 SMA-female adapter to an IPEX-SMA pigtail.
+- **1× spare IPEX-to-SMA pigtail** — same type used for your normal antenna feeds, but a dedicated one for the test rig avoids having to repeatedly unplug the radio's antenna.
+- HackRF stock telescoping whip antenna (for Tests A and C only — not used in Test B)
 - USB cable for HackRF
 - The bench from `TESTBED.md` (both radios powered, firmware running, serial monitor open)
 
-**Equipment NOT owned and worked around:**
+**Cabled Test B chain layout:**
 
-- A proper SMA attenuator kit (would enable Test B as a clean cabled experiment). Worked around by using HackRF TX-gain control + free-space path loss as the variable attenuator. **Recommendation: order a 6-piece SMA pad kit (1/2/3/6/10/20 dB) for ~$30 on eBay — Test B becomes much cleaner.**
+```
+HackRF TX (SMA-f) → 5 dB SMA pad → SMA-m / N-m adapter
+                                  ↓
+                                  KT3-2N-90/1S step attenuator (sweep 0–90 dB)
+                                  ↓
+                                  N-m / SMA-f adapter → short SMA jumper → IPEX-SMA pigtail → DUT IPEX port
+```
 
-**Total time estimate:** ~100 minutes for all three tests with note-taking, plus a one-time ~15 minutes for SDRAngel setup.
+Total fixed insertion loss (excluding HackRF gain and KT3 setting): **~6 dB** = 5 dB pad + 2× adapters (~0.4 dB) + jumper (~0.5 dB) + IPEX-SMA pigtail (~0.5 dB).
+
+**Dynamic range available:** HackRF IF gain swing (47 dB) + KT3 swing (90 dB) = **137 dB**. With HackRF TX at IF gain 47 dB (~+13 dBm) and KT3 at 90 dB, the power at the DUT antenna port is approximately **−83 dBm**. With HackRF IF gain 0 (~−40 dBm) and KT3 at 90 dB, it's approximately **−131 dBm** — at or below the LR1121 datasheet sensitivity spec of −134 dBm.
+
+**Total time estimate:** ~80 minutes for all three tests with note-taking, plus a one-time ~15 minutes for SDRAngel setup. (Test B is faster than the earlier free-space version because the KT3 sweep is 1 dB-resolution and immune to multipath.)
 
 ---
 
@@ -195,108 +209,164 @@ Test A delta = LR1121 median peak dBFS − SX1262 median peak dBFS
 
 ---
 
-## Test B — RX Sensitivity Floor A/B Comparison (~60 min)
+## Test B — RX Sensitivity Floor A/B Comparison, Fully Cabled (~30 min)
 
 **Goal:** measure the LR1121's RX sensitivity floor relative to the SX1262 on the same bench. Produces the numerical "deficit in dB" that goes into the Seeed email.
 
-**Methodology with only a 5 dB pad:** use the HackRF's TX-gain control (0–47 dB, 1 dB steps) as the variable attenuator. Combined with free-space path loss across a fixed 3 m bench separation, this gives roughly 65 dB of dynamic range — enough to span from "loud RX" to "below floor" on a healthy receiver. The 5 dB pad's only job is protecting the HackRF TX port from VSWR; it's a constant in every measurement and drops out of the A/B comparison.
+**Methodology:** the KT3-2N-90/1S step attenuator provides a calibrated 0–90 dB sweep in 1 dB increments between the HackRF TX output and the DUT antenna port. Combined with HackRF IF gain control (0–47 dB), the full path attenuation can be set anywhere from ~5 dB (KT3=0, gain=47, just the fixed losses) to ~137 dB (KT3=90, gain=0). This spans the entire useful sensitivity envelope of both radios at SF11/BW250. The setup is **fully conducted** — no over-the-air radiation, no multipath, no antenna-position dependency.
 
-**Critical principle:** all absolute losses (FSPL, antenna gains, the 5 dB pad, cable insertion loss, indoor multipath) are **identical** between the SX1262 measurement and the LR1121 measurement, as long as **nothing physical moves between the two phases**. They cancel out of the subtraction. The result is a clean relative dB delta even though the absolute numbers are uncertain.
+**Critical principle:** the chain's fixed insertion losses (~6 dB total — see equipment section) are **identical** in the SX1262 and LR1121 phases. They cancel out of the subtraction. The result is a clean relative dB delta with 1 dB precision.
 
-### Setup
+### Cabled chain — physical setup
 
-1. Place the HackRF with its stock whip antenna at a **fixed position** approximately **3 m from the bench**. Don't move it for the entire test. Tape it down if necessary.
-2. Connect the **5 dB pad directly to the HackRF TX SMA port**. Connect the whip antenna to the other end of the pad.
-3. Both Wio radios remain on the bench with their antennas in their normal positions. Don't move them.
-4. The XIAO + bridge firmware runs normally — you'll be reading RX events from the serial monitor.
+1. Disconnect the LR1121 module's IPEX antenna pigtail from its rubber-duck antenna. Leave the pigtail connected to the LR1121 module (IPEX side).
+2. Disconnect the SX1262 module's IPEX antenna pigtail from its rubber-duck antenna similarly.
+3. Build the test chain:
+   ```
+   HackRF TX (SMA-f) → 5 dB SMA pad → SMA-m / N-m adapter → KT3 input
+                                                                  ↓
+                                                                  KT3 output → N-m / SMA-f adapter → short SMA jumper
+                                                                                                               ↓
+                                                                                                               → DUT IPEX-SMA pigtail (SMA-male side)
+   ```
+4. The "DUT IPEX-SMA pigtail" SMA-male is what you'll **physically swap** between the LR1121 pigtail and the SX1262 pigtail when changing which radio is under test. Or — easier — use a spare IPEX-SMA pigtail dedicated to the test chain, and just swap which radio's IPEX connector you click onto.
+5. Set KT3 to **0 dB** initially (loudest signal). Confirm all cables are snug.
 
-### Calibration — establish the SX1262 RSSI anchor
+### Calibration — anchor HackRF output power
 
-Before sweeping, establish a known reference point.
+Optional but useful. Skip if you don't have a power meter — the A/B comparison still works without it; you just won't know absolute dBm numbers as precisely.
 
-1. Load SDRAngel **"LR1121 TX 906875"** preset (the TX/modulator side).
-2. Set HackRF IF gain to **30 dB**.
-3. In the ChirpChat Modulator: payload `"HACKRF-CAL"`, continuous TX at **1000 ms period**.
-4. Click **Start** TX.
-5. Watch the serial monitor for `[R1 RX]` events from the HackRF-generated packets. They will decode as ChirpChat-generated (no Meshtastic header — RadioLib will report a CRC mismatch or a `read: pktLen=N state=-7` event, but the **RSSI value reported by R1 for these packets is the calibrated anchor**).
-6. Record:
-   - SX1262 RSSI at HackRF gain 30: ______ dBm
+1. If you have a power meter: insert it between the 5 dB pad and the first SMA-N adapter, set HackRF IF gain to **30 dB**, run ChirpChat modulator continuously. Record measured power at the 5 dB pad output: ______ dBm. (Typical HackRF at IF gain 30 dB outputs ~0 dBm. After the 5 dB pad it's ~−5 dBm.)
+2. If no power meter: assume the HackRF datasheet curve — at 906 MHz, IF gain 30 dB ≈ 0 dBm output; IF gain 47 ≈ +13 dBm; each 1 dB of IF gain change ≈ 1 dB output change in the 10–40 dB region. Accuracy ±3 dB.
 
-This anchor point lets you read any other HackRF gain as a delta against this:
+**Power at DUT antenna port at any sweep point:**
 
 ```
-Received power at gain G = (anchor RSSI) − (30 − G) dB
+P_DUT (dBm) ≈ P_HackRF_at_gain_G − KT3_setting_dB − 6 dB (fixed chain losses)
 ```
 
-So gain 20 = anchor − 10 dB, gain 10 = anchor − 20 dB, etc.
-
-7. **Stop** TX.
+Example with HackRF IF gain 30 dB (~0 dBm out), KT3 at 70 dB:
+```
+P_DUT ≈ 0 − 70 − 6 = −76 dBm
+```
 
 ### Procedure — Phase 1: SX1262 sensitivity floor sweep
 
-1. Start HackRF TX at gain **30 dB**. Confirm SX1262 is decoding the ChirpChat packets at the anchor RSSI you recorded.
-2. **Decrement HackRF IF gain by 5 dB** (gain → 25, 20, 15, 10, 5, 0). After each decrement, wait **30 seconds** to observe how many of the ~30 ChirpChat packets sent at that level are actually received. Record:
+1. Connect the test chain SMA-male output to the **SX1262**'s IPEX pigtail.
+2. Load SDRAngel **"LR1121 TX 906875"** preset (the modulator).
+3. Set HackRF IF gain to **30 dB**. (Reference point. Don't change during the sweep.)
+4. Start HackRF TX with ChirpChat modulator continuous, period 1000 ms, payload `HACKRF-CAL`.
+5. Confirm SX1262 is reporting RX events in the serial monitor with KT3 at 0 dB. These will appear as `[R1 RX]` events with `state=-7` (CRC mismatch — the payload isn't Meshtastic-formatted, so RadioLib will reject it post-CRC, but the **RX_DONE interrupt fired and the payload was demodulated** — that's what counts for sensitivity measurement).
+6. **Coarse sweep** — increment KT3 in **10 dB steps** (0 → 10 → 20 → 30 → 40 → 50 → 60 → 70 → 80 → 90). At each step, wait **30 seconds** and count `[R1 RX]` events. ChirpChat is sending ~30 packets per 30 s window.
+7. **Find the cutoff zone** — the KT3 setting at which RX rate drops below ~10% (3 of 30 packets).
+8. **Fine sweep** — back off 10 dB into the working zone, then **increment KT3 in 1 dB steps** to find the exact cutoff KT3 setting. Take 60-second observation windows in this zone for better statistics.
 
 #### SX1262 floor sweep result table — fill in
 
-| HackRF IF gain (dB) | Implied received power (dBm) at SX1262 | ChirpChat TX packets sent (≈30) | Packets received by SX1262 (count `[R1 RX]` events in log) | Packet error rate | Pass/Fail (≥10% PER = fail) |
+**Coarse sweep:**
+
+| KT3 setting (dB) | Implied P_DUT (dBm) | Packets sent (~30) | Packets received | Detection rate | Pass/Fail (≥10% = pass) |
 |---|---|---|---|---|---|
-| 30 (anchor) | _____ | ~30 | _____ | _____% | _____ |
-| 25 | _____ | ~30 | _____ | _____% | _____ |
-| 20 | _____ | ~30 | _____ | _____% | _____ |
-| 15 | _____ | ~30 | _____ | _____% | _____ |
-| 10 | _____ | ~30 | _____ | _____% | _____ |
-| 5 | _____ | ~30 | _____ | _____% | _____ |
 | 0 | _____ | ~30 | _____ | _____% | _____ |
+| 10 | _____ | ~30 | _____ | _____% | _____ |
+| 20 | _____ | ~30 | _____ | _____% | _____ |
+| 30 | _____ | ~30 | _____ | _____% | _____ |
+| 40 | _____ | ~30 | _____ | _____% | _____ |
+| 50 | _____ | ~30 | _____ | _____% | _____ |
+| 60 | _____ | ~30 | _____ | _____% | _____ |
+| 70 | _____ | ~30 | _____ | _____% | _____ |
+| 80 | _____ | ~30 | _____ | _____% | _____ |
+| 90 | _____ | ~30 | _____ | _____% | _____ |
 
-**SX1262 sensitivity floor = lowest gain step where PER < 10% = HackRF gain ______ dB = implied received power ______ dBm**
+**Fine sweep around the cutoff** (fill in based on where the coarse sweep dropped out):
 
-3. **Stop** TX between Phase 1 and Phase 2. Do not move anything physical.
+| KT3 setting (dB) | Implied P_DUT (dBm) | Packets sent (~60) | Packets received | Detection rate | Pass/Fail |
+|---|---|---|---|---|---|
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+
+**SX1262 sensitivity floor = highest KT3 setting where detection rate ≥ 10% = ______ dB**
+**Implied P_DUT at SX1262 floor = ______ dBm**
+
+9. **Stop** HackRF TX. Disconnect the test chain SMA from the SX1262 pigtail.
 
 ### Procedure — Phase 2: LR1121 sensitivity floor sweep
 
-1. **Without moving any radio, antenna, or the HackRF**, restart HackRF TX at gain **30 dB**.
-2. Watch the serial monitor for `[Radio2-Edge] read:` events showing LR1121 RX of the ChirpChat packets. (These will likely error as CRC mismatches or empty reads, just like the SX1262 packets did — but each one represents a successful preamble + header detection by the LR1121.)
-3. Repeat the same gain sweep:
+1. Connect the test chain SMA-male to the **LR1121**'s IPEX pigtail (the only thing that changes between phases — the rest of the chain stays untouched).
+2. Restart HackRF TX with identical settings (IF gain 30 dB, ChirpChat continuous).
+3. Confirm LR1121 is reporting RX events in the serial monitor with KT3 at 0 dB. Look for `[Radio2-Edge] read: pktLen=N` events where N > 0. (Like Phase 1, the payload will fail CRC, but the demod event is what counts.)
+4. Repeat the coarse-then-fine KT3 sweep.
 
 #### LR1121 floor sweep result table — fill in
 
-| HackRF IF gain (dB) | Implied received power (dBm) at LR1121 | ChirpChat TX packets sent (≈30) | Packets detected by LR1121 (count `[Radio2-Edge] read:` events with `pktLen > 0` in log) | Packet detection rate | Pass/Fail (≥10% detection = pass) |
-|---|---|---|---|---|---|
-| 30 | _____ | ~30 | _____ | _____% | _____ |
-| 25 | _____ | ~30 | _____ | _____% | _____ |
-| 20 | _____ | ~30 | _____ | _____% | _____ |
-| 15 | _____ | ~30 | _____ | _____% | _____ |
-| 10 | _____ | ~30 | _____ | _____% | _____ |
-| 5 | _____ | ~30 | _____ | _____% | _____ |
-| 0 | _____ | ~30 | _____ | _____% | _____ |
+**Coarse sweep:**
 
-**LR1121 sensitivity floor = lowest gain step where detection rate ≥ 10% = HackRF gain ______ dB = implied received power ______ dBm**
+| KT3 setting (dB) | Implied P_DUT (dBm) | Packets sent (~30) | Packets received | Detection rate | Pass/Fail (≥10% = pass) |
+|---|---|---|---|---|---|
+| 0 | _____ | ~30 | _____ | _____% | _____ |
+| 10 | _____ | ~30 | _____ | _____% | _____ |
+| 20 | _____ | ~30 | _____ | _____% | _____ |
+| 30 | _____ | ~30 | _____ | _____% | _____ |
+| 40 | _____ | ~30 | _____ | _____% | _____ |
+| 50 | _____ | ~30 | _____ | _____% | _____ |
+| 60 | _____ | ~30 | _____ | _____% | _____ |
+| 70 | _____ | ~30 | _____ | _____% | _____ |
+| 80 | _____ | ~30 | _____ | _____% | _____ |
+| 90 | _____ | ~30 | _____ | _____% | _____ |
+
+**Fine sweep around the cutoff:**
+
+| KT3 setting (dB) | Implied P_DUT (dBm) | Packets sent (~60) | Packets received | Detection rate | Pass/Fail |
+|---|---|---|---|---|---|
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+| ___ | _____ | ~60 | _____ | _____% | _____ |
+
+**LR1121 sensitivity floor = highest KT3 setting where detection rate ≥ 10% = ______ dB**
+**Implied P_DUT at LR1121 floor = ______ dBm**
 
 ### Compute the delta
 
+The relative sensitivity delta is the difference in **KT3 settings** at the cutoff — fixed chain losses cancel:
+
 ```
-LR1121 sensitivity deficit vs SX1262 reference = (SX1262 floor power) − (LR1121 floor power)
-                                                = _____ dBm − _____ dBm
+LR1121 sensitivity deficit vs SX1262 reference = (SX1262 floor KT3 setting) − (LR1121 floor KT3 setting)
+                                                = _____ dB − _____ dB
                                                 = _____ dB
 ```
 
-### Multipath wobble mitigation
+(Equivalently, if KT3 of N dB allows the SX1262 to receive but the LR1121 needs KT3 backed off to M < N dB, the deficit is N − M dB. A higher KT3 setting = lower P_DUT = more sensitive receiver = better.)
 
-If your bench is in a small room, multipath at 906 MHz means RSSI can wobble ±10 dB just from someone moving. Mitigations:
+### Absolute floor comparison
 
-- **Run during a still period** — no walking past the bench, no doors opening, no other people in the room.
-- **Repeat each gain step** — if results look noisy, do each gain level THREE times (3 × 30-second windows) and use the median packet count.
-- **Use a longer integration window** — bump the per-step observation time from 30 s to 60 s or 120 s for the borderline gain steps near the floor.
+If you established an HackRF output power calibration above:
+
+| Radio | Floor P_DUT (dBm, measured) | Floor P_DUT (dBm, datasheet spec) | Bench deficit vs spec |
+|---|---|---|---|
+| SX1262 | _____ | ~−134 | _____ dB |
+| LR1121 | _____ | ~−134 | _____ dB |
+
+The SX1262's deficit vs datasheet absorbs all the non-radio losses on the bench (HackRF noise figure, multipath through the IPEX-SMA pigtail, ambient interference). The LR1121's deficit vs datasheet, **minus the SX1262's deficit vs datasheet**, equals the LR1121-specific deficit you'd quote to Seeed — that's the same number as the relative-KT3 delta above, just sanity-checked from a different direction.
 
 ### Interpretation
 
 | Test B delta (LR1121 deficit) | Conclusion |
 |---|---|
-| **0–5 dB** | LR1121 RX is essentially as sensitive as SX1262 on this bench. The "30 dB deficit" perception is probably a self-echo / proximity artifact from the original bench geometry. Re-test live OTA reception with the corrected understanding. |
-| **5–15 dB** | Modest deficit — possibly the matching network + RSSI calibration delta. Worth pursuing the Wio-LR1121-specific `SetRssiCalibration` values question with Seeed. |
-| **15–30 dB** | Significant deficit, in the range your earlier OTA observations suggested. Hardware (matching network) or chip-FW errata. Strong evidence for Seeed. |
-| **30+ dB** | Catastrophic. Module is essentially deaf to anything but near-field signals. Cross-reference with Test A — if Test A also shows TX deficit, RMA; if Test A is clean, chip-internal RX fault confirmed. |
+| **0–5 dB** | LR1121 RX is essentially as sensitive as SX1262 on this bench. The "30 dB deficit" perception from earlier bench runs is probably an artifact of OTA-vs-self-echo geometry. Re-test live OTA reception with corrected expectations. |
+| **5–15 dB** | Modest deficit — likely the `SetRssiCalibration` delta + minor matching network mistune. Strong evidence for pursuing Wio-LR1121-specific cal values from Seeed. |
+| **15–30 dB** | Significant deficit, matching your earlier OTA observations. Hardware (matching network) or chip-FW errata. Hard numerical evidence for Seeed. |
+| **30+ dB** | Catastrophic, matching the original DOE conclusion. Cross-reference with Test A — if Test A also shows TX deficit, RMA; if Test A is clean, chip-internal RX fault confirmed. |
+
+### Sanity checks during the sweep
+
+- **At KT3 = 0**, both radios MUST be receiving 100% of packets if the chain is good. If they're not, the chain has a continuity problem — check connectors and adapter genders.
+- **At KT3 = 90 dB**, both radios should be below their floor (P_DUT around −96 dBm at HackRF IF gain 30 dB). If a radio still receives reliably at KT3=90, it means it has more headroom than 90 dB and you need to **drop HackRF IF gain** to find the actual floor. Re-run Phase 1 or Phase 2 at HackRF IF gain 20 or 10 dB to extend the reach.
+- **At the cutoff**, the receiver behavior should be **graded** — gradually losing packets as KT3 increases, not a sharp wall. A sharp wall suggests something else (e.g., a chip-internal threshold or an interference issue) is dominating.
 
 ---
 
