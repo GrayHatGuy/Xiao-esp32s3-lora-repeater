@@ -151,87 +151,117 @@ Do this once. The configuration persists between sessions.
 
 **Goal:** confirm Runs 0–8 sub-GHz failure mode still reproduces with current committed firmware. Reference: T3S3 LR1121 (independent LR1121 at same Meshtastic LongFast preset) and R1 SX1262 (sub-GHz reference radio).
 
-#### Procedure (do each step in order; verify before proceeding)
+#### Procedure (PowerShell commands; do each step in order; verify before proceeding)
+
+**Notation:** `$ts` is a timestamp variable used in log filenames. Set it once at start of session so all files for one run share a stamp.
+
+```powershell
+# === SESSION INITIALIZATION (run once before starting) ===
+cd "C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater"
+$ts = Get-Date -Format "yyyyMMdd-HHmmss"
+$logdir = "docs\testbed\run-results"
+New-Item -ItemType Directory -Force -Path $logdir | Out-Null
+Write-Host "Session timestamp: $ts"
+```
 
 ```
 STEP 1.  Build current firmware
-  COMMAND:  pio run
-  VERIFY:   Build succeeds with no errors. Note the commit hash at HEAD.
-  RECORD:   Commit hash: ____________
+  COMMAND:
+            pio run 2>&1 | Tee-Object -FilePath "$logdir\test-0a-$ts-build.log"
+            git rev-parse HEAD | Out-File "$logdir\test-0a-$ts-commit.txt"
+  VERIFY:   Build ends with "SUCCESS". Note the commit hash.
+  RECORD:   Commit hash from commit.txt:  ____________
 
 STEP 2.  Flash device
-  COMMAND:  pio run -t upload
-  VERIFY:   Upload succeeds.
+  COMMAND:
+            pio run -t upload 2>&1 | Tee-Object -FilePath "$logdir\test-0a-$ts-flash.log"
+  VERIFY:   "[SUCCESS] Took N seconds" appears at the end.
 
-STEP 3.  Open serial monitor
-  COMMAND:  pio device monitor
-  VERIFY:   Connects at 115200 baud.
+STEP 3.  Capture T3S3 reference radio info (one-off; before opening bridge monitor)
+  COMMAND:
+            meshtastic --port COM5 --info 2>&1 | Out-File "$logdir\test-0a-$ts-t3s3-info.txt"
+            Select-String -Path "$logdir\test-0a-$ts-t3s3-info.txt" -Pattern "myNodeNum|^Owner|user.{0,200}id"
+  VERIFY:   T3S3 connects (no "Could not connect" error in the file).
+            Select-String surfaces the node ID line.
+  RECORD:   T3S3 node ID (8-char hex from "user id" or hex of myNodeNum):  !________
 
-STEP 4.  Capture boot log and verify firmware preconditions
-  ACTION:   Power-cycle the device. Capture serial output from "[setup]" line
-            through "Bridge active." line.
-  VERIFY:   The following SIX lines appear EXACTLY as shown (allowing for
-            timestamps and unique IDs):
+STEP 4.  Open the bridge serial monitor and capture boot log to file
+  COMMAND:
+            pio device monitor --port COM6 --filter direct 2>&1 |
+              Tee-Object -FilePath "$logdir\test-0a-$ts-bridge.log"
+  ACTION:   Once monitor is connected, press the XIAO RESET button (or briefly
+            unplug/replug USB) to power-cycle the bridge.
+  VERIFY:   Boot log streams to terminal AND to file. Wait for "Bridge active."
+            before proceeding to Step 5. (Do NOT Ctrl-C the monitor yet.)
 
-   [4a] "[setup] Radio1 = SX1262, Radio2 = LR1121"
+STEP 5.  Verify firmware preconditions in the boot log
+  ACTION:   With the monitor still running, open a SECOND PowerShell window
+            in the same project directory.
+  COMMAND (in the second window):
+            $ts = "<paste your session timestamp from Step 1 here>"
+            $logdir = "docs\testbed\run-results"
+            Select-String -Path "$logdir\test-0a-$ts-bridge.log" `
+              -Pattern "Radio1 = .*, Radio2 = .*|\[MT\] channel=|Radio1-B2B\] ready|installing RF switch table|RX-AUDIT diag.*getErrors|Radio2-Edge\] ready"
+
+  VERIFY:   Six matching lines appear (one per precondition):
+
+   [5a] "[setup] Radio1 = SX1262, Radio2 = LR1121"
         → R2 chip-detect must be LR1121. If not, NVS chip-type override is
           wrong. STOP, fix via portal.
 
-   [4b] One or more "[MT] channel=" lines appear at boot, and at least
-        ONE of them MUST be the public LongFast channel:
+   [5b] One or more "[MT] channel=" lines, and at least ONE MUST be:
             channel="LongFast" hash=0x08 keyLen=16
               key=d4f1bb3a20290759f0bcffabcf4e6901
-        → Without this channel registered, the bridge cannot decode any
-          neighborhood LongFast packet even if the LR1121 demodulates it.
-        → If you've also configured a second channel like "longfast2"
-          (hash=0x3A) for bridge cross-channel routing — that's fine,
-          both can coexist. Not required for the Test 0a diagnostic.
-        → RECORD which channels appear and their hashes.
+        → If LongFast hash 0x08 is NOT registered, the bridge can't decode
+          neighborhood LongFast packets even if R2 demodulates them.
 
-   [4c] "[Radio1-B2B] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5  20 dBm
+   [5c] "[Radio1-B2B] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5  20 dBm
         sync 0x2B"
-        → R1 SX1262 on Meshtastic LongFast. Must match exactly.
+        → R1 SX1262 on Meshtastic LongFast.
 
-   [4d] "[Radio2-Edge] installing RF switch table: MODE_RX = D5=1 D6=0
+   [5d] "[Radio2-Edge] installing RF switch table: MODE_RX = D5=1 D6=0
         D7=0 D8=0 D10=0 (BRUTEFORCE_RX_DIOMASK=1)"
         → Seeed-authoritative locked switch table.
 
-   [4e] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
+   [5e] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
         state=0 errors=0x0020"
-        → state=0 means SPI succeeded; errors=0x0020 is the persistent
-          HF_XOSC_START_ERR sticky bit (expected on TCXO-fitted chips).
-        → If state != 0 OR errors has bits other than 0x0020 set, STOP and
-          report. Failure modality has changed since Run 8.
+        → state=0, errors=0x0020 (HF_XOSC_START_ERR sticky on TCXO chips).
+        → Any other errors value: STOP. Modality changed since Run 8.
 
-   [4f] "[Radio2-Edge] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5
+   [5f] "[Radio2-Edge] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5
         20 dBm  sync 0x2B  sub-GHz"
-        → R2 LR1121 modem params confirmed at Meshtastic LongFast sub-GHz.
-        → "sub-GHz" tag at end confirms is2g4 branch did NOT trigger.
+        → R2 on Meshtastic LongFast sub-GHz. "sub-GHz" tag confirms
+          is2g4 branch did NOT trigger.
 
   RECORD:   All six precondition lines confirmed Y/N: ____
-            If any N: STOP. Do not proceed to Step 5.
-
-STEP 5.  Confirm T3S3 reference radio is alive and transmitting
-  COMMAND:  meshtastic --port COM5 --info
-  VERIFY:   T3S3 connects, reports its node ID and current RX/TX state.
-  RECORD:   T3S3 node ID (8-char hex):  !________
+            If any N: STOP. Do not proceed to Step 6.
 
 STEP 6.  Start a 5-minute observation window
-  ACTION:   Note start timestamp. Keep serial monitor open and unattended for
-            5 minutes. During this window:
-            (a) Trigger T3S3 to TX 3 distinct messages spaced ~60 s apart
-                via:  meshtastic --port COM5 --sendtext "Test 0a #1"
-                      meshtastic --port COM5 --sendtext "Test 0a #2"
-                      meshtastic --port COM5 --sendtext "Test 0a #3"
-            (b) Allow neighborhood OTA traffic to populate naturally.
-  VERIFY:   T3S3 CLI reports "Sending text..." for each of the 3 sends.
-  RECORD:   Start timestamp: _________  End timestamp: _________
+  ACTION:   Note start time. Bridge monitor stays running (Step 4 window).
+  COMMAND (in the second PowerShell window, executed once per minute over 3 minutes):
+            meshtastic --port COM5 --sendtext "Test 0a #1"
+            Start-Sleep -Seconds 60
+            meshtastic --port COM5 --sendtext "Test 0a #2"
+            Start-Sleep -Seconds 60
+            meshtastic --port COM5 --sendtext "Test 0a #3"
+            Start-Sleep -Seconds 120
+            # Total elapsed: 5 minutes from start of Send #1
 
-STEP 7.  Stop monitor and save complete log
-  ACTION:   Ctrl-C to exit monitor. Save the captured log to a file:
-            docs/testbed/run-results/test-0a-<timestamp>.log
-  VERIFY:   Log file contains the boot lines from Step 4 plus the
-            5-minute window from Step 6.
+  VERIFY:   T3S3 CLI prints "Sending Text Message..." for each of the 3 sends
+            without error.
+  RECORD:   Start timestamp (note when you ran Send #1):  _________
+            End timestamp (after final Sleep):            _________
+
+STEP 7.  Stop bridge monitor and confirm log captured
+  ACTION:   In the FIRST PowerShell window (the one running pio device monitor),
+            press Ctrl-C to exit. Tee-Object flushes the buffer to file.
+  COMMAND:
+            Get-ChildItem "$logdir\test-0a-$ts-bridge.log" | Format-List Length, LastWriteTime
+            (Get-Content "$logdir\test-0a-$ts-bridge.log" | Measure-Object -Line).Lines
+  VERIFY:   File exists. Length > 0. Line count is more than ~50 (boot log +
+            5 min of operation should be at least that many lines).
+  RECORD:   Log path:  $logdir\test-0a-$ts-bridge.log
+            Line count:  _________
 ```
 
 #### Step verification — fill in BEFORE analyzing data
@@ -243,12 +273,16 @@ not VERIFIED, the test is INVALID and must be re-run.
 |---|---|---|---|
 | 1 | Firmware built clean | _____ | commit `__________` |
 | 2 | Flash succeeded | _____ | |
-| 4a | R2 chip = LR1121 | _____ | |
-| 4b | "LongFast" hash=0x08 channel registered | _____ | other channels also seen: `_______` |
-| 4c | R1 at Meshtastic LongFast 906.875 | _____ | |
-| 4d | R2 switch table = D5=1 D6=0 ... | _____ | |
-| 4e | getErrors state=0 errors=0x0020 | _____ | actual: `0x____` |
-| 4f | R2 at Meshtastic LongFast 906.875 sub-GHz | _____ | |
+| 3 | T3S3 info captured to file | _____ | T3S3 node ID: `!________` |
+| 4 | Bridge monitor running, "Bridge active." seen | _____ | log file: `test-0a-$ts-bridge.log` |
+| 5a | R2 chip = LR1121 | _____ | |
+| 5b | "LongFast" hash=0x08 channel registered | _____ | other channels also seen: `_______` |
+| 5c | R1 at Meshtastic LongFast 906.875 | _____ | |
+| 5d | R2 switch table = D5=1 D6=0 ... | _____ | |
+| 5e | getErrors state=0 errors=0x0020 | _____ | actual: `0x____` |
+| 5f | R2 at Meshtastic LongFast 906.875 sub-GHz | _____ | |
+| 6 | 3 T3S3 sendtext commands succeeded | _____ | start time: `_______` end: `_______` |
+| 7 | Log file saved with ≥50 lines | _____ | line count: `_____` |
 | 5 | T3S3 node ID captured | _____ | `!________` |
 | 6 | 3 T3S3 messages sent during window | _____ | |
 | 7 | Complete log saved | _____ | path: `__________` |
@@ -258,24 +292,51 @@ analysis. Fix the failed precondition and re-execute from Step 1.**
 
 #### Data analysis (only run after every Step-verification row above is Y)
 
-```
-ANALYSIS 1.  Count R1 (SX1262) RX events
-  Search log for:  [R1 RX]
-  RECORD: count = _____, RSSI range = ____ to ____ dBm
-  RECORD: distinct source node IDs seen: _________________________
+PowerShell commands; run from project root with `$ts` set to your session timestamp:
 
-ANALYSIS 2.  Count R2 (LR1121) RX events with EXTERNAL src
-  Search log for:  [R2 RX]
-  For each event, parse the "src=0x________" field.
-  RECORD: events where src = 0x75D7AC1C (self-echo of own bridge):     _____
-  RECORD: events where src = T3S3 node ID:                              _____
-  RECORD: events where src = any other external node (neighborhood):    _____
-  RECORD: total external RX events (sum of last two):                   _____
+```powershell
+# Re-set $ts if your shell history was lost between steps
+$ts = "<paste your session timestamp>"
+$log = "docs\testbed\run-results\test-0a-$ts-bridge.log"
 
-ANALYSIS 3.  Compute the deficit
-  Packets R1 caught that R2 missed = (R1 count) − (R2 external count)
-  RECORD: deficit count = _____
+# ANALYSIS 1 — Count R1 (SX1262) RX events
+$r1_rx = Select-String -Path $log -Pattern "\[R1 RX\]"
+"R1 RX count: $($r1_rx.Count)"
+$r1_rx | ForEach-Object { $_.Line } | Select-String -Pattern "RSSI -?\d+\.\d+" |
+  ForEach-Object { $_.Matches[0].Value } | Sort-Object -Unique
+
+# ANALYSIS 2 — Count R2 (LR1121) RX events broken out by src
+$r2_rx = Select-String -Path $log -Pattern "\[R2 decoded\] Meshtastic src=0x[0-9A-Fa-f]{8}"
+$r2_self_echo  = $r2_rx | Where-Object { $_.Line -match "src=0x75D7AC1C" }
+$r2_from_t3s3  = $r2_rx | Where-Object { $_.Line -match "src=0x<T3S3_HEX_NODENUM>" }  # paste T3S3 hex here
+$r2_other_ext  = $r2_rx | Where-Object {
+                          $_.Line -notmatch "src=0x75D7AC1C" -and
+                          $_.Line -notmatch "src=0x<T3S3_HEX_NODENUM>"
+                       }
+"R2 total RX events:        $($r2_rx.Count)"
+"R2 self-echo (own bridge): $($r2_self_echo.Count)"
+"R2 from T3S3:              $($r2_from_t3s3.Count)"
+"R2 from other external:    $($r2_other_ext.Count)"
+"R2 total EXTERNAL:         $($r2_from_t3s3.Count + $r2_other_ext.Count)"
+
+# ANALYSIS 3 — Compute deficit
+$deficit = $r1_rx.Count - ($r2_from_t3s3.Count + $r2_other_ext.Count)
+"DEFICIT: R1 caught $($r1_rx.Count) external packets; R2 caught $($r2_from_t3s3.Count + $r2_other_ext.Count). Deficit = $deficit"
 ```
+
+#### Record analysis results
+
+| Quantity | Value |
+|---|---|
+| R1 (SX1262) total external RX count | _____ |
+| R1 RSSI range observed (dBm) | ____ to ____ |
+| R1 distinct source node IDs | `___________________________` |
+| R2 (LR1121) total RX events | _____ |
+| R2 self-echo (src=0x75D7AC1C) | _____ |
+| R2 from T3S3 (src=T3S3 node ID) | _____ |
+| R2 from other external sources | _____ |
+| R2 total external (T3S3 + other) | _____ |
+| Deficit (R1 external − R2 external) | _____ |
 
 #### Pass / fail determination
 
@@ -294,138 +355,223 @@ ANALYSIS 3.  Compute the deficit
 
 **Prerequisite:** Test 0a completed with EXPECTED or PARTIAL outcome.
 
-#### Procedure (do each step in order; verify before proceeding)
+#### Procedure (PowerShell commands; do each step in order; verify before proceeding)
+
+```powershell
+# === SESSION INITIALIZATION (run once before starting Test 0b) ===
+cd "C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater"
+$ts = Get-Date -Format "yyyyMMdd-HHmmss"
+$logdir = "docs\testbed\run-results"
+New-Item -ItemType Directory -Force -Path $logdir | Out-Null
+Write-Host "Session timestamp: $ts"
+```
 
 ```
-STEP 1.  Reconfigure T3S3 for 2.4 GHz Meshtastic
-  COMMAND:  meshtastic --port COM5 --set lora.region 4 \
-                                    --set lora.use_preset true \
-                                    --set lora.modem_preset LONG_FAST
-            (region 4 = LORA_24, 2.4 GHz worldwide ISM band)
-  VERIFY:   meshtastic --port COM5 --get lora reports:
-            lora.region: 4
-            lora.bandwidth: 812.5  (or 812)
-            lora.spread_factor: 11
-            lora.coding_rate: 5
-  RECORD:   T3S3 frequency reported: ________ MHz
-            T3S3 node ID:              !________
+STEP 1.  Reconfigure T3S3 for 2.4 GHz Meshtastic LongFast
+  COMMAND:
+            meshtastic --port COM5 --set lora.region 4 `
+                                   --set lora.use_preset true `
+                                   --set lora.modem_preset LONG_FAST 2>&1 |
+              Tee-Object -FilePath "$logdir\test-0b-$ts-t3s3-reconfig.log"
+            Start-Sleep -Seconds 30   # let T3S3 reboot and re-tune
 
-STEP 2.  Power down Wio-LR1121 bridge
-  ACTION:   Disconnect XIAO USB.
-  VERIFY:   Power LED off.
+  VERIFY:   reconfig log shows no errors, "Writing modified preferences" appears.
 
-STEP 3.  Physical antenna swap
-  ACTION:   (a) Disconnect IPEX pigtail from Wio-LR1121 module pad 23
-                (the SUBG_RF port currently in use).
-            (b) Connect IPEX pigtail to Wio-LR1121 module pad 2
-                (the 2.4G_RF port).
-            (c) Connect 2.4 GHz IPEX antenna to the SMA end of the pigtail.
-  VERIFY:   Pigtail is firmly clicked into pad 2 (audible click on IPEX).
-            2.4 GHz antenna is screwed in finger-tight.
+STEP 2.  Capture T3S3 post-reconfig state and discover actual frequency
+  COMMAND:
+            meshtastic --port COM5 --get lora 2>&1 |
+              Out-File "$logdir\test-0b-$ts-t3s3-lora.txt"
+            meshtastic --port COM5 --info 2>&1 |
+              Out-File "$logdir\test-0b-$ts-t3s3-info.txt"
+
+            Select-String -Path "$logdir\test-0b-$ts-t3s3-lora.txt" `
+              -Pattern "region|bandwidth|spread_factor|coding_rate|channel_num|override_frequency"
+
+  VERIFY:   lora.region = 4
+            lora.bandwidth ≈ 812.5
+            lora.spread_factor = 11
+            lora.coding_rate = 5
+
+  RECORD:   T3S3 channel_num:           _____
+            T3S3 override_frequency:    _____ MHz (if 0, compute below)
+            T3S3 node ID:               !________
+            T3S3 actual operating freq: _____ MHz
+              (if override_frequency is 0, compute:
+               2400.0 + ((channel_num - 0.5) * 0.8125)
+               example: channel_num=20 → 2400.0 + 19.5*0.8125 = 2415.84375 MHz)
+
+STEP 3.  Power down Wio-LR1121 bridge for antenna swap
+  ACTION:   Disconnect XIAO USB cable from the host PC.
+  VERIFY:   XIAO power LED off.
+
+STEP 4.  Physical antenna swap on the Wio-LR1121 module
+  ACTION:   (a) Carefully un-click the existing IPEX pigtail from module
+                pad 23 (SUBG_RF port).
+            (b) Click a fresh IPEX pigtail (or move the same one) onto
+                module pad 2 (2.4G_RF port).
+            (c) Screw a 2.4 GHz IPEX antenna onto the SMA end of the pigtail.
+  VERIFY:   Pigtail audibly clicks into pad 2.
             R1 (SX1262) antenna untouched.
   RECORD:   Antenna swap confirmed visually: Y/N: ____
 
-STEP 4.  Reconfigure R2 to 2.4 GHz Meshtastic via captive portal
-  ACTION:   (a) Power on XIAO.
-            (b) Connect to its WiFi AP (SSID from boot log).
-            (c) Open captive portal in browser.
-            (d) Set Radio 2:
-                - Chip: LR1121
-                - Frequency: 2403.59375 MHz (LongFast 2.4G slot 0)
-                - Bandwidth: 812.5 kHz
-                - Spreading factor: 11
-                - Coding rate: 5
-                - Sync word: 0x2B
-                - TX power: 13 dBm (2.4 GHz region cap)
-                - MT channel name: "longfast2g" (or any name distinct from R1)
-            (e) Save. Device reboots automatically.
-  VERIFY:   Portal save confirms "Configuration saved" without validation errors.
-  RECORD:   Portal save success: Y/N: ____
-            If N, record error message: _________________________________
+STEP 5.  Reconfigure R2 to 2.4 GHz via captive portal
+  ACTION:   (a) Reconnect XIAO USB. Device powers up.
+            (b) On your PC, connect WiFi to the XIAO's captive portal AP
+                (SSID printed in bridge boot log, viewable at COM6 monitor).
+            (c) Open http://192.168.4.1 in browser.
+            (d) Set Radio 2 fields:
+                  Chip:              LR1121
+                  Frequency (MHz):   <T3S3 actual operating freq from Step 2>
+                  Bandwidth (kHz):   812.5
+                  Spreading factor:  11
+                  Coding rate:       5
+                  Sync word (hex):   0x2B
+                  TX power (dBm):    13
+                  MT channel name:   LongFast    (matches the T3S3's channel
+                                                  so decoded packets register)
+            (e) Click Save. Device reboots automatically.
 
-STEP 5.  Capture boot log and verify 2.4 GHz preconditions
-  ACTION:   Open serial monitor (pio device monitor). Power-cycle XIAO.
-            Capture from "[setup]" through "Bridge active.".
-  VERIFY:   The following lines appear:
+  VERIFY:   Portal shows "Configuration saved" without validation errors.
+  RECORD:   Portal save success Y/N: ____
+            If N, error message: _________________________________
 
-   [5a] "[Radio2-Edge] ready — 2403.594 MHz  BW 812.5 kHz  SF11  CR4/5
+STEP 6.  Capture bridge boot log and verify 2.4 GHz preconditions
+  COMMAND:
+            pio device monitor --port COM6 --filter direct 2>&1 |
+              Tee-Object -FilePath "$logdir\test-0b-$ts-bridge.log"
+  ACTION:   Once monitor connects, press XIAO RESET (or unplug/replug USB).
+            Wait for "Bridge active." line, then in a SECOND PowerShell window:
+
+  COMMAND (in second window):
+            $ts = "<paste session timestamp>"
+            $logdir = "docs\testbed\run-results"
+            Select-String -Path "$logdir\test-0b-$ts-bridge.log" `
+              -Pattern "Radio2-Edge\] ready|RX-AUDIT diag.*getErrors|startReceive|\[MT\] channel"
+
+  VERIFY:   Four matching lines appear:
+
+   [6a] "[Radio2-Edge] ready — <FREQ> MHz  BW 812.5 kHz  SF11  CR4/5
         13 dBm  sync 0x2B  2.4GHz"
-        → Frequency must be 2403.594 (or close).
+        → FREQ must match T3S3 operating frequency from Step 2 (±0.001 MHz).
         → "2.4GHz" tag at end confirms is2g4 branch DID trigger.
-        → If "sub-GHz" appears or frequency wrong, portal save did not
-          apply. STOP, redo Step 4.
+        → If "sub-GHz" tag appears OR frequency differs, portal save did not
+          apply. STOP, redo Step 5.
 
-   [5b] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
+   [6b] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
         state=0 errors=0x____"
         → state=0 required.
-        → Note errors value (may differ from sub-GHz 0x0020 since the
-          chip's RX path is now on RFIO_HF, not LF).
+        → Errors value may differ from sub-GHz 0x0020 since the chip's RX
+          path is now on RFIO_HF, not LF. Note actual value.
 
-   [5c] "[Radio2-Edge] startReceive() = 0"
+   [6c] "[Radio2-Edge] startReceive() = 0"
         → Required.
 
-   [5d] A 2.4 GHz Meshtastic channel is registered in the bridge channel
-        table (look for [MT] channel="..." lines).
-        → The channel must match what the T3S3 is configured for.
-        → If the T3S3 is on the public 2.4 GHz LongFast channel, that
-          channel's hash must be registered on the bridge so it can
-          decode T3S3-sourced packets.
-        → RECORD: T3S3 channel name=`_______` hash=`0x__`
-                  bridge has same channel registered: Y/N
+   [6d] "[MT] channel=\"<NAME>\" hash=0x<HH>" — at least one [MT] channel
+        line whose channel matches what the T3S3 reported in Step 2.
+        → If hash differs from what T3S3 uses, R2's decoded packets won't
+          surface as "[R2 decoded]" events. (Demod will still work, but
+          you won't see decoded payload.)
 
-  RECORD:   All four precondition checks confirmed Y/N: ____
-            If any N: STOP. Do not proceed to Step 6.
+  RECORD:   All four preconditions Y/N: ____
+            R2 actual frequency in boot log:  _____ MHz
+            R2 actual errors value:           `0x____`
+            Bridge [MT] channel name/hash:    `_______` / `0x__`
 
-STEP 6.  Confirm T3S3 is actively TXing on 2.4 GHz before observation
-  COMMAND:  meshtastic --port COM5 --sendtext "Test 0b sanity check"
-  VERIFY:   T3S3 CLI reports "Sending text...". The T3S3 should also show
-            a TX indicator (LED or serial msg).
-  RECORD:   T3S3 TX confirmed alive at 2.4 GHz: Y/N: ____
+STEP 7.  Confirm T3S3 is alive on 2.4 GHz with a sanity ping
+  COMMAND:
+            meshtastic --port COM5 --sendtext "Test 0b sanity check" 2>&1 |
+              Tee-Object -FilePath "$logdir\test-0b-$ts-t3s3-sends.log"
+  VERIFY:   T3S3 CLI prints "Sending Text Message..." without error.
+  RECORD:   T3S3 TX confirmed: Y/N: ____
 
-STEP 7.  Start a 5-minute observation window
-  ACTION:   Note start timestamp.
-            During the 5 minutes, send 3 distinct T3S3 messages spaced
-            ~60 s apart:
-              meshtastic --port COM5 --sendtext "Test 0b #1"
-              meshtastic --port COM5 --sendtext "Test 0b #2"
-              meshtastic --port COM5 --sendtext "Test 0b #3"
-  RECORD:   Start timestamp: _________  End timestamp: _________
+STEP 8.  Start the 5-minute observation window
+  ACTION:   Note start time. Bridge monitor stays running (Step 6 window).
+  COMMAND (in the second PowerShell window):
+            meshtastic --port COM5 --sendtext "Test 0b #1" 2>&1 |
+              Add-Content "$logdir\test-0b-$ts-t3s3-sends.log"
+            Start-Sleep -Seconds 60
+            meshtastic --port COM5 --sendtext "Test 0b #2" 2>&1 |
+              Add-Content "$logdir\test-0b-$ts-t3s3-sends.log"
+            Start-Sleep -Seconds 60
+            meshtastic --port COM5 --sendtext "Test 0b #3" 2>&1 |
+              Add-Content "$logdir\test-0b-$ts-t3s3-sends.log"
+            Start-Sleep -Seconds 120
+            # Total elapsed: 5 minutes
 
-STEP 8.  Stop monitor and save complete log
-  ACTION:   Ctrl-C. Save to:
-            docs/testbed/run-results/test-0b-<timestamp>.log
+  RECORD:   Start timestamp (when Send #1 ran):  _________
+            End timestamp:                       _________
+
+STEP 9.  Stop bridge monitor and confirm log captured
+  ACTION:   In the FIRST PowerShell window (the one running pio device monitor),
+            press Ctrl-C to exit.
+  COMMAND:
+            Get-ChildItem "$logdir\test-0b-$ts-bridge.log" | Format-List Length, LastWriteTime
+            (Get-Content "$logdir\test-0b-$ts-bridge.log" | Measure-Object -Line).Lines
+  VERIFY:   File exists, line count >50.
+  RECORD:   Log path:  $logdir\test-0b-$ts-bridge.log
+            Line count: _________
 ```
 
 #### Step verification — fill in BEFORE analyzing data
 
 | Step | Precondition | VERIFIED? (Y/N) | Notes |
 |---|---|---|---|
-| 1 | T3S3 at 2.4 GHz Meshtastic LongFast | _____ | freq `____` MHz, node `!____` |
-| 2 | XIAO powered down for antenna swap | _____ | |
-| 3 | Antenna physically swapped pad 23 → pad 2 | _____ | |
-| 4 | Portal save accepted R2 = 2.4 GHz | _____ | |
-| 5a | R2 boot log shows 2403.594 MHz, "2.4GHz" tag | _____ | |
-| 5b | getErrors state=0 | _____ | actual errors: `0x____` |
-| 5c | startReceive() = 0 | _____ | |
-| 5d | T3S3's 2.4 GHz channel registered on bridge | _____ | T3S3 hash=`0x__` bridge hash=`0x__` |
-| 6 | T3S3 confirmed alive on 2.4 GHz | _____ | |
-| 7 | 3 T3S3 messages sent during window | _____ | |
-| 8 | Complete log saved | _____ | path: `__________` |
+| 1 | T3S3 reconfig command succeeded | _____ | |
+| 2 | T3S3 actual operating freq known | _____ | freq `____` MHz, node `!____` |
+| 3 | XIAO powered down for antenna swap | _____ | |
+| 4 | Antenna physically swapped pad 23 → pad 2 | _____ | |
+| 5 | Portal save accepted R2 = 2.4 GHz | _____ | |
+| 6a | R2 boot log shows expected freq, "2.4GHz" tag | _____ | freq in log: `____` MHz |
+| 6b | getErrors state=0 | _____ | actual errors: `0x____` |
+| 6c | startReceive() = 0 | _____ | |
+| 6d | T3S3's 2.4 GHz channel registered on bridge | _____ | T3S3 hash=`0x__` bridge hash=`0x__` |
+| 7 | T3S3 confirmed alive (sanity-check sendtext) | _____ | |
+| 8 | 3 T3S3 messages sent during window | _____ | start: `____` end: `____` |
+| 9 | Log file saved with ≥50 lines | _____ | line count: `____` |
 
 **If ANY row above is N → STOP. Test 0b is INVALID. Do not proceed to data
 analysis. Fix the failed precondition and re-execute from the failed step.**
 
 #### Data analysis (only run after every verification row is Y)
 
+PowerShell commands; run from project root with `$ts` set to your session timestamp:
+
+```powershell
+$ts = "<paste your session timestamp>"
+$log = "docs\testbed\run-results\test-0b-$ts-bridge.log"
+
+# ANALYSIS 1 — Count R2 (LR1121) RX events from T3S3 at 2.4 GHz
+$r2_demod = Select-String -Path $log -Pattern "Radio2-Edge\] read: pktLen=\d+"
+$r2_decoded = Select-String -Path $log -Pattern "\[R2 decoded\] Meshtastic src=0x[0-9A-Fa-f]{8}"
+$r2_crc_err = Select-String -Path $log -Pattern "Radio2-Edge\] read: pktLen=\d+ state=-7"
+
+# Replace <T3S3_HEX> with the hex representation of T3S3 node ID
+$T3S3_HEX = "<paste T3S3 8-char hex here (no ! prefix)>"
+$r2_from_t3s3   = $r2_decoded | Where-Object { $_.Line -match "src=0x$T3S3_HEX" }
+$r2_self_echo   = $r2_decoded | Where-Object { $_.Line -match "src=0x75D7AC1C" }
+$r2_other       = $r2_decoded | Where-Object {
+                                $_.Line -notmatch "src=0x$T3S3_HEX" -and
+                                $_.Line -notmatch "src=0x75D7AC1C"
+                              }
+
+"R2 total demod events (pktLen>0):           $($r2_demod.Count)"
+"R2 successful decodes:                       $($r2_decoded.Count)"
+"  from T3S3 (src=0x$T3S3_HEX):               $($r2_from_t3s3.Count)"
+"  self-echo (src=0x75D7AC1C):                $($r2_self_echo.Count)"
+"  other:                                     $($r2_other.Count)"
+"R2 CRC mismatches (state=-7):                $($r2_crc_err.Count)"
 ```
-ANALYSIS 1.  Count R2 (LR1121) RX events from T3S3
-  Search log for:  [R2 RX]  OR  [Radio2-Edge] read: pktLen=
-  For each event with pktLen > 0, parse src field.
-  RECORD: events where src = T3S3 node ID:                              _____
-  RECORD: events where src = 0x75D7AC1C (self-echo, if any):            _____
-  RECORD: events where src = other:                                     _____
-  RECORD: events with pktLen > 0 but CRC mismatch (state=-7):           _____
-```
+
+#### Record analysis results
+
+| Quantity | Value |
+|---|---|
+| R2 total demod events (pktLen > 0) | _____ |
+| R2 successful decodes total | _____ |
+| R2 decodes from T3S3 | _____ |
+| R2 self-echo decodes | _____ |
+| R2 other-source decodes | _____ |
+| R2 CRC mismatches (state=-7) | _____ |
 
 #### Pass / fail determination
 
