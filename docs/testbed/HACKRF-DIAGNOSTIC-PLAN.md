@@ -140,108 +140,295 @@ The order is intentional: confirm sub-GHz reproduces the documented failure firs
 
 ---
 
-### Test 0a — Sub-GHz Baseline (~5 min, sanity-check re-verification)
+### Test 0a — Sub-GHz Baseline (~5 min execution + ~5 min setup verification)
 
-**Background:** Runs 0/2/3/5/6/7/8 have all bench-tested sub-GHz RX with various firmware treatments. Every one failed identically — zero OTA RX from distant Meshtastic traffic despite R1 (SX1262) capturing the same traffic at -53 to -80 dBm. This re-verification confirms the failure mode still reproduces with current committed firmware (locked switch table + `LR1121_RX_AUDIT_RUN=0` + `LR1121_BRUTEFORCE_RX_DIOMASK` default).
+**Goal:** confirm Runs 0–8 sub-GHz failure mode still reproduces with current committed firmware. Reference: T3S3 LR1121 (independent LR1121 at same Meshtastic LongFast preset) and R1 SX1262 (sub-GHz reference radio).
 
-**Setup:**
+#### Procedure (do each step in order; verify before proceeding)
 
-- Wio-LR1121 IPEX pigtail on module pad 23 (`SUBG_RF`) — its existing configuration
-- Wio-LR1121 firmware at sub-GHz default: `LORA_RADIO2_FREQUENCY=906.875f`, BW 250 / SF 11 / CR 4/5 / sync 0x2B (Meshtastic LongFast)
-- No HackRF, no SDR, no test equipment — just the bench running normally
+```
+STEP 1.  Build current firmware
+  COMMAND:  pio run
+  VERIFY:   Build succeeds with no errors. Note the commit hash at HEAD.
+  RECORD:   Commit hash: ____________
 
-**Procedure:**
+STEP 2.  Flash device
+  COMMAND:  pio run -t upload
+  VERIFY:   Upload succeeds.
 
-1. Boot the bridge with current `lr1121-phase1` firmware (commit `4e1e300` or later).
-2. Confirm the chip-init log line shows the corrected switch table: `MODE_RX = D5=1 D6=0 D7=0 D8=0 D10=0` and `[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors() state=0 errors=0x0020`.
-3. Run for **5 minutes** with the serial monitor open. The bench is exposed to live Meshtastic neighborhood traffic at sub-GHz throughout.
-4. Count R1 (SX1262) OTA RX events vs R2 (LR1121) OTA RX events.
+STEP 3.  Open serial monitor
+  COMMAND:  pio device monitor
+  VERIFY:   Connects at 115200 baud.
 
-**Pass / fail criterion:**
+STEP 4.  Capture boot log and verify firmware preconditions
+  ACTION:   Power-cycle the device. Capture serial output from "[setup]" line
+            through "Bridge active." line.
+  VERIFY:   The following SIX lines appear EXACTLY as shown (allowing for
+            timestamps and unique IDs):
 
-- **EXPECTED (matches Runs 0–8):** R1 captures multiple distant OTA packets (typically 5–15 over 5 min from `!62D90E80`, `!67A923CA`, `!3D3A87A3`, `!148F4D57`); R2 captures only its own near-field self-echo of R1's NodeInfo TX (one event at ~-60 dBm) and zero distant traffic. Sub-GHz failure reproduces cleanly with current firmware.
-- **UNEXPECTED:** R2 starts capturing distant OTA traffic. This would mean the failure mode is no longer reproducing — investigate what changed (recent commit, accidental config tweak, hardware change) before proceeding to any HackRF testing.
-- **PARTIAL:** R2 captures 1–2 distant packets but mostly misses everything R1 catches. This would indicate marginal improvement; rare but worth flagging in the result log.
+   [4a] "[setup] Radio1 = SX1262, Radio2 = LR1121"
+        → R2 chip-detect must be LR1121. If not, NVS chip-type override is
+          wrong. STOP, fix via portal.
 
-#### Test 0a result — fill in
+   [4b] "[MT] channel=\"<NAME-A>\" hash=0x<HH-A> ..."
+        "[MT] channel=\"<NAME-B>\" hash=0x<HH-B> ..."
+        → TWO distinct [MT] channel lines must appear.
+        → HH-A != HH-B (different hashes).
+        → If only one [MT] line OR identical hashes, the runtime rules
+          checker will drop packets. STOP, set R2 to distinct MT channel
+          name via captive portal, then re-flash and restart Step 1.
 
-| Observation | Value |
-|---|---|
-| Firmware commit | _____ |
-| Test duration (min) | 5 |
-| R1 (SX1262) distant OTA packets received | _____ |
-| R1 RSSI range observed (dBm) | _____ to _____ |
-| R2 (LR1121) distant OTA packets received (`src` ≠ `0x75D7AC1C`) | _____ |
-| R2 self-echo events (`src` = `0x75D7AC1C`) | _____ |
-| Reproduces Run 7/8 baseline failure? | yes / no / partial |
-| `getErrors()` value at boot | _____ |
+   [4c] "[Radio1-B2B] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5  20 dBm
+        sync 0x2B"
+        → R1 SX1262 on Meshtastic LongFast. Must match exactly.
 
-If "yes" → proceed to Test 0b. If "no" → stop, investigate the change before any HackRF testing.
+   [4d] "[Radio2-Edge] installing RF switch table: MODE_RX = D5=1 D6=0
+        D7=0 D8=0 D10=0 (BRUTEFORCE_RX_DIOMASK=1)"
+        → Seeed-authoritative locked switch table.
+
+   [4e] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
+        state=0 errors=0x0020"
+        → state=0 means SPI succeeded; errors=0x0020 is the persistent
+          HF_XOSC_START_ERR sticky bit (expected on TCXO-fitted chips).
+        → If state != 0 OR errors has bits other than 0x0020 set, STOP and
+          report. Failure modality has changed since Run 8.
+
+   [4f] "[Radio2-Edge] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5
+        20 dBm  sync 0x2B  sub-GHz"
+        → R2 LR1121 modem params confirmed at Meshtastic LongFast sub-GHz.
+        → "sub-GHz" tag at end confirms is2g4 branch did NOT trigger.
+
+  RECORD:   All six precondition lines confirmed Y/N: ____
+            If any N: STOP. Do not proceed to Step 5.
+
+STEP 5.  Confirm T3S3 reference radio is alive and transmitting
+  COMMAND:  meshtastic --port COM5 --info
+  VERIFY:   T3S3 connects, reports its node ID and current RX/TX state.
+  RECORD:   T3S3 node ID (8-char hex):  !________
+
+STEP 6.  Start a 5-minute observation window
+  ACTION:   Note start timestamp. Keep serial monitor open and unattended for
+            5 minutes. During this window:
+            (a) Trigger T3S3 to TX 3 distinct messages spaced ~60 s apart
+                via:  meshtastic --port COM5 --sendtext "Test 0a #1"
+                      meshtastic --port COM5 --sendtext "Test 0a #2"
+                      meshtastic --port COM5 --sendtext "Test 0a #3"
+            (b) Allow neighborhood OTA traffic to populate naturally.
+  VERIFY:   T3S3 CLI reports "Sending text..." for each of the 3 sends.
+  RECORD:   Start timestamp: _________  End timestamp: _________
+
+STEP 7.  Stop monitor and save complete log
+  ACTION:   Ctrl-C to exit monitor. Save the captured log to a file:
+            docs/testbed/run-results/test-0a-<timestamp>.log
+  VERIFY:   Log file contains the boot lines from Step 4 plus the
+            5-minute window from Step 6.
+```
+
+#### Step verification — fill in BEFORE analyzing data
+
+This catches DoE violations before they contaminate analysis. If any row is
+not VERIFIED, the test is INVALID and must be re-run.
+
+| Step | Precondition | VERIFIED? (Y/N) | Notes |
+|---|---|---|---|
+| 1 | Firmware built clean | _____ | commit `__________` |
+| 2 | Flash succeeded | _____ | |
+| 4a | R2 chip = LR1121 | _____ | |
+| 4b | Two MT channels with distinct hashes | _____ | hash-A=`0x__` hash-B=`0x__` |
+| 4c | R1 at Meshtastic LongFast 906.875 | _____ | |
+| 4d | R2 switch table = D5=1 D6=0 ... | _____ | |
+| 4e | getErrors state=0 errors=0x0020 | _____ | actual: `0x____` |
+| 4f | R2 at Meshtastic LongFast 906.875 sub-GHz | _____ | |
+| 5 | T3S3 node ID captured | _____ | `!________` |
+| 6 | 3 T3S3 messages sent during window | _____ | |
+| 7 | Complete log saved | _____ | path: `__________` |
+
+**If ANY row above is N → STOP. Test 0a is INVALID. Do not proceed to data
+analysis. Fix the failed precondition and re-execute from Step 1.**
+
+#### Data analysis (only run after every Step-verification row above is Y)
+
+```
+ANALYSIS 1.  Count R1 (SX1262) RX events
+  Search log for:  [R1 RX]
+  RECORD: count = _____, RSSI range = ____ to ____ dBm
+  RECORD: distinct source node IDs seen: _________________________
+
+ANALYSIS 2.  Count R2 (LR1121) RX events with EXTERNAL src
+  Search log for:  [R2 RX]
+  For each event, parse the "src=0x________" field.
+  RECORD: events where src = 0x75D7AC1C (self-echo of own bridge):     _____
+  RECORD: events where src = T3S3 node ID:                              _____
+  RECORD: events where src = any other external node (neighborhood):    _____
+  RECORD: total external RX events (sum of last two):                   _____
+
+ANALYSIS 3.  Compute the deficit
+  Packets R1 caught that R2 missed = (R1 count) − (R2 external count)
+  RECORD: deficit count = _____
+```
+
+#### Pass / fail determination
+
+| R2 external RX events | R1 external RX events | Outcome | Action |
+|---|---|---|---|
+| 0 | ≥ 3 | **EXPECTED** — reproduces Run 7/8 failure | Proceed to Test 0b |
+| 1–2 | ≥ 5 | **PARTIAL** — marginal improvement vs Run 7/8 | Flag for review; investigate firmware delta vs commit 8de16ac before proceeding |
+| ≥ 3 | ≥ 3 | **UNEXPECTED** — sub-GHz appears to work | STOP. Compare firmware delta vs commit 8de16ac. Find what changed. |
+| 0 | 0 | **INDETERMINATE** — no OTA traffic in window | Re-run Test 0a at a different time of day with confirmed traffic |
 
 ---
 
-### Test 0b — 2.4 GHz Baseline Bring-Up (~15 min)
+### Test 0b — 2.4 GHz Baseline (~15 min execution + ~10 min setup)
 
-**Goal:** answer the single most important open question in the project — *does the Wio-LR1121 receive at all on its production-intended 2.4 GHz band?* If yes, Phase 1 is essentially unblocked; sub-GHz characterization becomes documentation work, not critical path. If no, we have a new failure to characterize (likely different from the sub-GHz failure since the 2.4 GHz path is electrically independent).
+**Goal:** answer whether the Wio-LR1121 receives at all on its production-intended 2.4 GHz band. Reference: T3S3 LR1121 reconfigured for 2.4 GHz Meshtastic (or T-Watch S3 SX1280 alternate).
 
-**No HackRF needed for this test.** The T3S3 LR1121 on the bench provides 2.4 GHz Meshtastic OTA traffic; we simply listen for it on the Wio-LR1121.
+**Prerequisite:** Test 0a completed with EXPECTED or PARTIAL outcome.
 
-### Test 0b setup
+#### Procedure (do each step in order; verify before proceeding)
 
-1. **Physical antenna swap (only after Test 0a is complete):**
-   - Disconnect the Wio-LR1121's existing IPEX pigtail from **module pad 23 (`SUBG_RF`)**.
-   - Connect a fresh IPEX pigtail (or move the existing one) to **module pad 2 (`2.4G_RF`)** — this is the 2.4 GHz RF port. Note: pad 2 is physically separate from pad 23; consult the Wio-LR1121 module datasheet pinout or KiCad library for the exact location. They are NOT interchangeable.
-   - Connect a 2.4 GHz IPEX antenna to the other end of that pigtail (any standard WiFi/BT IPEX antenna).
-   - The Wio-SX1262 sibling stays unchanged on its sub-GHz antenna.
+```
+STEP 1.  Reconfigure T3S3 for 2.4 GHz Meshtastic
+  COMMAND:  meshtastic --port COM5 --set lora.region 4 \
+                                    --set lora.use_preset true \
+                                    --set lora.modem_preset LONG_FAST
+            (region 4 = LORA_24, 2.4 GHz worldwide ISM band)
+  VERIFY:   meshtastic --port COM5 --get lora reports:
+            lora.region: 4
+            lora.bandwidth: 812.5  (or 812)
+            lora.spread_factor: 11
+            lora.coding_rate: 5
+  RECORD:   T3S3 frequency reported: ________ MHz
+            T3S3 node ID:              !________
 
-2. **Firmware reconfiguration:**
-   - Set Radio 2 (LR1121) parameters to match the T3S3 LR1121's 2.4 GHz Meshtastic preset. Confirm what preset the T3S3 is on first — likely **LongFast 2.4G** (default) or **ShortFast 2.4G**. Standard Meshtastic 2.4 GHz LongFast slot 0 parameters:
-     - **Frequency:** 2403.59375 MHz (computed by `RegionPreset.h::slotFrequency2G4()`)
-     - **Bandwidth:** 812.5 kHz (Meshtastic 2.4G wideLora preset)
-     - **SF:** 11
-     - **CR:** 5 (4/5)
-     - **Sync word:** 0x2B
-     - **TX power:** ≤ +13 dBm (region-exempt 2.4 GHz cap, already enforced by `BridgeConfig` portal validation)
-   - Set via the portal at runtime (preferred — `BridgeConfig` accepts 2400–2500 MHz for LR1121 radios) or rebuild firmware with updated `LORA_RADIO2_*` defines in `platformio.ini`.
-   - Keep `LR1121_RX_AUDIT_RUN=0` (baseline, no firmware treatments stacked) — Run 6's Meshtastic-style stack is sub-GHz-specific reasoning and shouldn't be assumed to apply at 2.4 GHz.
+STEP 2.  Power down Wio-LR1121 bridge
+  ACTION:   Disconnect XIAO USB.
+  VERIFY:   Power LED off.
 
-3. **Verify T3S3 LR1121 is actively transmitting on the same preset.** Use the Meshtastic app, the T3S3's serial monitor, or trigger a message from a phone connected to the T3S3.
+STEP 3.  Physical antenna swap
+  ACTION:   (a) Disconnect IPEX pigtail from Wio-LR1121 module pad 23
+                (the SUBG_RF port currently in use).
+            (b) Connect IPEX pigtail to Wio-LR1121 module pad 2
+                (the 2.4G_RF port).
+            (c) Connect 2.4 GHz IPEX antenna to the SMA end of the pigtail.
+  VERIFY:   Pigtail is firmly clicked into pad 2 (audible click on IPEX).
+            2.4 GHz antenna is screwed in finger-tight.
+            R1 (SX1262) antenna untouched.
+  RECORD:   Antenna swap confirmed visually: Y/N: ____
 
-### Procedure
+STEP 4.  Reconfigure R2 to 2.4 GHz Meshtastic via captive portal
+  ACTION:   (a) Power on XIAO.
+            (b) Connect to its WiFi AP (SSID from boot log).
+            (c) Open captive portal in browser.
+            (d) Set Radio 2:
+                - Chip: LR1121
+                - Frequency: 2403.59375 MHz (LongFast 2.4G slot 0)
+                - Bandwidth: 812.5 kHz
+                - Spreading factor: 11
+                - Coding rate: 5
+                - Sync word: 0x2B
+                - TX power: 13 dBm (2.4 GHz region cap)
+                - MT channel name: "longfast2g" (or any name distinct from R1)
+            (e) Save. Device reboots automatically.
+  VERIFY:   Portal save confirms "Configuration saved" without validation errors.
+  RECORD:   Portal save success: Y/N: ____
+            If N, record error message: _________________________________
 
-1. Boot the Wio-LR1121 bridge firmware at the new 2.4 GHz configuration.
-2. Confirm chip detection and switch-table install at 2.4 GHz in the serial log:
-   - Expected: `[Radio2-Edge] installing RF switch table: MODE_RX = D5=1 D6=0 ...` — but note that at 2.4 GHz the `is2g4` branch in `WioLR1121::begin()` triggers (`_config.frequency > 1000.0f`) and the chip uses the `RFIO_HF` path, NOT the SKY13373. The switch table install still runs but is effectively a no-op for the 2.4 GHz path.
-   - Expected: `[Radio2-Edge] ready — 2403.5XXX MHz BW 812.5 kHz SF11 CR4/5` (or similar — confirm the LR1121 driver accepts the 2.4 GHz parameters cleanly).
-   - Expected: `[Radio2-Edge] startReceive() = 0`.
-3. Send a Meshtastic message from the T3S3 LR1121 (via its phone client, BLE, or any connected source) to the public channel.
-4. Watch the Wio-LR1121's serial log for **at least 5 minutes** for any RX activity. Recommended: also send several test messages from the T3S3 at different times so you have multiple opportunities to capture RX events.
+STEP 5.  Capture boot log and verify 2.4 GHz preconditions
+  ACTION:   Open serial monitor (pio device monitor). Power-cycle XIAO.
+            Capture from "[setup]" through "Bridge active.".
+  VERIFY:   The following lines appear:
 
-### Test 0b pass / fail criterion
+   [5a] "[Radio2-Edge] ready — 2403.594 MHz  BW 812.5 kHz  SF11  CR4/5
+        13 dBm  sync 0x2B  2.4GHz"
+        → Frequency must be 2403.594 (or close).
+        → "2.4GHz" tag at end confirms is2g4 branch DID trigger.
+        → If "sub-GHz" appears or frequency wrong, portal save did not
+          apply. STOP, redo Step 4.
 
-- **PASS — Phase 1 unblocked:** any `[Radio2-Edge] read: pktLen=N>0` event with `src` from the T3S3 LR1121's node ID (not the bridge's own `0x75D7AC1C`). The Wio-LR1121 successfully demodulated a 2.4 GHz OTA packet from the known-good source. Phase 1 deliverable is essentially achievable; sub-GHz failure becomes a documented quirk, not a blocker.
-- **FAIL — 2.4 GHz also broken:** zero RX events from the T3S3 over the 5-minute window. The chip's RX path is broken at both bands. Proceed to Tests C/A/B at 2.4 GHz with the HackRF to characterize the 2.4 GHz failure independently — it may have a different root cause than sub-GHz.
-- **INCONCLUSIVE — RX events but garbled:** `pktLen > 0` but CRC mismatches or decode failures. Likely a sync word / preamble length / coding-rate mismatch between the Wio-LR1121 and T3S3 firmware presets. Adjust modem parameters to exactly match and retry. This is a configuration problem, not a hardware failure.
+   [5b] "[Radio2-Edge] [RX-AUDIT diag] post-setRfSwitchTable getErrors()
+        state=0 errors=0x____"
+        → state=0 required.
+        → Note errors value (may differ from sub-GHz 0x0020 since the
+          chip's RX path is now on RFIO_HF, not LF).
 
-### Combined Test 0 decision branches
+   [5c] "[Radio2-Edge] startReceive() = 0"
+        → Required.
 
-- **0a EXPECTED + 0b PASS** → Phase 1 unblocked. Stop HackRF testing for the 2.4 GHz band; it's working. Sub-GHz HackRF Tests A/B remain useful for closing the sub-GHz investigation and giving Seeed numerical evidence, but they're documentation, not critical path. Plan a v9.1 release with the LR1121 production-locked to 2.4 GHz.
-- **0a EXPECTED + 0b FAIL** → Phase 1 deliverable is at risk. Both bands need characterization. Proceed with full Tests A/B at both bands. The 2.4 GHz failure mode is a new variable; reframe the Seeed follow-up to ask about 2.4 GHz RX issues in addition to sub-GHz.
-- **0a UNEXPECTED (sub-GHz starts working)** → stop, investigate the firmware/hardware change before any other testing. Compare against commit `8de16ac` state.
-- **0a EXPECTED + 0b INCONCLUSIVE (CRC mismatches at 2.4 GHz)** → modem parameter mismatch between Wio-LR1121 and T3S3. Fix the config first, retry 0b. Don't progress to HackRF tests until 0b is unambiguous.
+   [5d] Two distinct [MT] channel lines with distinct hashes.
+        → Same rule as Test 0a Step 4b.
 
-### Test 0b result — fill in
+  RECORD:   All four precondition checks confirmed Y/N: ____
+            If any N: STOP. Do not proceed to Step 6.
 
-| Observation | Value |
-|---|---|
-| T3S3 LR1121 preset used | _____ |
-| Wio-LR1121 frequency set (MHz) | _____ |
-| Wio-LR1121 BW / SF / CR / sync configured | _____ / _____ / _____ / _____ |
-| Chip-detection / switch-install / startReceive in log | _____ / _____ / _____ |
-| Number of T3S3 messages sent during the 5-minute window | _____ |
-| RX events with `pktLen > 0` and external `src` | _____ |
-| RX events with `pktLen > 0` but CRC mismatch | _____ |
-| Outcome | **PASS / FAIL / INCONCLUSIVE** |
+STEP 6.  Confirm T3S3 is actively TXing on 2.4 GHz before observation
+  COMMAND:  meshtastic --port COM5 --sendtext "Test 0b sanity check"
+  VERIFY:   T3S3 CLI reports "Sending text...". The T3S3 should also show
+            a TX indicator (LED or serial msg).
+  RECORD:   T3S3 TX confirmed alive at 2.4 GHz: Y/N: ____
+
+STEP 7.  Start a 5-minute observation window
+  ACTION:   Note start timestamp.
+            During the 5 minutes, send 3 distinct T3S3 messages spaced
+            ~60 s apart:
+              meshtastic --port COM5 --sendtext "Test 0b #1"
+              meshtastic --port COM5 --sendtext "Test 0b #2"
+              meshtastic --port COM5 --sendtext "Test 0b #3"
+  RECORD:   Start timestamp: _________  End timestamp: _________
+
+STEP 8.  Stop monitor and save complete log
+  ACTION:   Ctrl-C. Save to:
+            docs/testbed/run-results/test-0b-<timestamp>.log
+```
+
+#### Step verification — fill in BEFORE analyzing data
+
+| Step | Precondition | VERIFIED? (Y/N) | Notes |
+|---|---|---|---|
+| 1 | T3S3 at 2.4 GHz Meshtastic LongFast | _____ | freq `____` MHz, node `!____` |
+| 2 | XIAO powered down for antenna swap | _____ | |
+| 3 | Antenna physically swapped pad 23 → pad 2 | _____ | |
+| 4 | Portal save accepted R2 = 2.4 GHz | _____ | |
+| 5a | R2 boot log shows 2403.594 MHz, "2.4GHz" tag | _____ | |
+| 5b | getErrors state=0 | _____ | actual errors: `0x____` |
+| 5c | startReceive() = 0 | _____ | |
+| 5d | Two MT channels with distinct hashes | _____ | hash-A=`0x__` hash-B=`0x__` |
+| 6 | T3S3 confirmed alive on 2.4 GHz | _____ | |
+| 7 | 3 T3S3 messages sent during window | _____ | |
+| 8 | Complete log saved | _____ | path: `__________` |
+
+**If ANY row above is N → STOP. Test 0b is INVALID. Do not proceed to data
+analysis. Fix the failed precondition and re-execute from the failed step.**
+
+#### Data analysis (only run after every verification row is Y)
+
+```
+ANALYSIS 1.  Count R2 (LR1121) RX events from T3S3
+  Search log for:  [R2 RX]  OR  [Radio2-Edge] read: pktLen=
+  For each event with pktLen > 0, parse src field.
+  RECORD: events where src = T3S3 node ID:                              _____
+  RECORD: events where src = 0x75D7AC1C (self-echo, if any):            _____
+  RECORD: events where src = other:                                     _____
+  RECORD: events with pktLen > 0 but CRC mismatch (state=-7):           _____
+```
+
+#### Pass / fail determination
+
+| R2 RX from T3S3 | R2 RX with CRC mismatch | Outcome | Implication |
+|---|---|---|---|
+| ≥ 1 | any | **PASS** | 2.4 GHz works. Phase 1 unblocked. |
+| 0 | ≥ 1 | **INCONCLUSIVE** | Demod fires but payload bad → modem-param mismatch. Re-check Step 1 matches Step 4. |
+| 0 | 0 | **FAIL** | 2.4 GHz also broken. Proceed to Tests A/B at 2.4 GHz with HackRF. |
+
+#### Combined Test 0 decision branches
+
+| 0a outcome | 0b outcome | Next action |
+|---|---|---|
+| EXPECTED | PASS | Phase 1 unblocked. Ship LR1121 production-locked to 2.4 GHz. Sub-GHz HackRF tests become optional Seeed-evidence work. |
+| EXPECTED | FAIL | Both bands broken. Proceed to full Tests A/B at both bands. Reframe Seeed follow-up to include 2.4 GHz failure question. |
+| EXPECTED | INCONCLUSIVE | Fix modem-param mismatch between Wio-LR1121 and T3S3; re-run 0b. |
+| PARTIAL | any | Stop, investigate firmware delta vs commit 8de16ac before trusting 0b result. |
+| UNEXPECTED | n/a | Sub-GHz drift detected. Stop, investigate, do not proceed to 0b. |
+| INDETERMINATE | n/a | Re-run 0a at different time. |
 
 ---
 
