@@ -177,13 +177,16 @@ STEP 4.  Capture boot log and verify firmware preconditions
         → R2 chip-detect must be LR1121. If not, NVS chip-type override is
           wrong. STOP, fix via portal.
 
-   [4b] "[MT] channel=\"<NAME-A>\" hash=0x<HH-A> ..."
-        "[MT] channel=\"<NAME-B>\" hash=0x<HH-B> ..."
-        → TWO distinct [MT] channel lines must appear.
-        → HH-A != HH-B (different hashes).
-        → If only one [MT] line OR identical hashes, the runtime rules
-          checker will drop packets. STOP, set R2 to distinct MT channel
-          name via captive portal, then re-flash and restart Step 1.
+   [4b] One or more "[MT] channel=" lines appear at boot, and at least
+        ONE of them MUST be the public LongFast channel:
+            channel="LongFast" hash=0x08 keyLen=16
+              key=d4f1bb3a20290759f0bcffabcf4e6901
+        → Without this channel registered, the bridge cannot decode any
+          neighborhood LongFast packet even if the LR1121 demodulates it.
+        → If you've also configured a second channel like "longfast2"
+          (hash=0x3A) for bridge cross-channel routing — that's fine,
+          both can coexist. Not required for the Test 0a diagnostic.
+        → RECORD which channels appear and their hashes.
 
    [4c] "[Radio1-B2B] ready — 906.875 MHz  BW 250.0 kHz  SF11  CR4/5  20 dBm
         sync 0x2B"
@@ -241,7 +244,7 @@ not VERIFIED, the test is INVALID and must be re-run.
 | 1 | Firmware built clean | _____ | commit `__________` |
 | 2 | Flash succeeded | _____ | |
 | 4a | R2 chip = LR1121 | _____ | |
-| 4b | Two MT channels with distinct hashes | _____ | hash-A=`0x__` hash-B=`0x__` |
+| 4b | "LongFast" hash=0x08 channel registered | _____ | other channels also seen: `_______` |
 | 4c | R1 at Meshtastic LongFast 906.875 | _____ | |
 | 4d | R2 switch table = D5=1 D6=0 ... | _____ | |
 | 4e | getErrors state=0 errors=0x0020 | _____ | actual: `0x____` |
@@ -361,8 +364,14 @@ STEP 5.  Capture boot log and verify 2.4 GHz preconditions
    [5c] "[Radio2-Edge] startReceive() = 0"
         → Required.
 
-   [5d] Two distinct [MT] channel lines with distinct hashes.
-        → Same rule as Test 0a Step 4b.
+   [5d] A 2.4 GHz Meshtastic channel is registered in the bridge channel
+        table (look for [MT] channel="..." lines).
+        → The channel must match what the T3S3 is configured for.
+        → If the T3S3 is on the public 2.4 GHz LongFast channel, that
+          channel's hash must be registered on the bridge so it can
+          decode T3S3-sourced packets.
+        → RECORD: T3S3 channel name=`_______` hash=`0x__`
+                  bridge has same channel registered: Y/N
 
   RECORD:   All four precondition checks confirmed Y/N: ____
             If any N: STOP. Do not proceed to Step 6.
@@ -398,7 +407,7 @@ STEP 8.  Stop monitor and save complete log
 | 5a | R2 boot log shows 2403.594 MHz, "2.4GHz" tag | _____ | |
 | 5b | getErrors state=0 | _____ | actual errors: `0x____` |
 | 5c | startReceive() = 0 | _____ | |
-| 5d | Two MT channels with distinct hashes | _____ | hash-A=`0x__` hash-B=`0x__` |
+| 5d | T3S3's 2.4 GHz channel registered on bridge | _____ | T3S3 hash=`0x__` bridge hash=`0x__` |
 | 6 | T3S3 confirmed alive on 2.4 GHz | _____ | |
 | 7 | 3 T3S3 messages sent during window | _____ | |
 | 8 | Complete log saved | _____ | path: `__________` |
