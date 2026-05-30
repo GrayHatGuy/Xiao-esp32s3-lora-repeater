@@ -127,16 +127,23 @@ Do this once. The configuration persists between sessions.
 
 ---
 
-## Test 0 — Dual-Band Baseline Bring-Up (~20 min total, NO HackRF required)
+## Test 0 — Dual-Band Baseline (~20 min total, NO HackRF required)
 
-**Goal:** establish a side-by-side baseline of Wio-LR1121 RX behavior on both bands using only natural / existing OTA traffic. No instrumentation needed — just antenna swaps, firmware reconfiguration, and serial monitoring. This grounds every subsequent HackRF measurement in a documented "what the bench observes naturally."
+**What each test does:**
 
-Run as **two sequential phases:**
+- **Test 0a (sub-GHz, ~5 min):** verify the Wio-LR1121 is still deaf at 906.875 MHz Meshtastic LongFast (same failure mode as prior 8 DOE runs — see [`LR1121-RX-INIT-AUDIT.md`](../../LR1121-RX-INIT-AUDIT.md) for what each prior run did and why they all failed).
+- **Test 0b (2.4 GHz, ~15 min):** first-ever 2.4 GHz test on the Wio-LR1121. Determines if Phase 1's intended production band works.
 
-- **Test 0a — sub-GHz baseline (~5 min):** quick re-verification of the existing 8-run audit conclusion using the latest committed firmware (Seeed-authoritative locked switch table + audit-run flag at baseline). Uses live Meshtastic neighborhood traffic that the SX1262 sibling captures as the in-band reference.
-- **Test 0b — 2.4 GHz baseline (~15 min):** first-ever 2.4 GHz bring-up of the Wio-LR1121, using the bench's LilyGO T3S3 LR1121 as the known-good 2.4 GHz Meshtastic OTA source.
+**Code changes required: NONE.** Build current HEAD, flash, run.
 
-The order is intentional: confirm sub-GHz reproduces the documented failure first, then physically swap antenna to 2.4 GHz. If sub-GHz suddenly works (it shouldn't, but if it does), that means something material changed between commit `8de16ac` (when Run 8 was last bench-executed) and now, and Test 0b should wait until that's understood.
+**Compile-time config: ALREADY DONE.** Commit `a81e10d` set Radio 2 platformio.ini defaults to Meshtastic LongFast (906.875 / 250 / SF 11 / 0x2B). For Test 0b, Radio 2 gets reconfigured to 2.4 GHz at runtime via the captive portal (not via code edits).
+
+**OTA traffic source:**
+
+- Test 0a: you actively send 3 messages from the T3S3 on COM5 via `meshtastic --sendtext` (controlled source), plus any neighborhood Meshtastic packets that arrive naturally during the window (passive bonus).
+- Test 0b: you actively send 3 messages from the T3S3 via `meshtastic --sendtext`. No ambient 2.4 GHz Meshtastic traffic expected. All OTA is driven by you.
+
+**Order:** Test 0a first, then 0b. If 0a fails to reproduce the prior 8-run failure, stop and figure out what changed before swapping antennas for 0b.
 
 ---
 
