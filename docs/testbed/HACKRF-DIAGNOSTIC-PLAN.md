@@ -1,14 +1,28 @@
-# HackRF + SDRAngel Diagnostic Plan — Wio-LR1121 RX Failure
+# HackRF + SDRAngel Diagnostic Plan — Wio-LR1121 RX Bring-Up (Dual-Band)
 
-**Purpose:** Use a HackRF One software-defined radio with SDRAngel's ChirpChat plugins to localize the Wio-LR1121's RX failure mode that the firmware DOE in [`../../LR1121-RX-INIT-AUDIT.md`](../../LR1121-RX-INIT-AUDIT.md) could not resolve from the chip side. Three tests, run in order, with concrete pass/fail criteria and result tables.
+**Purpose:** Localize the Wio-LR1121's RX failure mode that the firmware DOE in [`../../LR1121-RX-INIT-AUDIT.md`](../../LR1121-RX-INIT-AUDIT.md) could not resolve from the chip side. This document now covers **both** the bench-proven-broken **sub-GHz path** (LR1121 `RFI_P/N_LF` ↔ module pad 23 `SUBG_RF`, switched by the on-module SKY13373-460LF per V1=DIO5/V2=DIO6) **and** the **never-tested 2.4 GHz path** (LR1121 `RFIO_HF` ↔ module pad 2 `2.4G_RF`, NOT switched by the SKY13373).
 
-**Bench:** as documented in [`TESTBED.md`](TESTBED.md). The HackRF is added as an external instrument — the existing XIAO + Wio-SX1262 + Wio-LR1121 bridge stays running unmodified.
+The 2.4 GHz path is the **production-intended band per [`LR1121-SPEC.md`](../../LR1121-SPEC.md)** — Phase 1 design has the LR1121 operating at 2.4 GHz and the SX1262 sibling handling sub-GHz. Sub-GHz testing on the LR1121 was a debugging convenience (A/B comparison against the SX1262 reference) that surfaced a failure but does not gate Phase 1 shipping if 2.4 GHz works.
+
+**Four tests, sequenced for highest information-per-minute first:**
+
+| Test | Band | Equipment needed | ~Time | Information yield |
+|---|---|---|---|---|
+| **Test 0 — 2.4 GHz Baseline** | 2.4 GHz | T3S3 LR1121 (OTA source); 2.4 GHz IPEX antenna; firmware reconfig | 15 min | **Phase 1 deliverable status** |
+| **Test C — Environment Sweep** | Both | HackRF as receiver | 15 min | Ambient RF noise floor characterization |
+| **Test A — TX Power A/B** | Sub-GHz | HackRF as receiver; both Wio radios | 30 min | Matching-network-vs-chip-internal split |
+| **Test B — Sensitivity Floor** | Both | HackRF as TX; KT3 step attenuator; SMA-N adapters | 30 min/band | Numerical sensitivity deficit in dB |
+
+**Bench:** as documented in [`TESTBED.md`](TESTBED.md). The HackRF is added as an external instrument — the existing XIAO + Wio-SX1262 + Wio-LR1121 bridge stays running unmodified for sub-GHz tests. For 2.4 GHz tests the Wio-LR1121 IPEX pigtail physically moves from module pad 23 to module pad 2 (see Test 0 for details).
 
 **Equipment owned and assumed available:**
 
 - HackRF One SDR (1 MHz – 6 GHz, ±13 dBm TX max, 8-bit ADC, ~9 dB noise figure)
 - SDRAngel (latest release) with both **ChirpChat Demodulator** and **ChirpChat Modulator** plugins enabled. The demod page documents the plugin's parameter coverage and confirms a matching modulator exists.
-- **KT3-2N-90/1S step attenuator** — 0 to 90 dB in 1 dB steps, N-female connectors both ends, DC–3 GHz typical. Primary instrument for Test B.
+- **LilyGO T3S3 LR1121** — configured for 2.4 GHz Meshtastic, working RX + TX. Already on the bench. Used as the known-good OTA source for 2.4 GHz tests (Test 0 and Test B 2.4 GHz variant).
+- **LilyGO T-Watch S3** — SX1262 + SX1280 dual radio, both bands working. Backup 2.4 GHz OTA source via the SX1280; also can act as an independent 2.4 GHz reference receiver.
+- **2.4 GHz IPEX antenna** — any standard WiFi/Bluetooth IPEX (u.fl) antenna. Required for the Wio-LR1121 2.4 GHz tests; the current sub-GHz rubber-duck cannot be reused at 2.4 GHz.
+- **KT3-2N-90/1S step attenuator** — 0 to 90 dB in 1 dB steps, N-female connectors both ends, typically DC–3 GHz. **Verify the actual upper frequency limit before Test B at 2.4 GHz** — some KT3 variants stop at 1 GHz; the 2N-90/1S spec sheet should confirm 2.5 GHz coverage. If it does not cover 2.4 GHz cleanly, Test B at 2.4 GHz falls back to HackRF gain control + fixed pad chain.
 - **5 dB SMA fixed pad** — lives permanently on the HackRF TX port as VSWR protection during Test B.
 - **2× SMA-to-N adapters** (one SMA-male → N-male; one N-male → SMA-female) — to interface the KT3 (N-type) with the rest of the SMA-based bench. ~$10–15 on Amazon, DC–6 GHz rated.
 - **1× short SMA male/male jumper** (6–12 inches, RG-316 or better) — to connect the post-KT3 SMA-female adapter to an IPEX-SMA pigtail.
@@ -31,7 +45,17 @@ Total fixed insertion loss (excluding HackRF gain and KT3 setting): **~6 dB** = 
 
 **Dynamic range available:** HackRF IF gain swing (47 dB) + KT3 swing (90 dB) = **137 dB**. With HackRF TX at IF gain 47 dB (~+13 dBm) and KT3 at 90 dB, the power at the DUT antenna port is approximately **−83 dBm**. With HackRF IF gain 0 (~−40 dBm) and KT3 at 90 dB, it's approximately **−131 dBm** — at or below the LR1121 datasheet sensitivity spec of −134 dBm.
 
-**Total time estimate:** ~80 minutes for all three tests with note-taking, plus a one-time ~15 minutes for SDRAngel setup. (Test B is faster than the earlier free-space version because the KT3 sweep is 1 dB-resolution and immune to multipath.)
+**Total time estimate:**
+
+| Scenario | Time |
+|---|---|
+| SDRAngel one-time setup | ~15 min |
+| Test 0 (2.4 GHz baseline) alone | ~15 min |
+| Test 0 PASS → optional sub-GHz characterization (Tests C/A/B sub-GHz) | ~70 min more |
+| Test 0 PASS → optional 2.4 GHz characterization (Tests C/A/B 2.4 GHz) | ~70 min more |
+| Test 0 FAIL → full dual-band characterization (all Tests at both bands) | ~150 min more |
+| **Best-case session (Test 0 PASS, ship sub-GHz documentation)** | **~30 min** |
+| **Worst-case session (full dual-band characterization required)** | **~165 min** |
 
 ---
 
@@ -102,6 +126,69 @@ Do this once. The configuration persists between sessions.
 
 ---
 
+## Test 0 — 2.4 GHz Baseline Bring-Up (~15 min, NO HackRF required)
+
+**Goal:** answer the single most important open question in the project — *does the Wio-LR1121 receive at all on its production-intended 2.4 GHz band?* If yes, Phase 1 is essentially unblocked; sub-GHz characterization becomes documentation work, not critical path. If no, we have a new failure to characterize (likely different from the sub-GHz failure since the 2.4 GHz path is electrically independent).
+
+**No HackRF needed for this test.** The T3S3 LR1121 on the bench provides 2.4 GHz Meshtastic OTA traffic; we simply listen for it on the Wio-LR1121.
+
+### Setup
+
+1. **Physical antenna swap:**
+   - Disconnect the Wio-LR1121's existing IPEX pigtail from **module pad 23 (`SUBG_RF`)**.
+   - Connect a fresh IPEX pigtail (or move the existing one) to **module pad 2 (`2.4G_RF`)** — this is the 2.4 GHz RF port. Note: pad 2 is physically separate from pad 23; consult the Wio-LR1121 module datasheet pinout or KiCad library for the exact location. They are NOT interchangeable.
+   - Connect a 2.4 GHz IPEX antenna to the other end of that pigtail (any standard WiFi/BT IPEX antenna).
+   - The Wio-SX1262 sibling stays unchanged on its sub-GHz antenna.
+
+2. **Firmware reconfiguration:**
+   - Set Radio 2 (LR1121) parameters to match the T3S3 LR1121's 2.4 GHz Meshtastic preset. Confirm what preset the T3S3 is on first — likely **LongFast 2.4G** (default) or **ShortFast 2.4G**. Standard Meshtastic 2.4 GHz LongFast slot 0 parameters:
+     - **Frequency:** 2403.59375 MHz (computed by `RegionPreset.h::slotFrequency2G4()`)
+     - **Bandwidth:** 812.5 kHz (Meshtastic 2.4G wideLora preset)
+     - **SF:** 11
+     - **CR:** 5 (4/5)
+     - **Sync word:** 0x2B
+     - **TX power:** ≤ +13 dBm (region-exempt 2.4 GHz cap, already enforced by `BridgeConfig` portal validation)
+   - Set via the portal at runtime (preferred — `BridgeConfig` accepts 2400–2500 MHz for LR1121 radios) or rebuild firmware with updated `LORA_RADIO2_*` defines in `platformio.ini`.
+   - Keep `LR1121_RX_AUDIT_RUN=0` (baseline, no firmware treatments stacked) — Run 6's Meshtastic-style stack is sub-GHz-specific reasoning and shouldn't be assumed to apply at 2.4 GHz.
+
+3. **Verify T3S3 LR1121 is actively transmitting on the same preset.** Use the Meshtastic app, the T3S3's serial monitor, or trigger a message from a phone connected to the T3S3.
+
+### Procedure
+
+1. Boot the Wio-LR1121 bridge firmware at the new 2.4 GHz configuration.
+2. Confirm chip detection and switch-table install at 2.4 GHz in the serial log:
+   - Expected: `[Radio2-Edge] installing RF switch table: MODE_RX = D5=1 D6=0 ...` — but note that at 2.4 GHz the `is2g4` branch in `WioLR1121::begin()` triggers (`_config.frequency > 1000.0f`) and the chip uses the `RFIO_HF` path, NOT the SKY13373. The switch table install still runs but is effectively a no-op for the 2.4 GHz path.
+   - Expected: `[Radio2-Edge] ready — 2403.5XXX MHz BW 812.5 kHz SF11 CR4/5` (or similar — confirm the LR1121 driver accepts the 2.4 GHz parameters cleanly).
+   - Expected: `[Radio2-Edge] startReceive() = 0`.
+3. Send a Meshtastic message from the T3S3 LR1121 (via its phone client, BLE, or any connected source) to the public channel.
+4. Watch the Wio-LR1121's serial log for **at least 5 minutes** for any RX activity. Recommended: also send several test messages from the T3S3 at different times so you have multiple opportunities to capture RX events.
+
+### Pass / fail criterion
+
+- **PASS — Phase 1 unblocked:** any `[Radio2-Edge] read: pktLen=N>0` event with `src` from the T3S3 LR1121's node ID (not the bridge's own `0x75D7AC1C`). The Wio-LR1121 successfully demodulated a 2.4 GHz OTA packet from the known-good source. Phase 1 deliverable is essentially achievable; sub-GHz failure becomes a documented quirk, not a blocker.
+- **FAIL — 2.4 GHz also broken:** zero RX events from the T3S3 over the 5-minute window. The chip's RX path is broken at both bands. Proceed to Tests C/A/B at 2.4 GHz with the HackRF to characterize the 2.4 GHz failure independently — it may have a different root cause than sub-GHz.
+- **INCONCLUSIVE — RX events but garbled:** `pktLen > 0` but CRC mismatches or decode failures. Likely a sync word / preamble length / coding-rate mismatch between the Wio-LR1121 and T3S3 firmware presets. Adjust modem parameters to exactly match and retry. This is a configuration problem, not a hardware failure.
+
+### Decision branches from Test 0
+
+- **PASS** → Stop HackRF testing for the 2.4 GHz band; it's working. Sub-GHz HackRF Tests A/B remain useful for closing the sub-GHz investigation and giving Seeed numerical evidence, but they're documentation, not critical path. Plan a v9.1 release with the LR1121 production-locked to 2.4 GHz.
+- **FAIL** → Phase 1 deliverable is at risk. Both bands need characterization. Proceed with full Tests A/B at both bands. The 2.4 GHz failure mode is a new variable; reframe the Seeed follow-up to ask about 2.4 GHz RX issues in addition to sub-GHz.
+
+### Result — fill in
+
+| Observation | Value |
+|---|---|
+| T3S3 LR1121 preset used | _____ |
+| Wio-LR1121 frequency set (MHz) | _____ |
+| Wio-LR1121 BW / SF / CR / sync configured | _____ / _____ / _____ / _____ |
+| Chip-detection / switch-install / startReceive in log | _____ / _____ / _____ |
+| Number of T3S3 messages sent during the 5-minute window | _____ |
+| RX events with `pktLen > 0` and external `src` | _____ |
+| RX events with `pktLen > 0` but CRC mismatch | _____ |
+| Outcome | **PASS / FAIL / INCONCLUSIVE** |
+
+---
+
 ## Test C — Bench RF Environment Sweep (~10 min)
 
 **Goal:** rule out ambient RF interference at 906.875 MHz as a contributor to the LR1121 RX deficit.
@@ -132,6 +219,26 @@ Do this once. The configuration persists between sessions.
 
 - **PASS** (bench is RF-clean): peak − noise delta < 10 dB anywhere in 904–910 MHz. Test C is decorative; move on.
 - **FAIL** (bench is RF-hostile): persistent signal >10 dB above noise within 2 MHz of 906.875. This **could** be partly responsible for desensitizing the LR1121 (especially if it has weaker AGC than the SX1262). Document but continue — Tests A and B will quantify the actual deficit regardless.
+
+### Test C 2.4 GHz extension
+
+Repeat the environment sweep at the 2.4 GHz Meshtastic band:
+
+1. Change SDRAngel HackRF input center frequency to `2440 MHz` (covers 2402–2480 MHz, the main 2.4 GHz LoRa range).
+2. Sample rate `20000000 Sa/s`, max-hold averaging, 3 minute observation.
+3. Save screenshot to `docs/testbed/sdrangel-captures/test-c-ambient-2400-2480.png`.
+4. **Expect** to see significant ambient activity — Wi-Fi, Bluetooth, microwave ovens, etc. The 2.4 GHz ISM band is normally very noisy. The question is not "is it clean?" but "is there a strong narrowband interferer specifically at the Meshtastic 2.4G center frequency (2403.59375 MHz) that would specifically desensitize the LR1121?"
+
+#### 2.4 GHz environment result — fill in
+
+| Observation | Value |
+|---|---|
+| Noise floor across 2402–2480 MHz (dBFS, median) | _____ |
+| Peak amplitude at 2403.59375 MHz ±5 MHz over 3 min (dBFS) | _____ |
+| WiFi channels observed (CH1 = 2412, CH6 = 2437, CH11 = 2462) | _____ |
+| Subjective overall noisiness of the 2.4 GHz band | low / moderate / high |
+
+This data is mostly for the record — the 2.4 GHz band is always noisy and that noise floor is something both the T3S3 LR1121 and the Wio-LR1121 see equally. The A/B comparison in Tests A and B nullifies it.
 
 ---
 
@@ -206,6 +313,54 @@ Test A delta = LR1121 median peak dBFS − SX1262 median peak dBFS
 | **−15 dB or more** | RF front end is broken — matching network, switch, or RF trace fault. Both TX and RX are affected; the RX deficit is dominated by this. | RMA conversation. The module's hardware is electrically defective. |
 
 **Test A is the single most diagnostic experiment available to you. The result alone redirects the entire investigation.**
+
+### Test A 2.4 GHz extension
+
+**Run only if Test 0 PASSED** (proves Wio-LR1121 can at least RX at 2.4 GHz, which implies TX is also working at 2.4 GHz). If Test 0 FAILED, skip Test A 2.4 GHz — the Wio-LR1121 has no demonstrated 2.4 GHz functionality to characterize against.
+
+The SX1262 sibling radio cannot operate at 2.4 GHz, so the sub-GHz A/B methodology doesn't apply. Substitute the **T3S3 LR1121** as the reference radio — both DUT and reference are then LR1121 chips, so the comparison is directly meaningful.
+
+**Setup changes from sub-GHz Test A:**
+
+1. SDRAngel HackRF input center frequency: change to the 2.4 GHz Meshtastic frequency the Wio-LR1121 and T3S3 are configured for (e.g., **2403.59375 MHz** for LongFast 2.4G slot 0).
+2. Sample rate: **2 MS/s** (covers the 812.5 kHz Meshtastic 2.4G LongFast bandwidth with room to spare).
+3. ChirpChat Demodulator settings: **BW 812500 Hz, SF 11, CR 4/5, DE 2, sync 0x2B**.
+4. HackRF gain stages: **LNA 24 dB, VGA 20 dB, AMP OFF** (slightly higher LNA at 2.4 GHz because the 2.4 GHz ambient noise floor is generally higher and the HackRF's noise figure is slightly worse). These stay FIXED for the entire 2.4 GHz Test A.
+5. HackRF antenna position: **fixed**, equidistant from the Wio-LR1121's 2.4 GHz antenna and the T3S3 LR1121's antenna (both transmitters need to be at approximately equal RF distance from the HackRF for the comparison to be meaningful).
+
+**Procedure:**
+
+1. **Phase 1 — T3S3 reference TX:** Trigger T3S3 LR1121 TX bursts (Meshtastic message from its phone client). For each burst observed in SDRAngel: reset max-hold, capture peak dBFS, confirm ChirpChat decoded the packet, record. Capture at least 5 bursts. Note the T3S3's configured TX power.
+2. **Phase 2 — Wio-LR1121 DUT TX:** Trigger Wio-LR1121 TX bursts (send Meshtastic messages from any source that arrives via the bridge — same as sub-GHz Test A but at 2.4 GHz). Capture peak dBFS for at least 5 bursts. Confirm both radios were configured for the same TX power (`+13 dBm` if both at the 2.4 GHz region-exempt cap).
+3. Compute the delta: **`(Wio-LR1121 median peak dBFS) − (T3S3 LR1121 median peak dBFS)`**.
+
+#### 2.4 GHz TX A/B result tables — fill in
+
+**T3S3 LR1121 reference:**
+
+| Burst # | Peak dBFS | T3S3 TX power setting | Timestamp |
+|---|---|---|---|
+| 1 | _____ | _____ dBm | _____ |
+| 2 | _____ | _____ dBm | _____ |
+| 3 | _____ | _____ dBm | _____ |
+| 4 | _____ | _____ dBm | _____ |
+| 5 | _____ | _____ dBm | _____ |
+| **Median** | **_____** | — | — |
+
+**Wio-LR1121 DUT:**
+
+| Burst # | Peak dBFS | Wio-LR1121 TX power setting | Timestamp |
+|---|---|---|---|
+| 1 | _____ | _____ dBm | _____ |
+| 2 | _____ | _____ dBm | _____ |
+| 3 | _____ | _____ dBm | _____ |
+| 4 | _____ | _____ dBm | _____ |
+| 5 | _____ | _____ dBm | _____ |
+| **Median** | **_____** | — | — |
+
+**Test A 2.4 GHz delta = Wio-LR1121 median − T3S3 median = _____ dB**
+
+Interpretation table same as sub-GHz Test A: ±3 dB = healthy 2.4 GHz front end, 5–15 dB low = marginal, 15+ dB low = broken. **Apply the equal-TX-power correction** if the two radios are configured for different TX powers (subtract the configured TX-power difference from the dBFS delta).
 
 ---
 
@@ -368,37 +523,105 @@ The SX1262's deficit vs datasheet absorbs all the non-radio losses on the bench 
 - **At KT3 = 90 dB**, both radios should be below their floor (P_DUT around −96 dBm at HackRF IF gain 30 dB). If a radio still receives reliably at KT3=90, it means it has more headroom than 90 dB and you need to **drop HackRF IF gain** to find the actual floor. Re-run Phase 1 or Phase 2 at HackRF IF gain 20 or 10 dB to extend the reach.
 - **At the cutoff**, the receiver behavior should be **graded** — gradually losing packets as KT3 increases, not a sharp wall. A sharp wall suggests something else (e.g., a chip-internal threshold or an interference issue) is dominating.
 
+### Test B 2.4 GHz extension
+
+**Run if** (a) Test 0 PASSED and you want numerical 2.4 GHz characterization, OR (b) Test 0 FAILED and you need to characterize the 2.4 GHz failure.
+
+**Prerequisite check on the KT3:** verify the KT3-2N-90/1S spec sheet (or the AliExpress listing) for upper frequency limit. The "2N" likely indicates DC–3 GHz coverage (good for 2.4 GHz), but the "90/1S" variant might be limited differently. If the KT3 is rated only to 1 GHz, **skip the cabled procedure and use the HackRF-gain-only variant below**.
+
+**If KT3 covers 2.4 GHz — cabled procedure:**
+
+1. Reconfigure the test chain exactly as for sub-GHz Test B (HackRF TX → 5 dB pad → SMA-N adapter → KT3 → N-SMA adapter → SMA jumper → IPEX-SMA pigtail), but connect the IPEX-male end to **module pad 2 (`2.4G_RF`)** instead of pad 23.
+2. Load **"LR1121 TX 906875"** preset in SDRAngel, then:
+   - Change HackRF Output center frequency to **2403.59375 MHz**
+   - Change ChirpChat Modulator parameters to **BW 812500 Hz, SF 11, CR 4/5, DE 2, sync 0x2B**
+   - Save as new preset **"LR1121 TX 2403"**
+3. Reference radio for the floor sweep: the **T3S3 LR1121** (already on the bench, receives Meshtastic 2.4G). The T3S3 will report RSSI for each received packet via its Meshtastic interface (phone app or serial). Use this as the 2.4 GHz reference floor.
+4. Procedure identical to sub-GHz Test B: coarse 10 dB sweep, fine 1 dB sweep, compute delta. The T3S3 LR1121's floor is your **2.4 GHz bench-reference floor**. The Wio-LR1121's floor minus the T3S3's floor is the Wio-LR1121's 2.4 GHz-specific deficit (or zero, if they match).
+
+**If KT3 does NOT cover 2.4 GHz — HackRF-gain-only variant:**
+
+1. Skip the cabled chain. Set up like sub-GHz Test C: HackRF whip antenna at a fixed 3 m position from both radios' 2.4 GHz antennas.
+2. SDRAngel HackRF Output: 2403.59375 MHz center, ChirpChat Modulator with 2.4G Meshtastic params, continuous TX.
+3. Establish T3S3 RSSI anchor at HackRF IF gain 30 dB (read T3S3 RSSI from Meshtastic app).
+4. Sweep HackRF IF gain in 5 dB steps from 47 down to 0. Count packets received at each step by both T3S3 and Wio-LR1121 (the Wio-LR1121's RX is read from the bridge firmware serial monitor).
+5. Floor for each radio = lowest IF gain step with ≥10% packet detection. Delta in IF gain steps = sensitivity delta in dB.
+
+#### 2.4 GHz floor sweep result tables — fill in
+
+**T3S3 LR1121 reference (whichever method):**
+
+| KT3 (cabled) or HackRF gain (free-space) | Implied P_DUT (dBm) | Packets sent | Packets received | Detection rate | Pass/Fail |
+|---|---|---|---|---|---|
+| (coarse sweep — fill 5 rows) | | | | | |
+
+**Wio-LR1121 DUT:**
+
+| KT3 (cabled) or HackRF gain (free-space) | Implied P_DUT (dBm) | Packets sent | Packets received | Detection rate | Pass/Fail |
+|---|---|---|---|---|---|
+| (coarse sweep — fill 5 rows) | | | | | |
+
+**T3S3 floor = _____ ; Wio-LR1121 floor = _____ ; 2.4 GHz deficit = _____ dB**
+
+Interpretation: same table as sub-GHz Test B (0–5 dB ≈ healthy, 5–15 = modest deficit, 15+ = significant, 30+ = catastrophic).
+
 ---
 
 ## Decision tree — what to do with the numbers
 
+### Decision branch 1 — Test 0 result drives everything
+
 ```
-Test A delta:
-├── −3 to +3 dB (RF front end healthy)
+Test 0 (2.4 GHz baseline):
+├── PASS — Wio-LR1121 receives T3S3 OTA at 2.4 GHz
+│   │
+│   └─► Phase 1 essentially unblocked. Pivot project to ship LR1121 production-locked
+│       to 2.4 GHz. Sub-GHz investigation continues only for documentation and Seeed
+│       evidence purposes — no longer critical path.
+│       │
+│       ├─► Optionally run sub-GHz Tests C/A/B for Seeed numerical evidence (1-2 hr)
+│       ├─► Optionally run 2.4 GHz Tests C/A/B to characterize 2.4 GHz numerically (1-2 hr)
+│       └─► Update LR1121-SPEC.md, CHANGELOG.md, and v9.1 release notes to reflect
+│           "Phase 1: LR1121 at 2.4 GHz, sub-GHz known-issue documented"
+│
+└── FAIL — Wio-LR1121 deaf at 2.4 GHz too
+    │
+    └─► Both bands broken. RX chain has a fault that transfers across analog
+        front ends → most likely a chip-internal issue (LNA shared logic, AGC,
+        FW 1.3 errata) or a fundamental Wio-LR1121 manufacturing defect.
+        │
+        ├─► Run sub-GHz Tests A/B for full characterization (1 hr)
+        ├─► Run 2.4 GHz Tests A/B for full characterization (1 hr)
+        ├─► Update Seeed follow-up to add 2.4 GHz failure as a new question
+        └─► If both bands' Test A show TX deficit → RMA conversation immediately
+```
+
+### Decision branch 2 — Test A interpretation (per band)
+
+```
+Test A delta (Wio-LR1121 TX minus reference TX, both at same configured power):
+├── −3 to +3 dB (RF front end healthy on this band)
 │   │
 │   ├── Test B delta < 5 dB
-│   │   └─► Reassess earlier "OTA RX failure" claim — may be measurement artifact.
-│   │       Bench re-test live MT traffic with corrected expectations.
+│   │   └─► RX is also healthy on this band. Reassess earlier failure observations.
 │   │
 │   ├── Test B delta 5–15 dB
-│   │   └─► Wio-LR1121-specific RSSI calibration is the likely cause.
-│   │       Strongly push question 1 of the Seeed follow-up; ask for measured cal values.
+│   │   └─► RSSI calibration / matching network mistune. Strongly push question 1
+│   │       of the Seeed follow-up for band-specific calibration values.
+│   │       (Sub-GHz uses UM Table 7-21 "600 MHz – 2 GHz" row;
+│   │        2.4 GHz uses UM Table 7-21 "Above 2 GHz" row with GainOffset=2030
+│   │        — verify Table 7-19 byte encoding before flashing.)
 │   │
 │   └── Test B delta 15+ dB
-│       └─► Chip-internal RX fault confirmed. Update Seeed email to focus on:
-│           - LR1121 base FW 1.3 → newer FW availability (question 2 of the follow-up)
-│           - Whether Semtech has known RX-path errata in FW 1.3
-│           - Whether Seeed has bench-measured Wio-LR1121 sensitivity numbers
+│       └─► Chip-internal RX fault confirmed for this band. Seeed conversation
+│           pivots to FW 1.3 RX-path errata and FW update availability.
 │
 ├── −5 to −15 dB (marginal TX deficit)
-│   └─► Partial RF front end issue. Test B numbers will be ~similar to the TX deficit.
-│       Seeed conversation pivots to "is the matching network properly tuned for
-│       906–915 MHz on this production unit?"
+│   └─► Band-specific matching network issue. Both TX and RX suffer.
+│       Seeed: "is matching properly tuned for this band on production units?"
 │
-└── −15 dB or more (broken RF front end)
-    └─► RMA conversation. The module is electrically defective. Both TX and RX
-        suffer. Don't waste Seeed engineering's time on RSSI cal or FW errata —
-        ask for replacement modules under warranty.
+└── −15 dB or more (broken RF front end on this band)
+    └─► RMA conversation for this band. Hardware defect.
 ```
 
 ---
