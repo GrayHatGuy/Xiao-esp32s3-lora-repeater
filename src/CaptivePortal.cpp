@@ -232,12 +232,14 @@ static void appendRadio(String &page, int n) {
     snprintf(buf, sizeof(buf), "%.3f", freq);
     page += F("<div class=\"r");
     page += n;
-    // oninput=updAll() so the JS slot-frequency hint (and is24 detection)
-    // recomputes when the user types or pastes a new frequency. This is
-    // critical for R2: switching the freq from 906.875 to 2404.4688 must
-    // immediately switch the preset BW table from PRE to PRE24.
+    // The frequency field is purely user-input: no oninput/onchange handler.
+    // setF() may auto-fill it on page load OR when chip/protocol/preset/region
+    // selectors fire updAll(), but the user typing in the field MUST NOT
+    // trigger setF() — partial edits (e.g. "24") would otherwise cause
+    // is24() to flip false, slot() to fall back to sub-GHz, and setF() to
+    // clobber the user's typing with the sub-GHz preset slot frequency.
     page += F("fld mt mc rns custom\"><label>Frequency (MHz)</label>"
-              "<input type=\"text\" oninput=\"updAll()\" id=\"r");
+              "<input type=\"text\" id=\"r");
     page += n;
     page += F("freq\" name=\"r");
     page += n;
