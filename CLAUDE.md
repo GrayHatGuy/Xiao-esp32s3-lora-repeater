@@ -36,7 +36,7 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 ### Documentation
 - `LR1121-RX-INIT-AUDIT.md` — 9-section DOE record (Runs 0–8) of firmware-side sub-GHz RX bring-up attempts. All failed; firmware hypothesis space exhausted prior to today's investigation.
 - `SEEED_EMAIL_DRAFT.md` — original 2026-05-26 inquiry to Seeed engineering + their authoritative reply (SKY13373-460LF truth table, V1=DIO5, V2=DIO6).
-- `SEEED_EMAIL_REPLY_2026-05-28.md` — **drafted follow-up, NOT yet sent.** Owner must review before sending.
+- `SEEED_EMAIL_REPLY_2026-05-28.md` — **SENT 2026-05-28 to David Du. Awaiting reply.** Three open questions: (1) Wio-LR1121-specific `SetRssiCalibration` byte values, (2) LR1121 base FW update path (current FW 1.3), (3) whether `HF_XOSC_START_ERR=0x0020` on every POR is expected on TCXO-fitted modules. **Reply not yet received as of this handoff.** If a Seeed engineering reply arrives before next session, append it to `SEEED_EMAIL_DRAFT.md` under a new "Inbound replies received" subsection following the 2026-05-28 David Du reply pattern.
 - `SEEED_SUPPORT_INQUIRY.md` — has per-question status badges (✅/🟡/⏳) reflecting David Du's reply.
 - `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` — dual-band Test 0/A/B/C procedure with discrete PowerShell steps. **Test 0a/0b not yet executed under clean conditions.**
 - `docs/UPSTREAM-PR-CANDIDATES.md` — tracking ledger for upstream bug reports (Meshtastic region-change BW drift documented).
@@ -90,7 +90,7 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 ### LONG-TERM (after Phase 1 ships)
 
 - **Experiment R4 — HackRF + KT3 calibrated sensitivity sweep per `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` Tests A/B/C** to produce numerical sensitivity-deficit data for Seeed engineering follow-up. Not gated by R1 sub-GHz vs 2.4 GHz outcome; useful regardless.
-- **Experiment R5 — Send drafted `SEEED_EMAIL_REPLY_2026-05-28.md` to David Du** after Tests A/B/C results provide numerical evidence. Owner reviews before sending.
+- **Experiment R5 — Follow up with David Du if Seeed reply has not arrived after ~7-10 business days.** The 2026-05-28 email was sent and is awaiting reply on three questions (RSSI cal values, FW update path, HF_XOSC_START_ERR expected behaviour). After Test A/B/C results land, owner may want to send a supplementary message attaching the numerical sensitivity-deficit data — but that's discretionary, not a re-prompt.
 - **Feature — Add Meshtastic preset quick-buttons to captive portal** (Option A from session 2: "Apply Meshtastic US LongFast defaults" + "Apply Meshtastic 2.4G LongFast defaults"). Eliminates portal drift bug class for the two common configs.
 
 ---

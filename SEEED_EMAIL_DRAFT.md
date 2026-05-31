@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 2026-05-26 | Outbound (sent) | Wio-LR1121 RX path not working — full DOE test results | **this file**, body below |
 | 2026-05-28 | **Inbound (David Du, Sensecap Support)** | SKY13373-460LF truth table + internal V1=DIO5, V2=DIO6 wiring confirmed | this file, "Inbound replies received" section at bottom |
-| 2026-05-28 | Outbound (drafted, not yet sent) | Re: SKY13373 truth table confirmed; RX deficit persists; three follow-up questions | [`SEEED_EMAIL_REPLY_2026-05-28.md`](SEEED_EMAIL_REPLY_2026-05-28.md) |
+| 2026-05-28 | **Outbound (SENT — awaiting reply)** | Re: SKY13373 truth table confirmed; RX deficit persists; three follow-up questions | [`SEEED_EMAIL_REPLY_2026-05-28.md`](SEEED_EMAIL_REPLY_2026-05-28.md) |
 
 The original sent-message body below is preserved unchanged as the historical record of what was actually sent. The inbound reply from David Du and reference materials he provided are appended at the bottom under "Inbound replies received." All future correspondence rounds get their own dated file and one line added to this chain table.
 

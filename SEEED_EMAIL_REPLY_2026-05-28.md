@@ -1,8 +1,15 @@
 # Seeed Reply — SKY13373 Truth Table Confirmed, RX Deficit Persists
 
+**Status:** ✉️ **SENT 2026-05-28. Awaiting reply from David Du.**
+
 **To:** David Du (Sensecap Support, Application Engineer)
 **CC:** sensecap@seeed.cc, iot@seeed.cc, techsupport@seeed.cc
 **Subject:** Re: Wio-LR1121 SKY13373 truth table — confirmed correct, RX deficit persists; follow-up questions
+
+**Open questions awaiting reply:**
+1. Wio-LR1121-specific `SetRssiCalibration` byte values for their PCB matching network
+2. LR1121 base FW update path — current chips report FW 1.3; is a newer base FW available, and what's the brick-safe update procedure?
+3. Whether `HF_XOSC_START_ERR=0x0020` on every POR is expected behaviour on TCXO-fitted modules
 
 ---
 
