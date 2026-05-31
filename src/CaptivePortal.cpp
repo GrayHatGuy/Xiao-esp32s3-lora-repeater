@@ -34,8 +34,11 @@ static const float   SX1262_FREQ_MIN = 150.0f;   // MHz
 static const float   SX1262_FREQ_MAX = 960.0f;   // MHz
 static const int8_t  SX1262_TX_MIN   = -9;       // dBm
 static const int8_t  SX1262_TX_MAX   = 22;       // dBm
+// Valid LoRa BW values used to validate the Custom/MeshCore BW input field.
+// Sub-GHz SX1262 set + LR1121 2.4 GHz "wideLora" set (812.5/406.25/1625).
 static const float   ALLOWED_BW[] = { 7.8f, 10.4f, 15.6f, 20.8f, 31.25f,
-                                      41.7f, 62.5f, 125.0f, 250.0f, 500.0f };
+                                      41.7f, 62.5f, 125.0f, 250.0f, 500.0f,
+                                      406.25f, 812.5f, 1625.0f };
 
 static DNSServer  s_dns;
 static WebServer  s_http(HTTP_PORT);
@@ -82,11 +85,16 @@ static bool bwAllowed(float bw) {
 
 // Best-effort reverse lookup: which modem preset matches a stored BW/SF/CR.
 // Falls back to LongFast so the form select always has a sensible default.
+// Tries BOTH the sub-GHz BW table (wideLora=false) AND the 2.4 GHz wideLora
+// table (wideLora=true) so a stored LongFast 2.4G config (BW 812.5 / SF 11)
+// resolves to PRESET_LONG_FAST instead of the fallback.
 static uint8_t presetFromParams(float bw, uint8_t sf, uint8_t cr) {
     for (uint8_t p = 0; p <= RegionPreset::PRESET_LONG_TURBO; p++) {
-        float pbw; uint8_t psf, pcr;
-        RegionPreset::modemPresetParams(p, pbw, psf, pcr);
-        if (fabsf(pbw - bw) < 0.05f && psf == sf && pcr == cr) return p;
+        for (int wl = 0; wl <= 1; wl++) {
+            float pbw; uint8_t psf, pcr;
+            RegionPreset::modemPresetParams(p, pbw, psf, pcr, wl == 1);
+            if (fabsf(pbw - bw) < 0.05f && psf == sf && pcr == cr) return p;
+        }
     }
     return RegionPreset::PRESET_LONG_FAST;
 }
@@ -532,7 +540,12 @@ static const char *applyRadio(int n, uint8_t region, uint8_t chip) {
         sync = (uint8_t)strtoul(syncStr.c_str(), nullptr, 16);
     } else if (proto == BridgeConfig::PROTO_MT) {
         uint8_t preset = (uint8_t)s_http.arg(String("r") + n + "preset").toInt();
-        RegionPreset::modemPresetParams(preset, bw, sf, cr);
+        // wideLora=true selects the LR1121 2.4 GHz BW variant (812.5/406.25/1625)
+        // instead of the sub-GHz default (250/125/500). Without this branch,
+        // a Meshtastic preset save at a 2.4 GHz frequency would silently store
+        // the sub-GHz BW and the radio's RX correlator would fail to lock.
+        bool wideLora = (chip == BridgeConfig::CHIP_LR1121 && freq >= 2400.0f);
+        RegionPreset::modemPresetParams(preset, bw, sf, cr, wideLora);
         sync = 0x2B;
         if (chName.length() == 0)
             return "Meshtastic channel name cannot be empty.";

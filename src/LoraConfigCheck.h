@@ -20,11 +20,14 @@
 
 #pragma once
 
-// Valid SX1262 LoRa bandwidths (kHz). Used by the static_assert chains below.
+// Valid LoRa bandwidths (kHz). Covers BOTH the SX1262 sub-GHz set AND the
+// LR1121 2.4 GHz "wideLora" set (812.5/406.25/1625) used at LORA_24 region.
+// Used by the static_assert chains below.
 #define LORA_CHK_VALID_BW(x) \
-    ((x) == 7.8f  || (x) == 10.4f || (x) == 15.6f || (x) == 20.8f || \
-     (x) == 31.25f|| (x) == 41.7f || (x) == 62.5f || (x) == 125.0f|| \
-     (x) == 250.0f|| (x) == 500.0f)
+    ((x) == 7.8f   || (x) == 10.4f  || (x) == 15.6f || (x) == 20.8f || \
+     (x) == 31.25f || (x) == 41.7f  || (x) == 62.5f || (x) == 125.0f|| \
+     (x) == 250.0f || (x) == 500.0f || \
+     (x) == 406.25f|| (x) == 812.5f || (x) == 1625.0f)
 
 // --- Radio 1 ---------------------------------------------------------------
 
