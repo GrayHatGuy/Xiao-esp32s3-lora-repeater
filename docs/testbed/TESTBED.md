@@ -120,6 +120,6 @@ The 34 AWG Kapton-jumper workaround for the carrier PCB's missing pads on module
 - DOE results and hypothesis refutation table: [`../../LR1121-RX-INIT-AUDIT.md`](../../LR1121-RX-INIT-AUDIT.md)
 - Seeed engineering correspondence chain: [`../../SEEED_EMAIL_DRAFT.md`](../../SEEED_EMAIL_DRAFT.md)
 - Drafted follow-up reply to David Du: [`../../SEEED_EMAIL_REPLY_2026-05-28.md`](../../SEEED_EMAIL_REPLY_2026-05-28.md)
-- Skyworks SKY13373-460LF antenna-switch datasheet (Seeed-provided reference): [`../310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](../310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
+- Skyworks SKY13373-460LF antenna-switch datasheet (Seeed-provided reference): [`../datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](../datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
 - LR1121 driver source: [`../../src/WioLR1121.cpp`](../../src/WioLR1121.cpp)
 - SX1262 driver source (reference comparison): [`../../src/WioSX1262.cpp`](../../src/WioSX1262.cpp)

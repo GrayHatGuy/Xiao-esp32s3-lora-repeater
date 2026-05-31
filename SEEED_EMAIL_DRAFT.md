@@ -200,7 +200,7 @@ https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
 
 - **Skyworks SKY13373-460LF Datasheet**, Skyworks document number **310060742**
   - Part: SKY13373-460LF — 0.1 to 6.0 GHz SP3T (single-pole / three-throw) antenna switch
-  - Saved locally: [`docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
+  - Saved locally: [`docs/datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
   - Vendor page: https://www.skyworksinc.com/Products/Switches/SKY13373-460LF
 
 ### Impact on the project

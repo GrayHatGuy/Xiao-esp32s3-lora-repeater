@@ -407,7 +407,7 @@ errata** at base FW version 1.3.
 
 ### 1. ✅ ANSWERED 2026-05-28 — Where IS the Wio-LR1121's RF switch, and how is it controlled?
 
-**Seeed reply (David Du, Sensecap Support):** the on-module RF switch is a **Skyworks SKY13373-460LF SP3T antenna switch** (Skyworks document 310060742; datasheet attached to David's reply, copy saved at [`docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)). Internal wiring per David: **switch pin 4 (V1) is wired to LR1121 DIO5, switch pin 5 (V2) is wired to LR1121 DIO6.** The authoritative truth table is:
+**Seeed reply (David Du, Sensecap Support):** the on-module RF switch is a **Skyworks SKY13373-460LF SP3T antenna switch** (Skyworks document 310060742; datasheet attached to David's reply, copy saved at [`docs/datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](docs/datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)). Internal wiring per David: **switch pin 4 (V1) is wired to LR1121 DIO5, switch pin 5 (V2) is wired to LR1121 DIO6.** The authoritative truth table is:
 
 | V1 (DIO5) | V2 (DIO6) | Switch state |
 |---|---|---|
