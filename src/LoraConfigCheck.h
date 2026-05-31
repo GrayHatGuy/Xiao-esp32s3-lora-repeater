@@ -64,15 +64,22 @@ static_assert((LORA_RADIO1_TX_POWER) >= -9 && (LORA_RADIO1_TX_POWER) <= 22,
 
 // --- Radio 2 ---------------------------------------------------------------
 
+// R2 can be SX1262 (sub-GHz 150-960 MHz) OR LR1121 (sub-GHz 150-960 MHz
+// AND 2.4 GHz 2400-2500 MHz). Accept both bands at compile-time; the
+// runtime selects the right chip+path based on the configured frequency.
 #ifdef LORA_RADIO2_FREQUENCY
-static_assert((LORA_RADIO2_FREQUENCY) >= 150.0f && (LORA_RADIO2_FREQUENCY) <= 960.0f,
-  "LORA_RADIO2_FREQUENCY must be within the SX1262 tuning range (150-960 MHz)");
+static_assert(((LORA_RADIO2_FREQUENCY) >= 150.0f && (LORA_RADIO2_FREQUENCY) <= 960.0f) ||
+              ((LORA_RADIO2_FREQUENCY) >= 2400.0f && (LORA_RADIO2_FREQUENCY) <= 2500.0f),
+  "LORA_RADIO2_FREQUENCY must be within the sub-GHz range (150-960 MHz) "
+  "or the LR1121 2.4 GHz range (2400-2500 MHz)");
 #endif
 
 #ifdef LORA_RADIO2_BANDWIDTH
 static_assert(LORA_CHK_VALID_BW(LORA_RADIO2_BANDWIDTH),
-  "LORA_RADIO2_BANDWIDTH must be a valid SX1262 bandwidth in kHz "
-  "(7.8/10.4/15.6/20.8/31.25/41.7/62.5/125.0/250.0/500.0)");
+  "LORA_RADIO2_BANDWIDTH must be a valid LoRa bandwidth in kHz. "
+  "Sub-GHz (SX1262 or LR1121): "
+  "7.8/10.4/15.6/20.8/31.25/41.7/62.5/125.0/250.0/500.0. "
+  "2.4 GHz (LR1121 only): 406.25/812.5/1625.0");
 #endif
 
 #ifdef LORA_RADIO2_SPREAD_FACTOR

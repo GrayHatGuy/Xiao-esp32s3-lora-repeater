@@ -148,8 +148,11 @@ static void appendRadio(String &page, int n) {
     // always SX1262; the DUAL_* profiles fix both chips at compile time.
     if (n == 2) {
         uint8_t curChip = BridgeConfig::radioChip(1);
+        // id + onchange wired so the JS slot-frequency hint re-evaluates
+        // (sub-GHz vs 2.4 GHz tables) when the user changes chip selection.
         page += F("<label>Radio chip</label>"
-                  "<select name=\"r2chip\"><option value=\"0\"");
+                  "<select id=\"r2chip\" name=\"r2chip\" onchange=\"updAll()\">"
+                  "<option value=\"0\"");
         if (curChip == BridgeConfig::CHIP_SX1262) page += F(" selected");
         page += F(">SX1262 (sub-GHz)</option><option value=\"1\"");
         if (curChip == BridgeConfig::CHIP_LR1121) page += F(" selected");
@@ -229,8 +232,12 @@ static void appendRadio(String &page, int n) {
     snprintf(buf, sizeof(buf), "%.3f", freq);
     page += F("<div class=\"r");
     page += n;
+    // oninput=updAll() so the JS slot-frequency hint (and is24 detection)
+    // recomputes when the user types or pastes a new frequency. This is
+    // critical for R2: switching the freq from 906.875 to 2404.4688 must
+    // immediately switch the preset BW table from PRE to PRE24.
     page += F("fld mt mc rns custom\"><label>Frequency (MHz)</label>"
-              "<input type=\"text\" id=\"r");
+              "<input type=\"text\" oninput=\"updAll()\" id=\"r");
     page += n;
     page += F("freq\" name=\"r");
     page += n;
@@ -313,16 +320,38 @@ static void appendScript(String &page) {
         page += b;
     }
     page += F("};");
-    // Preset bandwidth (kHz) table.
+    // Preset bandwidth (kHz) tables. Two flavours:
+    //   PRE   = sub-GHz preset BWs (250/125/500 etc.) — used for SX1262 and
+    //           for LR1121 at sub-GHz frequencies.
+    //   PRE24 = LR1121 2.4 GHz "wideLora" preset BWs (812.5/406.25/1625) —
+    //           used when chip is LR1121 AND frequency is in 2400-2500 MHz.
+    // The JS slot-frequency hint picks the right table based on chip + freq.
     page += F("var PRE={");
     for (uint8_t p = 0; p <= RegionPreset::PRESET_LONG_TURBO; p++) {
         float pbw; uint8_t psf, pcr;
-        RegionPreset::modemPresetParams(p, pbw, psf, pcr);
+        RegionPreset::modemPresetParams(p, pbw, psf, pcr, false);
         char b[24];
         snprintf(b, sizeof(b), "%u:%.1f,", p, pbw);
         page += b;
     }
     page += F("};");
+    page += F("var PRE24={");
+    for (uint8_t p = 0; p <= RegionPreset::PRESET_LONG_TURBO; p++) {
+        float pbw; uint8_t psf, pcr;
+        RegionPreset::modemPresetParams(p, pbw, psf, pcr, true);
+        char b[24];
+        snprintf(b, sizeof(b), "%u:%.1f,", p, pbw);
+        page += b;
+    }
+    page += F("};");
+    // 2.4 GHz ISM band bounds for slot computation in the JS hint path.
+    {
+        char b[64];
+        snprintf(b, sizeof(b), "var BAND24=[%.3f,%.3f];",
+                 (double)RegionPreset::BAND_2G4_START,
+                 (double)RegionPreset::BAND_2G4_END);
+        page += b;
+    }
     // Preset canonical name table. Meshtastic computes the radio frequency
     // from the PRIMARY channel's name, which conventionally equals the modem
     // preset name (LongFast, etc.). A bridged private/secondary channel rides
@@ -340,7 +369,21 @@ static void appendScript(String &page) {
       "function gv(i){return document.getElementById(i).value;}"
       "function djb2(s){var h=5381;for(var i=0;i<s.length;i++)"
         "h=((h*33)+s.charCodeAt(i))>>>0;return h;}"
-      "function slot(rg,nm,bw){var r=REG[rg];if(!r||r[1]<=r[0])return 0;"
+      // is24(n) returns true when radio n should use the 2.4 GHz band tables.
+      // Detection: r2chip selector says LR1121 AND the current frequency
+      // field value is in the 2400-2500 MHz range. r1 is always SX1262 so
+      // is24(1) is always false.
+      "function is24(n){if(n!==2)return false;"
+        "var c=document.getElementById('r2chip');"
+        "if(!c||c.value!=='1')return false;"
+        "var ff=document.getElementById('r2freq');"
+        "var f=ff?parseFloat(ff.value):0;"
+        "return f>=2400&&f<=2500;}"
+      // slot(rg,nm,bw[,wide]): when wide=true compute over the 2.4 GHz band
+      // (BAND24) instead of the regional sub-GHz band table.
+      "function slot(rg,nm,bw,wide){"
+        "var r=wide?BAND24:REG[rg];"
+        "if(!r||r[1]<=r[0])return 0;"
         "var bm=bw/1000;var n=Math.floor((r[1]-r[0])/bm);if(n<1)return 0;"
         "var cn=djb2(nm)%n;return r[0]+bm/2+cn*bm;}"
       "function setF(n,f,lbl){var fh=document.getElementById('r'+n+'fhint');"
@@ -357,10 +400,15 @@ static void appendScript(String &page) {
           "var sh=(p!=='0')&&fl[i].classList.contains(tok);"
           "fl[i].style.display=sh?'':'none';}"
         "var fh=document.getElementById('r'+n+'fhint');"
+        "var w=is24(n);"           // wideLora detect for THIS radio
         "if(p==='1'){var ps=gv('r'+n+'preset');"
-          "setF(n,slot(gv('region'),PN[ps],PRE[ps]),'computed');}"
-        "else if(p==='3'){var r=REG[gv('region')];"
-          "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}"
+          "var bw=w?PRE24[ps]:PRE[ps];"
+          "setF(n,slot(gv('region'),PN[ps],bw,w),"
+            "w?'computed (2.4G)':'computed');}"
+        "else if(p==='3'){"
+          "if(w){setF(n,(BAND24[0]+BAND24[1])/2,'2.4G band default');}"
+          "else{var r=REG[gv('region')];"
+            "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}}"
         "else if(p==='2'){fh.textContent="
           "'MeshCore: enter the exact frequency your community uses.';}"
         "else{fh.textContent='';}}"
@@ -521,13 +569,22 @@ static const char *applyRadio(int n, uint8_t region, uint8_t chip) {
     uint8_t sync;
 
     // BW/SF/CR are read from the form for Custom AND MeshCore (MeshCore has
-    // no universal presets — community-specific RF).
+    // no universal presets — community-specific RF). Validation policy:
+    //   - MeshCore: BW must be in the standard LoRa-allowed set (sub-GHz +
+    //     wideLora) so the radio actually tunes; users picking MC should
+    //     match their local mesh, which is always a standard value.
+    //   - Custom: NO BW validation. The Custom path is the escape hatch for
+    //     arbitrary RF experimentation (test signals, non-standard meshes,
+    //     SDR-driven configs). The user is responsible for entering a value
+    //     the underlying RadioLib driver can program. SF/CR are still
+    //     bounded because they are chip-firmware-level enums, not analog.
     if (proto == BridgeConfig::PROTO_CUSTOM || proto == BridgeConfig::PROTO_MC) {
         bw = s_http.arg(String("r") + n + "Bw").toFloat();
         sf = (uint8_t)s_http.arg(String("r") + n + "Sf").toInt();
         cr = (uint8_t)s_http.arg(String("r") + n + "Cr").toInt();
-        if (!bwAllowed(bw))
-            return "Bandwidth is not a valid SX1262 value.";
+        if (proto == BridgeConfig::PROTO_MC && !bwAllowed(bw))
+            return "MeshCore bandwidth must be a valid LoRa value "
+                   "(sub-GHz or 2.4 GHz wideLora).";
         if (sf < 5 || sf > 12) return "SF must be 5-12.";
         if (cr < 5 || cr > 8)  return "CR must be 5-8.";
     }
