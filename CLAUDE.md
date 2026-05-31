@@ -40,6 +40,12 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 - `SEEED_SUPPORT_INQUIRY.md` — has per-question status badges (✅/🟡/⏳) reflecting David Du's reply.
 - `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` — dual-band Test 0/A/B/C procedure with discrete PowerShell steps. **Test 0a/0b not yet executed under clean conditions.**
 - `docs/UPSTREAM-PR-CANDIDATES.md` — tracking ledger for upstream bug reports (Meshtastic region-change BW drift documented).
+- **`docs/REFERENCES.md`** — canonical index of all authoritative reference material with both local paths and vendor URLs. Local PDFs live under `docs/datasheets/`:
+  - `LR1121_V2_1_data_sheet.pdf` — Semtech LR1121 chip datasheet rev 2.1 (Dec 2023). RFSWx pin mapping (Table 4-1), sensitivity numbers, PA config
+  - `LR1121_UM_V2.2.pdf` — Semtech LR1121 User Manual v2.2 (Apr 2026, 140 pages). Chip-level command spec; cited heavily in `LR1121-RX-INIT-AUDIT.md` (SetDioAsRfSwitch §4.2.1, SetRssiCalibration §7.2.15, CalibImage §2.1.3)
+  - `Wio-LR1121_Module_Datasheet.pdf` — Seeed module-level datasheet. Antenna pads (SUBG_RF pad 23, 2.4G_RF pad 2), TCXO integration, pinout. **RF switch wiring incomplete in this doc**; David Du's 2026-05-28 reply (appended to `SEEED_EMAIL_DRAFT.md`) is the authoritative source for V1=DIO5, V2=DIO6
+  - `310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf` — on-module SP3T antenna switch, provided by David Du with his reply
+  - Plus vendor URLs (URL-only, no local PDF) for: Wio-SX1262 with XIAO ESP32-S3 product page; XIAO ESP32-S3 pin multiplexing wiki
 
 ---
 
@@ -151,9 +157,11 @@ If a new session loses context mid-task, read in this order:
 
 1. This file (`CLAUDE.md`)
 2. `git log --oneline -20 lr1121-phase1` to confirm HEAD state
-3. `LR1121-RX-INIT-AUDIT.md` for the 9-run firmware DOE history (sub-GHz RX deficit refuted across every prescribed UM v2.2 remedy)
-4. `SEEED_EMAIL_DRAFT.md` correspondence chain
-5. `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` for the unexecuted SDR test methodology
+3. `docs/REFERENCES.md` — index of all datasheets and vendor docs. **Any LR1121 §-citation in this project refers to the version checked into `docs/datasheets/`.**
+4. `LR1121-RX-INIT-AUDIT.md` for the 9-run firmware DOE history (sub-GHz RX deficit refuted across every prescribed UM v2.2 remedy)
+5. `SEEED_EMAIL_DRAFT.md` correspondence chain (includes the David Du SKY13373 truth-table reply)
+6. `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` for the unexecuted SDR test methodology
+7. `docs/testbed/TESTBED.md` for the physical bench layout (referenced by all bench-result discussion)
 
 **First action on resumption: confirm with owner what just happened on the bench since this handoff was written. Do NOT assume the firmware state matches what's documented here without verification.**
 
