@@ -314,27 +314,65 @@ bool WioLR1121::begin()
     }
 #endif
 
-    // RadioLib 7.x LR11x0 begin() signature (via LR1120 parent class):
-    //   begin(freq, bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage)
-    // setFrequency() inside begin() accepts 150-960 MHz, 1900-2200 MHz, and
-    // 2400-2500 MHz directly. TX power and frequency are applied inside
-    // begin(); no separate setFrequency()/setOutputPower() calls are needed
-    // afterwards.
+    // RadioLib 7.7.0 LR1120::begin(freq, bw, sf, cr, sync, power, preamble,
+    // tcxo) convenience overload calls LR11x0::begin(bw, sf, cr, sync,
+    // preamble) -- note: the `high` parameter is DROPPED and defaults to
+    // false. setBandwidth(bw, high=false) then validates bw against the
+    // sub-GHz range [0, 510] kHz and REJECTS the 2.4 GHz wideLora values
+    // (203.125/406.25/812.5/1625) with RADIOLIB_ERR_INVALID_BANDWIDTH (-8).
+    //
+    // Workaround: for 2.4 GHz operation, bypass the LR1120 convenience
+    // overload. Call LR11x0::begin() directly with high=true so the
+    // setBandwidth call inside accepts the wideLora BWs, then call
+    // setFrequency()/setOutputPower() manually for the remaining config.
+    //
+    // RadioLib API design flaw worth upstreaming -- the LR1120 overloads
+    // should auto-derive `high` from freq, or expose `high` in the signature.
+    // Logged in docs/UPSTREAM-PR-CANDIDATES.md.
     bool is2g4 = (_config.frequency > 1000.0f);
+    int16_t state;
 
-    int16_t state = _radio->begin(
-        _config.frequency,
-        _config.bandwidth,
-        _config.spreadFactor,
-        _config.codingRate,
-        _config.syncWord,
-        _config.txPower,
-        _config.preambleLen,
-        _config.tcxoVoltage
-    );
+    if (is2g4) {
+        // 2.4 GHz path: call LR11x0::begin() with high=true to allow the
+        // wideLora bandwidths. _radio is an LR1121* which inherits the
+        // public LR11x0::begin() overload via LR1120; access it explicitly.
+        state = _radio->LR11x0::begin(
+            _config.bandwidth,
+            _config.spreadFactor,
+            _config.codingRate,
+            _config.syncWord,
+            _config.preambleLen,
+            true   // high — selects the 2.4 GHz BW validation range
+        );
+        if (state == RADIOLIB_ERR_NONE) {
+            state = _radio->setFrequency(_config.frequency);
+        }
+        if (state == RADIOLIB_ERR_NONE) {
+            state = _radio->setOutputPower(_config.txPower);
+        }
+        // TCXO voltage is applied during modSetup inside LR11x0::begin()
+        // when the chip was constructed with the TCXO arg; the LR1121
+        // constructor in this project passes _config.tcxoVoltage already.
+    } else {
+        // Sub-GHz path: use the LR1120 convenience overload (RadioLib's
+        // existing happy path). setBandwidth(bw, high=false) accepts the
+        // sub-GHz bandwidths (62.5/125/250/500 kHz).
+        state = _radio->begin(
+            _config.frequency,
+            _config.bandwidth,
+            _config.spreadFactor,
+            _config.codingRate,
+            _config.syncWord,
+            _config.txPower,
+            _config.preambleLen,
+            _config.tcxoVoltage
+        );
+    }
 
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.printf("[%s] begin() failed: %d\n", _name, state);
+        Serial.printf("[%s] begin() failed: %d (is2g4=%d freq=%.3f bw=%.3f)\n",
+                      _name, state, (int)is2g4,
+                      _config.frequency, _config.bandwidth);
         xSemaphoreGive(_mutex);
         return false;
     }
