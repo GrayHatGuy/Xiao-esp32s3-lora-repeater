@@ -3,7 +3,7 @@
 **Project:** Xiao ESP32-S3 dual-radio LoRa mesh bridge (sub-GHz ↔ 2.4 GHz cross-band)
 **Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
 **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater`
-**Active branch:** `lr1121-phase1` (HEAD: `12d685d` as of this handoff)
+**Active branch:** `lr1121-phase1` (HEAD: `e07e39f` as of this handoff — see §4 for last-touched functional code commit `12d685d`; later commits are doc-only)
 **Owner identity:** `GrayHatGuy` (pseudonym), `grayhatguyllc@protonmail.com`. **Real name is ephemeral, do not persist or write to docs.**
 **Shell:** PowerShell (Windows). Use HEREDOC via Bash tool for commit messages; no inline newlines in shell commands.
 
