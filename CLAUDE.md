@@ -20,9 +20,9 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 ## 2. Current state (2026-05-30, end of bench session 2)
 
 ### Hardware
-- Original Wio-LR1121 module: **possibly silicon-damaged by accumulated TX-induced LNA stress** caused by commit `949176a` (see §4). Sub-GHz TX triggers `state=-20` SPI cascade after a stress threshold; chip becomes unresponsive until power cycle. Cascade observed at 35 s, 193 s, ~200 s, 408 s across multiple runs today, both bands.
-- Fresh Wio-LR1121 module swapped in as a control. **Boots clean at 2.4 GHz, no cascade through 188 s**, but ALSO does not RX any T3S3 packets (isr=0 throughout). Either DIO9/jumper-wire contact issue on the new module, antenna mismatch, or Wio-LR1121 2.4 GHz path is design-deficient.
-- T3S3 LR1121 reference radio currently reconfigured back to **US sub-GHz LongFast** (was 2.4 GHz earlier today). Owner reports R1 SX1262 is **no longer catching T3S3 sub-GHz packets** — unexplained at end of session, owner attributes to my code edits.
+- Original Wio-LR1121 module: **possibly silicon-damaged by accumulated TX-induced LNA stress** caused by commit `949176a` (see §4). Sub-GHz TX triggers `state=-20` SPI cascade after a stress threshold; chip becomes unresponsive until power cycle. Cascade observed at 35 s, 193 s, ~200 s, 408 s across multiple runs today, both bands.  Needs final futher tests to confirm.
+- Fresh Wio-LR1121 module swapped in as a control. **Boots clean at 2.4 GHz, no cascade through 188 s**, but ALSO does not RX any T3S3 packets (isr=0 throughout). Either DIO9/jumper-wire contact issue on the new module, antenna mismatch, or Wio-LR1121 2.4 GHz path is design-deficient.  Need to confirm.
+- T3S3 LR1121 reference radio currently reconfigured back to **US sub-GHz LongFast** (was 2.4 GHz earlier today). Owner reports R1 SX1262 is **no longer catching T3S3 sub-GHz packets** — unexplained at end of session, owner attributes to my code edits. Need to confirm.
 - KT3-2N-90/1S step attenuator + HackRF One available for sensitivity testing per `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` (test plan written, not yet executed).
 - Bench: XIAO ESP32-S3 on COM6; T3S3 on COM5. See `docs/testbed/TESTBED.md` for layout + photos.
 
@@ -105,7 +105,7 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 
 **🔴 Suspected-damaging commit (Experiment R1 reverts this):**
 
-- `949176a` — **Lock RF switch table to Seeed-authoritative SKY13373 truth table.** Changed `MODE_TX` from `{0,1}` (HP path) → `{1,1}` (LP path, per Seeed authoritative). Changed `MODE_STBY` from `{0,0}` (shutdown) → `{1,0}` (RX-latched). **The MODE_STBY change is the suspected cumulative-damage cause** — removed protective antenna isolation during TX→STBY transitions, allowing residual PA-vent energy to repeatedly stress the LNA. Owner's analysis post-session attributes silicon damage on original module to this commit.
+- `949176a` — **Lock RF switch table to Seeed-authoritative SKY13373 truth table.** Changed `MODE_TX` from `{0,1}` (HP path) → `{1,1}` (LP path, per Seeed authoritative). Changed `MODE_STBY` from `{0,0}` (shutdown) → `{1,0}` (RX-latched). **The MODE_STBY change is the suspected cumulative-damage cause** — removed protective antenna isolation during TX→STBY transitions, allowing residual PA-vent energy to repeatedly stress the LNA. Owner's analysis post-session attributes silicon damage on original module to this commit.  See Seeed Engineering email repy with authoritative truth table as a reference.
 
 **🟢 Bug-fix commits this session (all needed for 2.4 GHz Meshtastic to work, leave in place):**
 
@@ -116,7 +116,7 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 
 **🟡 Owner-accepted compile-time hardcode (last action of session):**
 
-- platformio.ini R2 settings changed from `906.875f / 250.0f / 11 / 5 / 20 / 0x2B` to `2404.46875f / 812.5f / 11 / 5 / 10 / 0x2B`. This change applies after NVS erase or on first boot without saved config. Owner accepted this edit to bypass the portal for fresh-module 2.4 GHz testing.
+- platformio.ini R2 settings changed from `906.875f / 250.0f / 11 / 5 / 20 / 0x2B` to `2404.46875f / 812.5f / 11 / 5 / 10 / 0x2B`. This change applies after NVS erase or on first boot without saved config. Owner accepted this edit to bypass the portal for fresh-module 2.4 GHz testing.  Current state R2 manually edited by owner to `906.875f / 250.0f / 11 / 5 / 20 / 0x2B`.  Confirm before proceeding with intial testing.
 
 **🔵 Earlier session commits (documentation, no functional impact):**
 
