@@ -88,6 +88,7 @@
 struct LR1121Access : public LR1121 {
   using LR11x0::getErrors;
   using LR11x0::setRssiCalibration;
+  using LR11x0::getChipEui;
   // LR1121Access is never instantiated directly; this ctor exists only to
   // satisfy the compiler if it ever is.
   LR1121Access(Module* mod) : LR1121(mod) {}
@@ -389,6 +390,25 @@ bool WioLR1121::begin()
                   _config.spreadFactor, _config.codingRate,
                   _config.txPower, _config.syncWord,
                   is2g4 ? "2.4GHz" : "sub-GHz");
+
+    // ----- Module identity: LR1121 unique 64-bit chip EUI ------------------
+    // Two physical Wio-LR1121 modules are otherwise indistinguishable in
+    // software (identical parts). Print the chip EUI at boot so every bridge
+    // run self-identifies which silicon produced the log — correlate against
+    // docs/testbed/MODULE-REGISTRY.md (suspect-BAD = red sharpie dot). Read via
+    // the LR1121Access idiom because LR11x0::getChipEui() is protected in
+    // RadioLib 7.7.0, same as getErrors()/setRssiCalibration().
+    uint8_t chipEui[8] = {0};
+    int16_t euiState = static_cast<LR1121Access*>(_radio)->getChipEui(chipEui);
+    if (euiState == RADIOLIB_ERR_NONE) {
+        Serial.printf("[%s] chip EUI = %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X "
+                      "(correlate w/ MODULE-REGISTRY.md)\n",
+                      _name, chipEui[0], chipEui[1], chipEui[2], chipEui[3],
+                      chipEui[4], chipEui[5], chipEui[6], chipEui[7]);
+    } else {
+        Serial.printf("[%s] chip EUI read FAILED: %d (module unidentified)\n",
+                      _name, (int)euiState);
+    }
 
     // ----- RX-init-audit Runs 2/3/4/5: post-begin() chip-level treatments --
     // Each treatment is enabled by the LR1121_RX_AUDIT_RUN build flag (see
