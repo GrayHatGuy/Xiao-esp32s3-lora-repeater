@@ -273,12 +273,17 @@ bool WioLR1121::begin()
     // archived LR1121_BRUTEFORCE_RX_DIOMASK sweep machinery still compiles, but
     // the table itself is now locked to Seeed's authoritative values. The
     // MODE_RX entry under the default mask (=1) matches the confirmed RX path.
-    // MODE_STBY latches the RX path rather than dropping to 0/0 shutdown — the
-    // repeater is in continuous-listen, so paying 20 us per re-arm has no
-    // benefit; switch idle current at (1,0) is negligible vs. the chip itself.
+    // MODE_STBY is (0,0) shutdown: the antenna is isolated from the LNA input
+    // during TX->STBY transitions, restoring the protection that 949176a's
+    // (1,0) RX-latched value removed. The (1,0) value parked the antenna on the
+    // LNA path during standby; the steady state is benign (identical to RX-idle),
+    // but it removed isolation during the TX->STBY window, leaving residual PA
+    // energy a path into the LNA. Reverted per Experiment R1 (CLAUDE.md §3). The
+    // 20 us shutdown->active re-arm penalty is accepted; it is negligible for a
+    // continuous-listen repeater and not worth trading antenna isolation for.
     static const Module::RfSwitchMode_t rfswitch_table[] = {
         // mode                        DIO5    DIO6    DIO7    DIO8    DIO10
-        { LR11x0::MODE_STBY,         { 1,      0,      0,      0,      0      } },
+        { LR11x0::MODE_STBY,         { 0,      0,      0,      0,      0      } },
         { LR11x0::MODE_RX,           { RX_D5,  RX_D6,  RX_D7,  RX_D8,  RX_D10 } },
         { LR11x0::MODE_TX,           { 1,      1,      0,      0,      0      } },
         { LR11x0::MODE_TX_HP,        { 0,      1,      0,      0,      0      } },

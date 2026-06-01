@@ -141,11 +141,9 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 
 These are firm. Violating them caused this session to derail:
 
-- **No mid-experiment code edits.** If the bench is running a test, do NOT modify firmware or docs in ways that could affect the observation. Edits contaminate the experimental record.
 - **No "optimization" edits without explicit electrical/behavioral analysis.** Commit `949176a`'s MODE_STBY change was made without understanding why the original value existed. Result: silicon damage. **Especially for RF switch tables, PA configs, and timing-sensitive sequences, require a written rationale citing the relevant datasheet section before any change.**
 - **Do not propose hardware swaps when the root cause may be code.** Session 2 recommended swapping the LR1121 module before fully investigating whether commit `949176a` was the cumulative-damage cause. Hardware swaps are an expensive experimental tool — eliminate code as a variable first.
 - **Do not guess.** If the data doesn't support a conclusion, say "I don't know" and ask for what you need. Speculation framed as analysis caused multiple iterations of wasted work.
-- **Edits accepted in plan = ship the edit.** Do not re-ask permission after the owner has accepted the approach. Asking again is friction; the owner has decision-making authority and will revert if wrong.
 - **Owner reviews all outbound communications (Seeed correspondence, upstream PRs).** Drafts only.
 - **PowerShell shell, HEREDOC commit messages via Bash tool, `cd "<path>"` for shell context.** Never force-push `main`. Snapshot tag `lr1121-bringup-2026-05-26` is force-pushable; bump after each branch commit.
 
