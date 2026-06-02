@@ -592,8 +592,10 @@ void radio1Task(void *pvParameters)
 
                 MeshDecoderDebug::print(buf, len, g_chan[0], "R1");
 
+#ifndef R2_RX_ONLY_TEST
                 if (g_radioEnabled[1])
                     bridgePacket(g_chan[0], g_chan[1], radio2, "R1", buf, len);
+#endif
 
                 // RadioLib exits RX mode on packet receipt;
                 // restore it before polling again.
@@ -627,11 +629,14 @@ void radio2Task(void *pvParameters)
             uint32_t cnt   = radio2_lr_diag->_isrCount;
             bool     flag  = radio2_lr_diag->_rxFlag;
             uint32_t delta = cnt - lastIsrCount;
-            Serial.printf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d\n",
+            uint32_t irqRg = radio2_lr_diag->debugIrqStatus();
+            Serial.printf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d irq=0x%08lX%s\n",
                           millis(),
                           (unsigned long)cnt,
                           (unsigned long)delta,
-                          flag ? 1 : 0);
+                          flag ? 1 : 0,
+                          (unsigned long)irqRg,
+                          (irqRg & 0x08UL) ? "  <-- RX_DONE latched!" : "");
             lastIsrCount    = cnt;
             nextHeartbeatMs = millis() + 5000;
         }
@@ -881,6 +886,9 @@ void setup()
     if (g_radioEnabled[0]) radio1->startReceive();
     if (g_radioEnabled[1]) radio2->startReceive();
 
+#ifdef R2_RX_ONLY_TEST
+    Serial.println("[setup] *** R2_RX_ONLY_TEST: R1->R2 forward DISABLED — R2 is RX-only (diagnostic) ***");
+#endif
     Serial.println("\nBridge active.\n");
 
     // Spawn one FreeRTOS task per enabled radio, pinned to separate cores

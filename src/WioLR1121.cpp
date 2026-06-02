@@ -548,8 +548,10 @@ int16_t WioLR1121::transmit(const uint8_t *buf, size_t len)
     }
     int16_t rxSt = _radio->startReceive();
 #ifdef LR1121_DEBUG
-    Serial.printf("[%s] transmit(%u B) tx=%d post-rx=%d\n",
-                  _name, (unsigned)len, (int)txSt, (int)rxSt);
+    uint32_t irqAfterTx = _radio->getIrqFlags();   // raw LR11x0 IRQ register
+    Serial.printf("[%s] transmit(%u B) tx=%d post-rx=%d irq=0x%08lX\n",
+                  _name, (unsigned)len, (int)txSt, (int)rxSt,
+                  (unsigned long)irqAfterTx);
 #else
     (void)rxSt;
 #endif
@@ -571,4 +573,12 @@ void WioLR1121::startReceive()
     (void)st;
 #endif
     xSemaphoreGive(_mutex);
+}
+
+uint32_t WioLR1121::debugIrqStatus()
+{
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    uint32_t irq = _radio->getIrqFlags();   // raw LR11x0 IRQ register
+    xSemaphoreGive(_mutex);
+    return irq;
 }

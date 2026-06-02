@@ -32,6 +32,11 @@ public:
     int16_t transmit(const uint8_t *buf, size_t len) override;
     void    startReceive() override;
 
+    // Diagnostic: raw LR11x0 IRQ status register (getIrqFlags). Lets the
+    // heartbeat / transmit log see whether the chip latched RX_DONE (bit3=0x08)
+    // or TxDone even when the DIO9 edge ISR never fired. Mutex-protected SPI.
+    uint32_t debugIrqStatus();
+
     // Written by the IRAM ISR trampoline; read by the polling task.
     volatile bool     _rxFlag   = false;
     // Diagnostic: number of times the DIO9 ISR has fired since boot. If this
