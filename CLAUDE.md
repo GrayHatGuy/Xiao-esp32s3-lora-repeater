@@ -19,6 +19,50 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 
 ## 2. Current state (2026-05-30, end of bench session 2)
 
+> ### ⭐ UPDATE — bench session 3 (2026-06-01): root cause reframed
+>
+> The session-2 "silicon damage / `-20` SPI cascade" framing below is a
+> **MISDIAGNOSIS.** Decoded from RadioLib 7.7.0 `TypeDef.h`: **`-20` =
+> `RADIOLIB_ERR_WRONG_MODEM`** (a software modem-state error), `-5` =
+> `TX_TIMEOUT`. The `-20` reproduced on the **suspect-GOOD** module under
+> `MODE_STBY={0,0}`, no brick across a full 10-min soak. So the module is
+> almost certainly **not damaged**.
+>
+> **What R2 actually does:** it is alive and in continuous RX — it detects
+> **every preamble** (`irq=0x10`) but **completes only a small, unreliable
+> fraction of packets, even strong ones** (a −42 dBm point-blank Heltec
+> packet that R1 decoded did **not** complete on R2; `isr` climbed only
+> 1→2 over ~7 min). That is a **marginal RX sensitivity / demod deficit** —
+> the project's original R2 finding, now cleanly isolated.
+>
+> **Eliminated with evidence this session:** silicon damage; the `-20`
+> cascade (it's `WRONG_MODEM`); **sync word** (SX126x expands `0x2B`→`0x24B4`
+> via nibble+control-0x44; LR11x0 `SetLoRaSyncWord` expands the raw byte the
+> same way internally — and your T3S3 LR1121 interoperated on this mesh at
+> `0x2B`, proving it); the **TX path**; the **interrupt/DIO9 config** (RX IRQ
+> mask = `RX_DONE` only, correct — `PhysicalLayer.h:24`); a **hung receiver**
+> (the 1→2 `isr` climb disproves it). The MODE_STBY `{1,0}→{0,0}` revert
+> stands but was NOT the cause.
+>
+> **Resume here → Experiment R4/#5: HackRF + KT3 calibrated sweep.** Hand-sends
+> can't characterise a "completes ~1-in-N" rate; inject stepped, known power
+> levels and measure R2 completion-rate vs R1. That quantifies the deficit and
+> produces the numbers for the Seeed RSSI-calibration follow-up.
+>
+> **Firmware state (commit `66dac8b`):** chip-EUI logging (kept); R2 IRQ-status
+> heartbeat readout + `transmit()` `irq=` logging (kept — the per-power-level
+> completion indicator for #5); **`R2_RX_ONLY_TEST` build flag is ACTIVE** —
+> R2 is pure-listen (no R1→R2 forward). That's the *correct* config for the
+> sensitivity sweep; **delete the `-D R2_RX_ONLY_TEST` in `platformio.ini` to
+> restore normal dual-radio bridging.**
+>
+> **Bench mapping changed:** XIAO bridge = **COM6** (EUI `00:16:C0:01:F0:9B:37:D5`
+> = suspect-GOOD, no sharpie dot); test source is now a **Heltec V4** (US
+> LongFast) on **COM11** (was T3S3/COM5 — swapped to remove the T3S3's own
+> 2.4↔subG switch as a confound). See `docs/testbed/MODULE-REGISTRY.md`.
+> R1 (SX1262) RX is healthy — decoded dozens of packets all session, so the
+> session-2 "R1 regression" looks moot.
+
 ### Hardware
 - Original Wio-LR1121 module: **possibly silicon-damaged by accumulated TX-induced LNA stress** caused by commit `949176a` (see §4). Sub-GHz TX triggers `state=-20` SPI cascade after a stress threshold; chip becomes unresponsive until power cycle. Cascade observed at 35 s, 193 s, ~200 s, 408 s across multiple runs today, both bands.  Needs final futher tests to confirm.
 - Fresh Wio-LR1121 module swapped in as a control. **Boots clean at 2.4 GHz, no cascade through 188 s**, but ALSO does not RX any T3S3 packets (isr=0 throughout). Either DIO9/jumper-wire contact issue on the new module, antenna mismatch, or Wio-LR1121 2.4 GHz path is design-deficient.  Need to confirm.
