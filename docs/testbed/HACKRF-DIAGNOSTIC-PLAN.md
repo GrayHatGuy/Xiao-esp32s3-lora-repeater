@@ -1,5 +1,18 @@
 # HackRF + SDRAngel Diagnostic Plan — Wio-LR1121 RX Bring-Up (Dual-Band)
 
+> **▶ Just want to run task #5? Start with [`HACKRF-QUICKSTART.md`](HACKRF-QUICKSTART.md)** —
+> a short linear runbook for the current bench (sub-GHz, HackRF-as-source, RX-only firmware).
+> This document is the full reference (dual-band, every table/option); dip into it from the
+> quick-start when a step needs detail.
+>
+> **Session-3 deltas (2026-06-01) vs this doc as written:** (1) OTA test source is now a
+> **Heltec V4 on COM11**, not T3S3/COM5 — only matters for Test 0a; Test B/A use the HackRF as
+> source. (2) Focus is **sub-GHz**; skip the 2.4 GHz arcs for #5. (3) Firmware already has the
+> **IRQ-status heartbeat** (`irq=` field: `0x08`=RX_DONE, `0x10`=preamble-only) and
+> **`R2_RX_ONLY_TEST`** active — ideal for Test B; remove the `-D` and reflash for Test A.
+> (4) R2's failure is a **marginal sensitivity/demod deficit**, not total deafness — see
+> `CLAUDE.md` §2 session-3 block.
+
 **Purpose:** Localize the Wio-LR1121's RX failure mode that the firmware DOE in [`../../LR1121-RX-INIT-AUDIT.md`](../../LR1121-RX-INIT-AUDIT.md) could not resolve from the chip side. This document now covers **both** the bench-proven-broken **sub-GHz path** (LR1121 `RFI_P/N_LF` ↔ module pad 23 `SUBG_RF`, switched by the on-module SKY13373-460LF per V1=DIO5/V2=DIO6) **and** the **never-tested 2.4 GHz path** (LR1121 `RFIO_HF` ↔ module pad 2 `2.4G_RF`, NOT switched by the SKY13373).
 
 The 2.4 GHz path is the **production-intended band per [`LR1121-SPEC.md`](../../LR1121-SPEC.md)** — Phase 1 design has the LR1121 operating at 2.4 GHz and the SX1262 sibling handling sub-GHz. Sub-GHz testing on the LR1121 was a debugging convenience (A/B comparison against the SX1262 reference) that surfaced a failure but does not gate Phase 1 shipping if 2.4 GHz works.
