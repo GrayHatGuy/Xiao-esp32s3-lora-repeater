@@ -1,3 +1,6 @@
 ﻿.pio/
 .vscode/
 *.orig
+
+# Local session handoff — gitignored per owner; lives only in the working tree
+CLAUDE.md
