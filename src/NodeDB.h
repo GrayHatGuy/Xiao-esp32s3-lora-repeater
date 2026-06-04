@@ -14,9 +14,10 @@
 //   - Reads are O(N) linear search; N <= 64 so this is cheap.
 //   - LRU eviction (by in-RAM lastSeenMs) kicks in when the table is full.
 //
-// Thread-safety: callers must serialize access. In this project only
-// radio1Task (the Meshtastic-side task) touches NodeDB, so no extra
-// locking is needed.
+// Thread-safety: all public functions take an internal mutex (created in
+// begin()), so multiple radio tasks may call upsert()/lookupShortName()
+// concurrently. This matters from the quad routing-matrix onward, where more
+// than one Meshtastic-facing radio task can touch NodeDB.
 // ---------------------------------------------------------------------------
 
 #pragma once
@@ -37,9 +38,9 @@ struct Entry {
     char     longName [MAX_LONG_NAME  + 1];
 };
 
-// Load the table from NVS. Call once from setup() before the radio tasks
-// start serving packets. Safe to call repeatedly; subsequent calls are
-// no-ops aside from a debug print of the entry count.
+// Load the table from NVS and create the internal mutex. Call once from
+// setup() before the radio tasks start serving packets. Safe to call
+// repeatedly; subsequent calls are no-ops aside from a debug print.
 void begin();
 
 // Insert or update an entry. If the table is full, evicts the entry with
@@ -47,11 +48,12 @@ void begin();
 // true on success.
 bool upsert(uint32_t nodeId, const char *shortName, const char *longName);
 
-// Returns a pointer to the short name for nodeId, or nullptr if not known.
-// Also bumps that entry's lastSeenMs so lookup-heavy nodes aren't evicted
-// in favour of broadcast-only ones. The pointer is valid until the next
-// mutating call (upsert).
-const char *lookupShortName(uint32_t nodeId);
+// Copy the short name for nodeId into `out` (always null-terminated when
+// outCap > 0) and return true if found; returns false with out[0]='\0' if
+// not known. Copy-based — rather than returning a pointer into the table —
+// so the result stays valid even if another task mutates the table
+// concurrently. Also bumps that entry's lastSeenMs.
+bool lookupShortName(uint32_t nodeId, char *out, size_t outCap);
 
 // Pretty-print the table to Serial. Useful for diagnostics; call from
 // setup() right after begin() to see what was restored from flash.

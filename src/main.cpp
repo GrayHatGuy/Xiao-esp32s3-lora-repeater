@@ -1,30 +1,29 @@
 /**
  * main.cpp
  * ========
- * Dual Wio SX1262 LoRa crossover bridge for XIAO ESP32S3 Sense.
- * Uses the WioSX1262 wrapper class (WioSX1262.h / WioSX1262.cpp).
+ * Quad-radio cross-protocol LoRa bridge for the XIAO ESP32S3.
  *
- * Bridge logic:
- *   Radio1 RX  →  Radio2 TX
- *   Radio2 RX  →  Radio1 TX
+ *   R1/R2 = SX1262 (or LR1121) on the XIAO SPI bus (WioSX1262 / WioLR1121).
+ *   R3/R4 = LR1121 on the LilyGO T-Lora-Dual co-processor, reached over a
+ *           framed UART link (RemoteRadio + UartLink + LinkProtocol).
  *
- * Project layout:
- *   your_project/
- *   ├── platformio.ini
- *   └── src/
- *       ├── main.cpp        ← this file
- *       ├── WioSX1262.h
- *       └── WioSX1262.cpp
+ * Bridge logic: each radio's RX is repeated to every radio selected in that
+ * radio's routeMask (the portal-configurable routing matrix), with the
+ * existing cross-protocol translation. Default routeMask reproduces the
+ * historical R1<->R2 crossover; R3/R4 are disabled until configured.
  *
- * All LoRa RF settings (frequency, BW, SF, CR, power, sync word) are
+ * All LoRa RF settings (frequency, BW, SF, CR, power, sync word, band) are
  * resolved at runtime from BridgeConfig (NVS / captive portal). The
  * platformio.ini LORA_RADIO*_* build flags only seed first-boot defaults.
  */
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <stdint.h>
 #include "WioSX1262.h"
 #include "WioLR1121.h"
+#include "RemoteRadio.h"
+#include "UartLink.h"
 #include "RadioProfile.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
@@ -37,14 +36,8 @@
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
 #include <esp_mac.h>
 
-// Per-radio LoRa RF is resolved at RUNTIME from BridgeConfig (schema v4) —
-// see makeLoraConfig() below. There are no compile-time LORA_RADIO*_* RF
-// macros any more; platformio.ini build flags now only seed BridgeConfig's
-// first-boot defaults. Preamble length and TCXO voltage stay compile-time
-// constants (board facts — WioSX1262.h §6).
-
-// Build a LoraConfig for one radio (index 0 or 1) from the live BridgeConfig.
-// TCXO voltage is chip-dependent (SX1262 module vs LR1121 module).
+// Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
+// BridgeConfig. TCXO voltage is chip-dependent (SX1262 vs LR1121 module).
 static LoraConfig makeLoraConfig(int radio, uint8_t chip)
 {
     LoraConfig c;
@@ -115,6 +108,21 @@ static void deriveMacIdentity()
 #define R2_ANT_SW   6   // RF switch        (D5 / GPIO6)
 
 // ============================================================
+//  R3/R4 UART co-processor link (T-Lora-Dual). Build-flag overridable.
+//  XIAO UART1 on D6/D7 (GPIO43/44) — the only clean free pads, since
+//  `Serial` is USB-CDC. VERIFY against your physical wiring.
+// ============================================================
+#ifndef BRIDGE_LINK_TX_PIN
+  #define BRIDGE_LINK_TX_PIN  43   // D6 -> co-proc RX
+#endif
+#ifndef BRIDGE_LINK_RX_PIN
+  #define BRIDGE_LINK_RX_PIN  44   // D7 <- co-proc TX
+#endif
+#ifndef BRIDGE_LINK_BAUD
+  #define BRIDGE_LINK_BAUD    460800
+#endif
+
+// ============================================================
 //  FreeRTOS configuration
 // ============================================================
 // Radio task stack. Bumped from 4096 to 8192 once F1 (NodeDB) landed:
@@ -127,30 +135,27 @@ static void deriveMacIdentity()
 #define BRIDGE_POLL_MS     1       // ms between RX polls
 
 // ============================================================
-//  Shared SPI mutex — created in setup(), passed to both radios
+//  Shared SPI mutex — created in setup(), passed to the local radios
 // ============================================================
 SemaphoreHandle_t spiMutex = NULL;
 
 // ============================================================
-//  Radio objects — constructed as pointers so the mutex exists
-//  before the WioSX1262 constructors run.
+//  Radio table. 0/1 = local (XIAO SPI), 2/3 = remote (T-Lora-Dual UART).
+//  Constructed in setup() once the mutex / SPI bus / link are ready.
 // ============================================================
-LoraRadio *radio1 = nullptr;
-LoraRadio *radio2 = nullptr;
-// Diagnostic: when Radio 2 is the LR1121, this points to the same object so
-// radio2Task can read the ISR counter for the heartbeat. nullptr otherwise.
-WioLR1121 *radio2_lr_diag = nullptr;
+static constexpr int NR = BridgeConfig::NUM_RADIOS;   // 4
 
-// ============================================================
-//  Per-radio channel context — g_chan[0] = radio1, g_chan[1] = radio2.
-//  Resolved once in setup() before the radio tasks start; read-only after.
-// ============================================================
-RadioChannel g_chan[2];
+LoraRadio   *g_radio[NR]       = { nullptr, nullptr, nullptr, nullptr };
+RadioChannel g_chan[NR];
+bool         g_radioEnabled[NR] = { false, false, false, false };
+uint8_t      g_routeMask[NR]    = { 0, 0, 0, 0 };
+static const char *kTag[NR]     = { "R1", "R2", "R3", "R4" };
 
-// Per-radio enable flag. A radio whose BridgeConfig protocol is PROTO_NONE
-// is disabled — its RX task is not spawned and the other radio bridges
-// nothing to it (single-radio monitor mode, a deliberate debug option).
-bool g_radioEnabled[2] = { true, true };
+// One UART link shared by the two remote radios (R3/R4). Only opened in
+// setup() if at least one remote radio is enabled, so a pure R1/R2 build
+// never touches the link GPIOs or spawns the link task.
+HardwareSerial g_linkSerial(1);   // UART1
+UartLink       g_link(g_linkSerial);
 
 // Resolve one radio's channel into `out` from its protocol (sync word) and
 // its BridgeConfig channel name/key strings.
@@ -175,16 +180,10 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
 }
 
 // ============================================================
-//  Forward declarations
-// ============================================================
-void radio1Task(void *pvParameters);
-void radio2Task(void *pvParameters);
-
-// ============================================================
 //  Cross-protocol bridge core
 //  ----------------------------------------------------------------
-//  One generic per-packet bridge step driven by the two radios' LoRa
-//  sync words. Supports three protocols today:
+//  One generic per-packet bridge step driven by the source/destination
+//  radios' LoRa sync words. Supports three protocols today:
 //    0x12 MeshCore   <-> [MC] marker, body = decoded UTF-8 text
 //    0x2B Meshtastic <-> [MT] marker, body = decoded UTF-8 text
 //    0x42 Reticulum  <-> [rns <seq> <x>/<y>] marker, body = base64 of raw
@@ -349,8 +348,9 @@ static void buildTextSrcMarker(uint8_t srcSync,
         if (len >= 8) {
             uint32_t srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                            | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
-            const char *shortName = NodeDB::lookupShortName(srcId);
-            if (shortName && shortName[0]) {
+            char shortName[NodeDB::MAX_SHORT_NAME + 1] = {0};
+            if (NodeDB::lookupShortName(srcId, shortName, sizeof(shortName)) &&
+                shortName[0]) {
                 snprintf(out, outCap, "[MT !%08lx %s]",
                          (unsigned long)srcId, shortName);
             } else {
@@ -473,8 +473,8 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
 
     // Loop check — drop anything already carrying a bridge marker.
     // We use 3-char "[MT" and "[MC" prefixes so the check survives the
-    // upcoming "[MT <SHORT>]" form when NodeDB attribution lands. The "[rns"
-    // 4-char prefix already covers both legacy and fragmented RNS markers.
+    // "[MT <SHORT>]" attribution form. The "[rns" 4-char prefix already
+    // covers both legacy and fragmented RNS markers.
     if (strncmp(body, "[MT",  3) == 0 ||
         strncmp(body, "[MC",  3) == 0 ||
         strncmp(body, "[rns", 4) == 0) {
@@ -536,74 +536,75 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
 }
 
 // ============================================================
-//  FreeRTOS task: Radio1 RX → Radio2 TX
+//  Generic per-radio FreeRTOS task. `pvParameters` carries the radio index.
+//  On RX, fans the packet out to every radio selected in this radio's
+//  routeMask (the configurable routing matrix). Meshtastic radios also emit
+//  periodic NodeInfo so MT clients reveal our bridged text.
 // ============================================================
-void radio1Task(void *pvParameters)
+void radioTask(void *pvParameters)
 {
-    uint8_t buf[LORA_MAX_PACKET];
+    const int   i    = (int)(intptr_t)pvParameters;
+    LoraRadio  *self = g_radio[i];
+    const char *tag  = kTag[i];
+    uint8_t     buf[LORA_MAX_PACKET];
 
-    // First Meshtastic NodeInfo goes out ~10 s after task start, then every
-    // 5 min. Without this, Meshtastic clients tend to hide text messages from
-    // a node they've never seen NodeInfo for, so the bridge appears silent.
-    // The guard on the sync word keeps the broadcast silent if R1 is ever
-    // reconfigured to a non-Meshtastic protocol (it's a compile-time check,
-    // so unused code drops out of the binary).
-    uint32_t nextNodeInfoMs = millis() + 10000;
+    const bool isMT = (g_chan[i].protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC);
+    uint32_t   nextNodeInfoMs = millis() + 10000;
 
     for (;;) {
-        if (g_chan[0].protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC &&
-            (int32_t)(millis() - nextNodeInfoMs) >= 0) {
+        // Periodic Meshtastic NodeInfo (MT radios only). Without it, MT
+        // clients tend to hide text from a node they've never seen NodeInfo
+        // for, so the bridge appears silent.
+        if (isMT && (int32_t)(millis() - nextNodeInfoMs) >= 0) {
             uint8_t niPkt[256];
             size_t  niLen = 0;
             if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
-                    g_chan[0],
-                    BridgeConfig::mtNodeId(),
-                    BridgeConfig::mtNodeIdStr(),
-                    BridgeConfig::mtLongName(),
-                    BridgeConfig::mtShortName(),
-                    niPkt, sizeof(niPkt), niLen)) {
-                Serial.printf("[%8lu ms][R1 NodeInfo TX] %u B id=%s name=\"%s\"\n",
-                              millis(), (unsigned)niLen,
-                              BridgeConfig::mtNodeIdStr(),
-                              BridgeConfig::mtLongName());
-                int16_t txState = radio1->transmit(niPkt, niLen);
-                if (txState != RADIOLIB_ERR_NONE) {
-                    Serial.printf("[%8lu ms][R1 NodeInfo TX] ERROR %d\n",
-                                  millis(), txState);
-                }
-                radio1->startReceive();
+                    g_chan[i], BridgeConfig::mtNodeId(),
+                    BridgeConfig::mtNodeIdStr(), BridgeConfig::mtLongName(),
+                    BridgeConfig::mtShortName(), niPkt, sizeof(niPkt), niLen)) {
+                Serial.printf("[%8lu ms][%s NodeInfo TX] %u B id=%s name=\"%s\"\n",
+                              millis(), tag, (unsigned)niLen,
+                              BridgeConfig::mtNodeIdStr(), BridgeConfig::mtLongName());
+                int16_t txState = self->transmit(niPkt, niLen);
+                if (txState != RADIOLIB_ERR_NONE)
+                    Serial.printf("[%8lu ms][%s NodeInfo TX] ERROR %d\n",
+                                  millis(), tag, txState);
+                self->startReceive();
             } else {
-                Serial.printf("[%8lu ms][R1 NodeInfo TX] encode failed\n",
-                              millis());
+                Serial.printf("[%8lu ms][%s NodeInfo TX] encode failed\n",
+                              millis(), tag);
             }
             nextNodeInfoMs = millis() + 300000;   // every 5 min
         }
 
-        if (radio1->available()) {
+        if (self->available()) {
             size_t len  = sizeof(buf);
             float  rssi = 0.0f;
             float  snr  = 0.0f;
 
-            int16_t state = radio1->read(buf, len, &rssi, &snr);
+            int16_t state = self->read(buf, len, &rssi, &snr);
 
             if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              millis(), (unsigned)len, rssi, snr);
+                Serial.printf("[%8lu ms][%s RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                              millis(), tag, (unsigned)len, rssi, snr);
 
-                MeshDecoderDebug::print(buf, len, g_chan[0], "R1");
+                MeshDecoderDebug::print(buf, len, g_chan[i], tag);
 
-#ifndef R2_RX_ONLY_TEST
-                if (g_radioEnabled[1])
-                    bridgePacket(g_chan[0], g_chan[1], radio2, "R1", buf, len);
-#endif
+                // Fan out to every radio this one routes to (routing matrix).
+                const uint8_t mask = g_routeMask[i];
+                for (int j = 0; j < NR; j++) {
+                    if (j == i) continue;
+                    if (!(mask & (uint8_t)(1u << j))) continue;
+                    if (!g_radioEnabled[j] || !g_radio[j]) continue;
+                    bridgePacket(g_chan[i], g_chan[j], g_radio[j], tag, buf, len);
+                }
 
-                // RadioLib exits RX mode on packet receipt;
-                // restore it before polling again.
-                radio1->startReceive();
+                // RadioLib exits RX mode on packet receipt; restore it.
+                self->startReceive();
 
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][R1 RX] ERROR %d\n", millis(), state);
-                radio1->startReceive();
+                Serial.printf("[%8lu ms][%s RX] ERROR %d\n", millis(), tag, state);
+                self->startReceive();
             }
         }
 
@@ -611,73 +612,9 @@ void radio1Task(void *pvParameters)
     }
 }
 
-// ============================================================
-//  FreeRTOS task: Radio2 RX → Radio1 TX
-// ============================================================
-void radio2Task(void *pvParameters)
-{
-    uint8_t  buf[LORA_MAX_PACKET];
-    uint32_t nextHeartbeatMs = 5000;   // first beat 5 s after task start
-    uint32_t lastIsrCount    = 0;
-
-    for (;;) {
-        // Diagnostic heartbeat — only when Radio 2 is LR1121. Prints the ISR
-        // counter, current _rxFlag, and the delta since the last beat. If the
-        // counter is stuck at 1 across multiple beats while R1 is receiving
-        // packets, DIO9 is wedged HIGH and the IRQ-clear path is the bug.
-        if (radio2_lr_diag && (int32_t)(millis() - nextHeartbeatMs) >= 0) {
-            uint32_t cnt   = radio2_lr_diag->_isrCount;
-            bool     flag  = radio2_lr_diag->_rxFlag;
-            uint32_t delta = cnt - lastIsrCount;
-            uint32_t irqRg = radio2_lr_diag->debugIrqStatus();
-            Serial.printf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d irq=0x%08lX%s\n",
-                          millis(),
-                          (unsigned long)cnt,
-                          (unsigned long)delta,
-                          flag ? 1 : 0,
-                          (unsigned long)irqRg,
-                          (irqRg & 0x08UL) ? "  <-- RX_DONE latched!" : "");
-            lastIsrCount    = cnt;
-            nextHeartbeatMs = millis() + 5000;
-        }
-
-        if (radio2->available()) {
-            size_t len  = sizeof(buf);
-            float  rssi = 0.0f;
-            float  snr  = 0.0f;
-
-            int16_t state = radio2->read(buf, len, &rssi, &snr);
-
-            if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              millis(), (unsigned)len, rssi, snr);
-
-                MeshDecoderDebug::print(buf, len, g_chan[1], "R2");
-
-                if (g_radioEnabled[0])
-                    bridgePacket(g_chan[1], g_chan[0], radio1, "R2", buf, len);
-
-                radio2->startReceive();
-
-            } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][R2 RX] ERROR %d\n", millis(), state);
-                radio2->startReceive();
-            } else {
-                // state==ERR_NONE but len==0: ISR fired and read() succeeded
-                // but returned zero bytes — getPacketLength() was 0 at read
-                // time. Phase B-2 instrumentation to surface this case.
-                Serial.printf("[%8lu ms][R2 RX EMPTY] state=%d len=%u\n",
-                              millis(), state, (unsigned)len);
-                radio2->startReceive();
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(BRIDGE_POLL_MS));
-    }
-}
-
-// Construct the radio wrapper for a slot, picking SX1262 vs LR1121 by chip.
-// The LR1121 module has an integrated RF switch, so antSw is unused for it.
+// Construct the radio wrapper for a LOCAL slot (R1/R2), picking SX1262 vs
+// LR1121 by chip. The LR1121 module has an integrated RF switch, so antSw is
+// unused for it. Remote slots (R3/R4) use RemoteRadio, built directly.
 static LoraRadio *makeRadio(uint8_t chip, int nss, int irqDio, int reset,
                             int busy, int antSw, const char *name,
                             const LoraConfig &cfg)
@@ -694,7 +631,7 @@ void setup()
 {
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
-    Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Crossover Bridge ===");
+    Serial.println("\n=== XIAO ESP32S3 Quad-Radio Cross-Protocol Bridge ===");
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
@@ -747,40 +684,36 @@ void setup()
         Serial.println("[setup] proceeding to bridge mode");
     }
 
-    // Per-radio enable: a radio whose protocol is PROTO_NONE is disabled.
-    g_radioEnabled[0] = (BridgeConfig::radioProtocol(0) != BridgeConfig::PROTO_NONE);
-    g_radioEnabled[1] = (BridgeConfig::radioProtocol(1) != BridgeConfig::PROTO_NONE);
-    if (!g_radioEnabled[0])
-        Serial.println("[setup] Radio1 protocol = None — disabled (monitor mode)");
-    if (!g_radioEnabled[1])
-        Serial.println("[setup] Radio2 protocol = None — disabled (monitor mode)");
+    // Per-radio enable (protocol != None) + cached routing matrix.
+    for (int i = 0; i < NR; i++) {
+        g_radioEnabled[i] = (BridgeConfig::radioProtocol(i) != BridgeConfig::PROTO_NONE);
+        g_routeMask[i]    = BridgeConfig::radioRouteMask(i);
+        if (!g_radioEnabled[i])
+            Serial.printf("[setup] Radio%d protocol = None — disabled\n", i + 1);
+    }
 
-    // Resolve each radio's channel into g_chan[] before any RX. Protocol +
-    // RF + channel all come from BridgeConfig (portal-saved, or first-boot
-    // build-flag defaults).
-    resolveRadioChannel(BridgeConfig::radioSyncWord(0),
-                        BridgeConfig::radio1ChannelName(),
-                        BridgeConfig::radio1ChannelKey(), g_chan[0]);
-    resolveRadioChannel(BridgeConfig::radioSyncWord(1),
-                        BridgeConfig::radio2ChannelName(),
-                        BridgeConfig::radio2ChannelKey(), g_chan[1]);
+    // Resolve each enabled radio's channel into g_chan[] before any RX.
+    for (int i = 0; i < NR; i++) {
+        if (g_radioEnabled[i])
+            resolveRadioChannel(BridgeConfig::radioSyncWord(i),
+                                BridgeConfig::radioChannelName(i),
+                                BridgeConfig::radioChannelKey(i), g_chan[i]);
+    }
 
     // Load persisted NodeDB before the radio tasks start so the very first
-    // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution
-    // if the sender was seen in a previous boot.
+    // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution.
     NodeDB::begin();
     NodeDB::debugDump();
 
     // Start shared SPI bus with explicit XIAO ESP32S3 pin mapping
     spi.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
 
-    // Mutex must exist before any WioSX1262 object is constructed
+    // Mutex must exist before any local radio object is constructed
     spiMutex = xSemaphoreCreateMutex();
     configASSERT(spiMutex != NULL);
 
-    // Resolve each radio's chip. DUAL_* profiles fix it at compile time;
-    // the MIXED profile fixes Radio 1 = SX1262 and reads Radio 2 from
-    // BridgeConfig (build-flag default or portal-saved).
+    // R1/R2 chip resolve. DUAL_* profiles fix it at compile time; the MIXED
+    // profile fixes Radio 1 = SX1262 and reads Radio 2 from BridgeConfig.
     uint8_t chip0, chip1;
 #if defined(RADIO_PROFILE_DUAL_LR1121)
     chip0 = chip1 = BridgeConfig::CHIP_LR1121;
@@ -790,34 +723,24 @@ void setup()
     chip0 = BridgeConfig::CHIP_SX1262;
     chip1 = BridgeConfig::radioChip(1);
 #endif
-    Serial.printf("[setup] Radio1 = %s, Radio2 = %s\n",
-                  chip0 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262",
-                  chip1 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262");
 
-    // Construct radio objects now the mutex and SPI bus are ready. RF comes
-    // from BridgeConfig at runtime (makeLoraConfig); the chip wrapper is
-    // picked by makeRadio().
-    LoraConfig radio1Config = makeLoraConfig(0, chip0);
-    LoraConfig radio2Config = makeLoraConfig(1, chip1);
-    radio1 = makeRadio(chip0, R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
-                       R1_ANT_SW, "Radio1-B2B", radio1Config);
-    radio2 = makeRadio(chip1, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
-                       R2_ANT_SW, "Radio2-Edge", radio2Config);
-    if (chip1 == BridgeConfig::CHIP_LR1121) {
-        radio2_lr_diag = static_cast<WioLR1121 *>(radio2);
-    }
+    // Construct LOCAL radios (R1/R2) on the XIAO SPI bus.
+    if (g_radioEnabled[0])
+        g_radio[0] = makeRadio(chip0, R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
+                               R1_ANT_SW, "Radio1-B2B", makeLoraConfig(0, chip0));
+    if (g_radioEnabled[1])
+        g_radio[1] = makeRadio(chip1, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
+                               R2_ANT_SW, "Radio2-Edge", makeLoraConfig(1, chip1));
 
     // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
     delay(150);
 
-    // Pre-flight: manually pulse each RESET and watch BUSY drain to LOW.
-    // If BUSY stays HIGH for 50 ms after reset that radio's module is absent
-    // or unpowered — wiring problem, not a software bug.
+    // Pre-flight (local radios only): pulse RESET and watch BUSY drain LOW.
+    // BUSY stuck HIGH 50 ms after reset => module absent/unpowered (wiring).
     auto busyWait = [](int resetPin, int busyPin, const char *label) {
         pinMode(resetPin, OUTPUT);
-        pinMode(busyPin,  INPUT);   // must configure before digitalRead(),
-                                    // else newer arduino-esp32 cores log
-                                    // "IO N is not set as GPIO"
+        pinMode(busyPin,  INPUT);   // configure before digitalRead(), else newer
+                                    // arduino-esp32 cores log "IO N is not GPIO"
         digitalWrite(resetPin, LOW);
         delay(2);
         digitalWrite(resetPin, HIGH);
@@ -827,30 +750,23 @@ void setup()
                       label, digitalRead(busyPin), millis() - t0,
                       digitalRead(busyPin) ? "STUCK-HIGH -> module absent/unpowered!" : "OK");
     };
-    busyWait(R1_RESET, R1_BUSY, "R1");
-    busyWait(R2_RESET, R2_BUSY, "R2");
+    if (g_radioEnabled[0]) busyWait(R1_RESET, R1_BUSY, "R1");
+    if (g_radioEnabled[1]) busyWait(R2_RESET, R2_BUSY, "R2");
 
-    // Raw SPI probe on R1: send SX1262 GetStatus opcode (0xC0) and read
-    // the response byte.  This bypasses RadioLib entirely so we can see
-    // what MISO actually carries.
-    //   0x00 or 0xFF → MISO not connected to this chip
-    //   0x20..0x2E   → valid chip status byte (SPI path works)
-    {
+    // Raw SPI probe on R1 (SX1262 GetStatus 0xC0 + version reg) — bypasses
+    // RadioLib so we can see what MISO carries. 0x00/0xFF = MISO open;
+    // 0x20-0x2E = chip alive. Only meaningful for a local SX1262 R1.
+    if (g_radioEnabled[0] && chip0 == BridgeConfig::CHIP_SX1262) {
         SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
         digitalWrite(R1_NSS, LOW);
         delayMicroseconds(2);
-        SPI.transfer(0xC0);           // GetStatus opcode
+        SPI.transfer(0xC0);                     // GetStatus opcode
         uint8_t r1Status = SPI.transfer(0x00);  // read status byte
         digitalWrite(R1_NSS, HIGH);
         SPI.endTransaction();
         Serial.printf("[diag] R1 raw SPI GetStatus = 0x%02X  "
                       "(0x00/0xFF = MISO open; 0x20-0x2E = chip alive)\n", r1Status);
-    }
 
-    // Raw ReadRegister 0x0320 — read 6 bytes of the version string.
-    // RadioLib's findChip() compares this to "SX1261".
-    // Format: opcode 0x1D + addr 0x0320 + 1 NOP + data bytes.
-    {
         uint8_t ver[6] = {};
         SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
         digitalWrite(R1_NSS, LOW);
@@ -862,53 +778,57 @@ void setup()
         for (int n = 0; n < 6; n++) { ver[n] = SPI.transfer(0x00); }
         digitalWrite(R1_NSS, HIGH);
         SPI.endTransaction();
-        Serial.printf("[diag] R1 reg 0x0320 raw: "
-                      "%02X %02X %02X %02X %02X %02X  = '%.6s'\n",
-                      ver[0], ver[1], ver[2], ver[3], ver[4], ver[5],
-                      (char*)ver);
-        Serial.printf("[diag] RadioLib expects '%.6s' at 0x0320\n", "SX1261");
+        Serial.printf("[diag] R1 reg 0x0320 raw: %02X %02X %02X %02X %02X %02X  = '%.6s'\n",
+                      ver[0], ver[1], ver[2], ver[3], ver[4], ver[5], (char*)ver);
     }
 
-    // Initialise — applies the runtime RF config. A PROTO_NONE radio is
-    // skipped (begin() never called) so its slot can be left empty.
-    bool r1ok = g_radioEnabled[0] ? radio1->begin() : false;
-    bool r2ok = g_radioEnabled[1] ? radio2->begin() : false;
+    // Construct REMOTE radios (R3/R4) on the T-Lora-Dual co-processor. They
+    // register their RX queues in the ctor, so build them BEFORE the link
+    // service task starts. The UART link is only opened when a remote radio is
+    // enabled — a pure R1/R2 build never touches the link GPIOs.
+    if (g_radioEnabled[2])
+        g_radio[2] = new RemoteRadio(g_link, /*localRadio=*/0, "Radio3-LR",
+                                     makeLoraConfig(2, BridgeConfig::CHIP_LR1121),
+                                     BridgeConfig::radioBand(2));
+    if (g_radioEnabled[3])
+        g_radio[3] = new RemoteRadio(g_link, /*localRadio=*/1, "Radio4-LR",
+                                     makeLoraConfig(3, BridgeConfig::CHIP_LR1121),
+                                     BridgeConfig::radioBand(3));
+    if (g_radioEnabled[2] || g_radioEnabled[3])
+        g_link.begin(BRIDGE_LINK_BAUD, BRIDGE_LINK_RX_PIN, BRIDGE_LINK_TX_PIN);
 
-    if (g_radioEnabled[0] && !r1ok) {
-        Serial.println("\nFATAL: Radio1 init failed. Check wiring. Halting.");
-        while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-    }
-    if (g_radioEnabled[1] && !r2ok) {
-        Serial.println("\n[WARN] Radio2 init failed — running Radio1 only.\n");
+    // Initialise every enabled radio. Local R1 failing is fatal (wiring);
+    // any other radio failing just disables that slot so the rest keep going.
+    for (int i = 0; i < NR; i++) {
+        if (!g_radioEnabled[i] || !g_radio[i]) continue;
+        if (g_radio[i]->begin()) continue;
+        if (i == 0) {
+            Serial.println("\nFATAL: Radio1 init failed. Check wiring. Halting.");
+            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        }
+        Serial.printf("\n[WARN] Radio%d init failed — disabling that slot.\n", i + 1);
+        g_radioEnabled[i] = false;
     }
 
     // Start enabled radios listening
-    if (g_radioEnabled[0]) radio1->startReceive();
-    if (g_radioEnabled[1]) radio2->startReceive();
+    for (int i = 0; i < NR; i++)
+        if (g_radioEnabled[i] && g_radio[i]) g_radio[i]->startReceive();
 
-#ifdef R2_RX_ONLY_TEST
-    Serial.println("[setup] *** R2_RX_ONLY_TEST: R1->R2 forward DISABLED — R2 is RX-only (diagnostic) ***");
-#endif
     Serial.println("\nBridge active.\n");
 
-    // Spawn one FreeRTOS task per enabled radio, pinned to separate cores
-    if (g_radioEnabled[0]) {
-        xTaskCreatePinnedToCore(
-            radio1Task, "R1_task",
-            BRIDGE_TASK_STACK, NULL,
-            BRIDGE_TASK_PRIO,  NULL,
-            0   // core 0
-        );
+    // Spawn one task per enabled radio, distributed across the two cores.
+    int spawned = 0;
+    for (int i = 0; i < NR; i++) {
+        if (!g_radioEnabled[i] || !g_radio[i]) continue;
+        char taskName[8];
+        snprintf(taskName, sizeof(taskName), "R%d_task", i + 1);
+        xTaskCreatePinnedToCore(radioTask, taskName,
+                                BRIDGE_TASK_STACK, (void *)(intptr_t)i,
+                                BRIDGE_TASK_PRIO, NULL, i % 2);
+        spawned++;
     }
-
-    if (g_radioEnabled[1]) {
-        xTaskCreatePinnedToCore(
-            radio2Task, "R2_task",
-            BRIDGE_TASK_STACK, NULL,
-            BRIDGE_TASK_PRIO,  NULL,
-            1   // core 1
-        );
-    }
+    if (spawned == 0)
+        Serial.println("[setup] WARNING: no radios enabled — bridge idle.");
 }
 
 // ============================================================
