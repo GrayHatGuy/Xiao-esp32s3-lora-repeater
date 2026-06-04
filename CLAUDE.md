@@ -34,7 +34,7 @@
 ### 0.3 How the bridge works (orientation for code edits)
 - `src/main.cpp` runs two FreeRTOS tasks: **`radio1Task`** (R1 RX → forward to R2 TX) and **`radio2Task`** (R2 RX → forward to R1 TX). Each: poll `available()` → `read()` → log `[Rx RX]`/`[Rx decoded]` → `bridgePacket()` → re-`startReceive()`.
 - `makeRadio()` (`main.cpp:676`) builds `WioSX1262` or `WioLR1121` from `(nss, irqDio, reset, busy)`; **R2 IRQ = DIO9**.
-- `src/WioLR1121.cpp/.h` = the LR1121 driver (chip-generic despite the name). Uses the **`LR1121Access`** struct (`using`-promotes RadioLib protected methods: `getErrors`, `setRssiCalibration`, `getChipEui`, `getIrqStatus`). RF-switch table (~line 279) is locked to Seeed's SKY13373 truth table: `MODE_STBY={0,0}` (revert, see below), `MODE_RX={1,0}`, `MODE_TX={1,1}`, `MODE_TX_HP={0,1}`; V1=DIO5/V2=DIO6.
+- `src/WioLR1121.cpp/.h` = the LR1121 driver (chip-generic despite the name). Uses the **`LR1121Access`** struct (`using`-promotes the RadioLib *protected* methods `getErrors`, `setRssiCalibration`, `getChipEui`). The IRQ diagnostic `debugIrqStatus()` instead calls the **public** `_radio->getIrqFlags()` directly — no shim. (Function-level changelog: `docs/FIRMWARE-CHANGES.md`.) RF-switch table (~line 279) is locked to Seeed's SKY13373 truth table: `MODE_STBY={0,0}` (revert, see below), `MODE_RX={1,0}`, `MODE_TX={1,1}`, `MODE_TX_HP={0,1}`; V1=DIO5/V2=DIO6.
 - `platformio.ini` env `xiao_esp32s3`. R2 compile-time config: **906.875 MHz / BW 250 / SF11 / CR4-5 / 20 dBm / sync 0x2B**. Build flag **`-DR2_RX_ONLY_TEST` is currently SET** (see 0.6). `LORA_PREAMBLE_LEN=8`.
 
 ### 0.4 Current failing state — the ONE open bug
@@ -108,7 +108,7 @@
 | `71b9f50` | **NEW** `HACKRF-QUICKSTART.md` runbook + pointer from the full plan (now superseded). |
 | `ae2f94f` | **NEW** `docs/WAVESHARE-CORE1121-HANDOFF.md` (#8 bring-up handoff). |
 | `7868d63` | `CLAUDE.md` §2 session-3 reframe block (root cause = RX deficit, not silicon). |
-| `66dac8b` | **firmware:** `WioLR1121.h/.cpp` add `debugIrqStatus()` (+ `getIrqStatus` via `LR1121Access`); `transmit()` logs post-TX irq; `main.cpp` R2 heartbeat prints `irq=`; `platformio.ini` adds `-DR2_RX_ONLY_TEST` (currently active) + RX-only gate in `radio1Task`. |
+| `66dac8b` | **firmware:** `WioLR1121.h/.cpp` add public `debugIrqStatus()` (reads public `getIrqFlags()`); `transmit()` logs post-TX `irq=`; `main.cpp` R2 heartbeat prints `irq=` (+RX_DONE flag); `radio1Task` R1→R2 forward wrapped in `#ifndef R2_RX_ONLY_TEST`; `setup()` banner; `platformio.ini` adds `-DR2_RX_ONLY_TEST` (currently active). Function-level diff: `docs/FIRMWARE-CHANGES.md`. |
 | `8f29bed` | **firmware:** `WioLR1121.cpp` chip-EUI boot logging via `getChipEui`; **NEW** `docs/testbed/MODULE-REGISTRY.md`. |
 | `1884e16` | `CLAUDE.md` §5 rule: electrical/timing/safety claims require datasheet citation (incl. reverts and "no-op" conclusions). |
 | `efbf88c` | (owner) `WioLR1121.cpp` MODE_STBY `{1,0}`→`{0,0}` revert + comment; CLAUDE.md edits. (The revert; not the cause.) |
