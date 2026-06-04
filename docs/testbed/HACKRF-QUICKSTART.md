@@ -48,9 +48,24 @@ If those three lines are there, firmware is correct. Leave the monitor open.
 Follow **"Create the TX device configuration"** in `HACKRF-DIAGNOSTIC-PLAN.md`
 (Pre-flight §3). In short: HackRF Output @ **906.875 MHz**, 2 MS/s, **IF gain 30 dB**,
 AMP off; add a **ChirpChat Modulator** set to **BW 250k / SF11 / CR4/5 / DE 2 /
-sync 0x2B / CRC on / preamble 8**, message generator **Continuous, 1000 ms,**
-payload `HACKRF-CAL`. Save the preset. **Put the 5 dB pad on the HackRF TX port now
-and leave it there** (protects the TX port — never transmit into an open SMA).
+sync 0x2B / CRC on / preamble 8**.
+
+> **⚠️ Sync-word gotcha:** the Sync word box (and FEC/CRC/Header) is a **LoRa-specific**
+> control — it's greyed out / hidden unless the **Modulation scheme = LoRa**. Set
+> Modulation = **LoRa** first, *then* the 2-nibble hex **Sync word** field appears —
+> set it to **`2B`**. A sync mismatch would make both radios detect the preamble but
+> never decode, which masquerades as the exact deficit we're measuring — so this MUST match.
+
+**Message generator** (this is what actually transmits):
+- **Payload `HACKRF-CAL` IS the message** — arbitrary text; the radios just need to
+  *receive* it (it won't decode as Meshtastic — the reception event is what we count).
+- **Continuous + 1000 ms = it auto-repeats every ~1 s, forever** until you Stop →
+  **~30 packets per 30 s window** (that's your denominator).
+- **Keep the payload ≤ ~20 chars.** At SF11/BW250 a short packet is ~0.5–0.7 s on air;
+  a long one could exceed the 1 s period and packets collide.
+
+Save the preset. **Put the 5 dB pad on the HackRF TX port now and leave it there**
+(protects the TX port — never transmit into an open SMA).
 
 > Don't change the HackRF IF gain (30 dB) for the whole sweep. The KT3 does the sweeping.
 
@@ -66,38 +81,64 @@ with **KT3 = 0 dB**.
 
 ## PHASE 2 — THE SWEEP
 
-The signal is identical the whole time; you only change **(a) which radio** the
-chain feeds and **(b) the KT3 dial**. At each KT3 setting you watch the COM6
-monitor for ~30 s and **count** how many packets that radio caught.
+The signal is identical the whole time; you change only **(a) which radio** the
+chain feeds and **(b) the KT3 dial**. At each KT3 setting you hold ~30 s and count
+how many of the ~30 transmitted packets that radio caught.
 
-**What "caught a packet" looks like in the monitor:**
-- **R1 (SX1262):** lines beginning `[  ... ms][R1 RX]`
-- **R2 (LR1121):** lines beginning `[Radio2-Edge] read: pktLen=N` with **N > 0**
-  *(the payload will fail CRC — that's fine; a demod with pktLen>0 counts as "caught")*
-- **Bonus for R2:** the heartbeat `irq=` field — `0x08` = full decode (RX_DONE),
-  `0x10` = heard-the-preamble-but-didn't-finish. Note where it flips from 0x08 to 0x10-only.
+### Key definitions — read once
+- **Detection rate = packets received ÷ packets SENT in the window (~30).**
+  So "90% detection" = caught ~27 of the ~30 *sent* — **NOT** 90% of the 0 dB count.
+  The denominator is always "packets transmitted during the window."
+- **Floor = the KT3 dB where detection crosses 50%** (the steepest, most repeatable
+  point of the curve). **Use the same threshold for both radios** — the deficit is the
+  dB gap between their curves at that threshold. Best practice: **record the % at every
+  dB** so you can read the deficit at any threshold afterward (50% is just the cleanest).
+
+### How to count — no payload parsing needed
+- **R1 (SX1262):** count `[R1 RX]` lines in the window.
+- **R2 (LR1121):** read the heartbeat **`isr=`** value at the window's start and end →
+  **`isr_end − isr_start` = packets R2 completed** that step. (Per-packet you'll also see
+  `[Radio2-Edge] read: pktLen=N` with N>0; and the `irq=` field — `0x08`=full decode,
+  `0x10`=preamble-only — note where it flips. The CRC will fail on the non-Meshtastic
+  payload; the demod/RX_DONE event is what counts, not the decode.)
+
+### Capture-and-review workflow — log it, don't count live
+Live tallying is error-prone. Capture to a file, sweep on a stopwatch, count afterward.
+1. **Tee the monitor to a file:**
+   ```powershell
+   pio device monitor -p COM6 -b 115200 |
+     Tee-Object -FilePath "docs\testbed\run-results\sweep-$(Get-Date -f yyyyMMdd-HHmmss).log"
+   ```
+2. Start HackRF continuous TX (short payload).
+3. **At each KT3 change, drop a bookmark so the log self-labels each window** — fire ONE
+   Heltec send (it *does* decode, so it prints a labeled, timestamped line):
+   ```powershell
+   meshtastic --port COM11 --sendtext "MARK R1 30dB"
+   ```
+   → appears as `[R1 decoded] text: "MARK R1 30dB"`. The HackRF packets between two
+   bookmarks belong to that step. (Every bridge line is also stamped `[NNNNN ms]`, so a
+   stopwatch + timestamps works even without bookmarks — the bookmark just makes slicing trivial.)
+4. Hold each step ~30 s. **After** the sweep, slice the log by bookmark/timestamp and
+   count `[R1 RX]` (R1) or `isr`-delta (R2) per step.
 
 ### Step 1 — Reference radio: R1 (SX1262)
-1. Plug the chain's IPEX end onto **R1's** pigtail. Unplug R1's normal antenna.
-2. Start the HackRF transmitting (SDRAngel **Start**). With **KT3 = 0**, you should
-   see a steady stream of `[R1 RX]` lines (~30 per 30 s). **If you see nothing at
-   KT3=0, stop — the cable chain has a bad connector.** Fix before continuing.
-3. **Coarse sweep:** set KT3 to 0, 10, 20, 30, … 90 dB. At each, watch 30 s and
-   tally `[R1 RX]` count. Somewhere it drops toward zero — that's the cutoff zone.
-4. **Fine sweep:** back up 10 dB into the working zone, then step **1 dB at a time**
-   until R1 catches fewer than ~3 of ~30 packets.
-5. **Write down the highest KT3 dB at which R1 still caught ≥10%** → call it **R1_floor**.
+1. Plug the chain's IPEX end onto **R1's** pigtail; unplug R1's normal antenna.
+2. Start HackRF TX. At **KT3 = 0** you should get ~100% (~30/30). **Nothing at KT3=0 ⇒
+   bad connector in the chain — fix before continuing.**
+3. **Coarse (10 dB steps, 0→90):** find the *cliff zone* — the 10 dB step where detection
+   collapses (e.g. 70 dB = 100%, 80 dB = 10% ⇒ the cliff is between 70 and 80). You're not
+   looking for "drops below 100%", you're finding where it falls off.
+4. **Fine (1 dB steps):** sweep that 10 dB window one dB at a time to map the curve.
+5. **R1_floor = the dB where R1's detection crosses 50%.**
 
 ### Step 2 — Device under test: R2 (LR1121)
-1. Move the chain's IPEX end from R1's pigtail to **R2's** pigtail. **Change nothing
-   else** (HackRF gain, SDRAngel, KT3 start all the same).
-2. Repeat the exact coarse-then-fine sweep, counting `[Radio2-Edge] read: pktLen=N`
-   (N>0) this time.
-3. **Write down R2's cutoff** → **R2_floor**.
+1. Move the chain's IPEX end from R1 to **R2's** pigtail. **Change NOTHING else**
+   (HackRF gain, SDRAngel, KT3 all the same).
+2. Repeat the same coarse→fine sweep, counting via the **`isr`-delta**.
+3. **R2_floor = the dB where R2's detection crosses 50%** (same threshold as R1).
 
-> Tip: if R1 still hears the signal even at KT3 = 90 dB, it has more than 90 dB of
-> range — drop the HackRF IF gain to 20 dB and redo that radio's sweep (and the
-> other radio's too, so both use the same gain).
+> Tip: if R1 still hears it at KT3 = 90 dB, it has more than 90 dB of range — drop the
+> HackRF IF gain to 20 dB and redo **both** radios at that gain (always the same gain for both).
 
 ---
 
