@@ -13,7 +13,7 @@
 
 **Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
 **Local:** `C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater`
-**Branch/HEAD:** `lr1121-phase1` @ `4216f12` (pushed). Snapshot tag `lr1121-bringup-2026-05-26` = HEAD (force-pushable; bump after each branch commit).
+**Branch/HEAD:** `lr1121-phase1` — HEAD is the latest commit (run `git log -1`; the most recent commits are doc-only handoff updates). **Last firmware commit = `66dac8b`.** Snapshot tag `lr1121-bringup-2026-05-26` is force-pushed to HEAD after each commit.
 **Owner:** `GrayHatGuy` (pseudonym), `grayhatguyllc@protonmail.com`. **Real name is ephemeral — never persist to docs.**
 **Shell:** PowerShell (Windows). HEREDOC commit messages via the Bash tool; no inline newlines in shell commands. Build/flash via PlatformIO (`pio`).
 
@@ -94,7 +94,8 @@
 3. `docs/testbed/MODULE-REGISTRY.md` — module EUI ↔ sharpie mapping.
 4. `docs/WAVESHARE-CORE1121-HANDOFF.md` — #8 bring-up.
 5. `run-results/sweep-20260604-134553.log` — the front-end-intact + ChirpChat-fail evidence.
-6. `LR1121-RX-INIT-AUDIT.md` — the 9-run firmware DOE (all refuted) from earlier sessions.
+6. **`docs/FIRMWARE-CHANGES.md`** — function-level code changelog (every firmware commit this run, with the actual added/changed code).
+7. `LR1121-RX-INIT-AUDIT.md` — the 9-run firmware DOE (all refuted) from earlier sessions.
 7. `SEEED_EMAIL_DRAFT.md` / `SEEED_EMAIL_REPLY_2026-05-28.md` — Seeed correspondence (#7).
 8. `docs/REFERENCES.md` — datasheet index; LR1121 §-citations refer to PDFs in `docs/datasheets/`.
 9. Superseded for #5 but retained: `docs/testbed/HACKRF-QUICKSTART.md`, `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md`.
@@ -102,7 +103,9 @@
 ### 0.11 Commit log — this session (newest first)
 | Commit | What changed (file-level) |
 |---|---|
-| `4216f12` | CLAUDE.md: add this §0 handoff. |
+| `042eb04` | **NEW** `docs/FIRMWARE-CHANGES.md` (function-level code changelog); fixed a handoff slip (`debugIrqStatus()` uses public `getIrqFlags()`, not `getIrqStatus` via `LR1121Access`) in §0.3/§0.11. |
+| `566d003` | CLAUDE.md: expanded §0 handoff to full verbosity (this section). |
+| `4216f12` | CLAUDE.md: add the §0 handoff. |
 | `26d9870` | **NEW** `docs/testbed/RX-DEFICIT-MEASUREMENT.md` (safe OTA distance method + safety + why-not-HackRF); ⛔ SUPERSEDED banners on `HACKRF-QUICKSTART.md` + `HACKRF-DIAGNOSTIC-PLAN.md`; CLAUDE.md §2 session-4 block; task #5 repointed. |
 | `36a02c1` | `HACKRF-QUICKSTART.md` clarifications (now superseded): detection-rate def, 50%-floor, isr-delta counting, exact-count Repeat=N + Heltec-bookmark workflow, sync-word=LoRa-mode gotcha. |
 | `71b9f50` | **NEW** `HACKRF-QUICKSTART.md` runbook + pointer from the full plan (now superseded). |
