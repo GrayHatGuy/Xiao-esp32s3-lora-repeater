@@ -40,21 +40,19 @@ static const size_t LORA_MAX = 256;   // max on-air LoRa payload
 #define R4_RST      21
 #define R4_BUSY     39
 
-// --- UART link to the XIAO host (override via build flags) ------------------
-#ifndef LINK_UART_NUM
-  #define LINK_UART_NUM 1
-#endif
-#ifndef LINK_TX_PIN
-  #define LINK_TX_PIN 22   // -> host RX
-#endif
-#ifndef LINK_RX_PIN
-  #define LINK_RX_PIN 23   // <- host TX
-#endif
+// --- UART link to the XIAO host --------------------------------------------
+// The T-Lora-Dual breaks out only ONE serial port: UART0 (U0TXD = GPIO1 /
+// U0RXD = GPIO3) on its 4-pin header (D1: GND / VDD 5V / TX / RX) — verified
+// against the board schematic; GPIO22/23 are not broken out. That header is
+// also the flashing port, so the inter-board link runs on UART0 (`Serial`).
+// There is no separate plaintext debug UART; co-processor logs reach the host
+// as LOG frames. Define COPROC_PLAINTEXT_DEBUG to print logs as plain text
+// instead (for standalone bring-up on a USB-TTL dongle, Xiao disconnected).
 #ifndef LINK_BAUD
   #define LINK_BAUD 460800
 #endif
 
-HardwareSerial LinkSerial(LINK_UART_NUM);
+HardwareSerial &LinkSerial = Serial;   // UART0 (GPIO1/3) — board's only UART
 
 // --- Two LR1121 radios: index 0 = R3 (host-local 0), 1 = R4 (host-local 1) --
 LR1121 radio_3 = new Module(R3_CS, R3_DIO9, R3_RST, R3_BUSY);
@@ -89,8 +87,11 @@ static void linkSend(uint8_t type, uint8_t radio, const uint8_t *payload, size_t
     if (n) LinkSerial.write(frame, n);
 }
 static void linkLog(const char *s) {
+#ifdef COPROC_PLAINTEXT_DEBUG
+    Serial.println(s);            // dongle-readable; standalone bring-up only
+#else
     linkSend(MSG_LOG, RADIO_NONE, (const uint8_t *)s, strlen(s));
-    Serial.println(s);
+#endif
 }
 
 // --- Configure one LR1121 from a CfgRadio (Factory radio_config sequence) ---
@@ -216,8 +217,8 @@ static void feedByte(uint8_t b) {
 }
 
 void setup() {
-    Serial.begin(115200, SERIAL_8N1, 3, 1);   // local USB debug (Factory pins)
-    LinkSerial.begin(LINK_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
+    // UART0 (GPIO3 RX / GPIO1 TX) is both the flashing port and the host link.
+    LinkSerial.begin(LINK_BAUD, SERIAL_8N1, /*rx=*/3, /*tx=*/1);
 
     pinMode(R3_CS, OUTPUT); digitalWrite(R3_CS, HIGH);
     pinMode(R4_CS, OUTPUT); digitalWrite(R4_CS, HIGH);

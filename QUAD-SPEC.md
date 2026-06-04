@@ -82,11 +82,14 @@ overridable (`BRIDGE_LINK_*`).
 | BUSY | 36 | 39 | — | — |
 | SCK/MISO/MOSI | — | — | 25 / 33 / 32 | — |
 | RF switch | internal DIO5–8 (`rfswitch_table`) | same | — | — |
-| UART2 TX → host RX | — | — | — | **GPIO22** |
-| UART2 RX ← host TX | — | — | — | **GPIO23** |
+| UART link TX → host RX | — | — | — | **GPIO1 (U0TXD, D1 hdr)** |
+| UART link RX ← host TX | — | — | — | **GPIO3 (U0RXD, D1 hdr)** |
 
-Other PICO-D4 pins in use: NeoPixel 5, BOOT 0, USB-serial 1/3. GPIO22/23 are free and
-non-strapping. **Verify against the T-Lora-Dual header breakout** — build-flag overridable.
+The T-Lora-Dual exposes only one serial header — **D1 (4-pin: GND / VDD 5V / TX / RX)** on
+**UART0 (GPIO1/3)** — which is also the flashing port; GPIO22/23 are *not* broken out (confirmed
+against the board schematic). The link therefore shares UART0 with flashing (disconnect the host
+to reflash). EN/GPIO0 are on the RESET/BOOT buttons, so the co-processor is flashed with a USB-TTL
+dongle — there is no pass-through from the Xiao.
 
 ## Inter-board UART link
 

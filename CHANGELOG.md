@@ -57,7 +57,9 @@ RX+TX.
 - 2.4 GHz wideLora BW (406.25 / 812.5 / 1625 kHz) acceptance on the LR1121 high
   band is a bench-verify item (the co-proc logs + skips the radio if RadioLib
   rejects the BW).
-- UART link GPIOs (Xiao D6/D7 ↔ T-Lora-Dual GPIO22/23) to confirm vs wiring.
+- UART link: Xiao UART1 (D6/D7 = GPIO43/44) ↔ T-Lora-Dual **UART0 / D1 header** (GPIO1/3) — the
+  board's only exposed serial, shared with flashing (disconnect the host to reflash; the co-proc is
+  flashed via a USB-TTL dongle — no pass-through). Confirmed against the board schematic.
 
 ## v9.0 — 2026-05-25 — Phase 1: Wio-LR1121 cross-band hardware bring-up
 

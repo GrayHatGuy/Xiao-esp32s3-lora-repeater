@@ -100,22 +100,29 @@ The LR1121s run on the T-Lora-Dual under a thin **co-processor firmware** ([`cop
 
 | Signal | Xiao (host) | T-Lora-Dual (co-proc) |
 |--------|-------------|------------------------|
-| host TX → coproc RX | GPIO43 (D6) | GPIO23 |
-| host RX ← coproc TX | GPIO44 (D7) | GPIO22 |
-| GND | GND | GND |
+| host TX → coproc RX | GPIO43 (D6) | **D1 header RX** (U0RXD / GPIO3) |
+| host RX ← coproc TX | GPIO44 (D7) | **D1 header TX** (U0TXD / GPIO1) |
+| GND | GND | D1 header GND |
 
-460800 baud, build-flag configurable (`BRIDGE_LINK_*` on the host, `LINK_*` on the co-proc). **Verify these pins against your physical headers before powering on.** Each board keeps its own USB power/serial.
+The T-Lora-Dual exposes only one serial port — **UART0** on its 4-pin **D1** header (`GND / VDD 5V / TX / RX`); GPIO22/23 are not broken out (confirmed against the board schematic). So the link uses UART0, which is **also the flashing port** (see below). 460800 baud (`BRIDGE_LINK_*` on the host, `LINK_BAUD` on the co-proc). **Cross TX↔RX over** (host TX → coproc RX). The T-Lora can be powered from D1's `VDD 5V`. **Verify against your board before powering on.**
 
 ### Build & flash (two firmwares)
 
+**The T-Lora-Dual has no USB** — flash it first with a **3.3 V USB-TTL dongle** on the **D1** header (the same UART0 the link uses), then wire the link, then flash the Xiao over its native USB:
+
 ```sh
-# Host bridge (Xiao ESP32-S3)
+# 1) Co-processor (T-Lora-Dual). Dongle on D1: dongle TX->RX (GPIO3),
+#    dongle RX->TX (GPIO1), GND<->GND, power via D1 5V. Enter the bootloader
+#    by hand: hold BOOT, tap RESET, release (no auto-reset on the D1 header).
+pio run -d coproc-tlora-dual -t upload --upload-port <dongle COM port>
+
+# 2) Disconnect the dongle, wire the link (table above), then flash the host:
 pio run -e xiao_esp32s3 -t upload
-# Co-processor (T-Lora-Dual, ESP32 PICO-D4)
-pio run -d coproc-tlora-dual -t upload
 ```
 
-Then in the captive portal, set **Radio 3 / Radio 4** protocol + **band** (sub-GHz / 2.4 GHz) + channel, and tick which radios each one should **bridge received traffic to**. The co-processor prints its LR1121 versions and per-config status back through the host serial as `[coproc] …` lines.
+> The Xiao **cannot** flash the T-Lora-Dual — its `EN`/`GPIO0` are on the RESET/BOOT buttons, not header pins, so there's no pass-through path. And because the link shares UART0 with flashing, **disconnect the Xiao link from D1 before reflashing** the co-processor. (For standalone co-proc bring-up on the dongle, build it with `-DCOPROC_PLAINTEXT_DEBUG` for readable logs instead of binary frames.)
+
+Then in the captive portal, set **Radio 3 / Radio 4** protocol + **band** (sub-GHz / 2.4 GHz) + channel, and tick which radios each one should **bridge received traffic to**. Once the link is up, the co-processor's LR1121 versions and per-config status surface through the host serial as `[coproc] …` lines.
 
 ## Roadmap
 
