@@ -101,3 +101,59 @@ static_assert((LORA_RADIO2_SYNC_WORD) >= 0x00 && (LORA_RADIO2_SYNC_WORD) <= 0xFF
 static_assert((LORA_RADIO2_TX_POWER) >= -9 && (LORA_RADIO2_TX_POWER) <= 22,
   "LORA_RADIO2_TX_POWER must be -9..22 dBm (SX1262 PA range)");
 #endif
+
+// --- Radio 3 / Radio 4 (T-Lora-Dual LR1121, remote over UART) --------------
+// LR1121 radios: sub-GHz (150-960) OR 2.4 GHz (2400-2500), same dual-band
+// acceptance + wideLora BW set as R2. Flags are optional first-boot seeds.
+
+#ifdef LORA_RADIO3_FREQUENCY
+static_assert(((LORA_RADIO3_FREQUENCY) >= 150.0f && (LORA_RADIO3_FREQUENCY) <= 960.0f) ||
+              ((LORA_RADIO3_FREQUENCY) >= 2400.0f && (LORA_RADIO3_FREQUENCY) <= 2500.0f),
+  "LORA_RADIO3_FREQUENCY must be 150-960 MHz or 2400-2500 MHz (LR1121)");
+#endif
+#ifdef LORA_RADIO3_BANDWIDTH
+static_assert(LORA_CHK_VALID_BW(LORA_RADIO3_BANDWIDTH),
+  "LORA_RADIO3_BANDWIDTH must be a valid LoRa bandwidth in kHz (sub-GHz or 2.4 GHz wideLora)");
+#endif
+#ifdef LORA_RADIO3_SPREAD_FACTOR
+static_assert((LORA_RADIO3_SPREAD_FACTOR) >= 5 && (LORA_RADIO3_SPREAD_FACTOR) <= 12,
+  "LORA_RADIO3_SPREAD_FACTOR must be 5-12");
+#endif
+#ifdef LORA_RADIO3_CODING_RATE
+static_assert((LORA_RADIO3_CODING_RATE) >= 5 && (LORA_RADIO3_CODING_RATE) <= 8,
+  "LORA_RADIO3_CODING_RATE must be 5-8 (denominator of 4/5..4/8)");
+#endif
+#ifdef LORA_RADIO3_SYNC_WORD
+static_assert((LORA_RADIO3_SYNC_WORD) >= 0x00 && (LORA_RADIO3_SYNC_WORD) <= 0xFF,
+  "LORA_RADIO3_SYNC_WORD must be a single byte (0x00-0xFF)");
+#endif
+#ifdef LORA_RADIO3_TX_POWER
+static_assert((LORA_RADIO3_TX_POWER) >= -9 && (LORA_RADIO3_TX_POWER) <= 22,
+  "LORA_RADIO3_TX_POWER must be -9..22 dBm");
+#endif
+
+#ifdef LORA_RADIO4_FREQUENCY
+static_assert(((LORA_RADIO4_FREQUENCY) >= 150.0f && (LORA_RADIO4_FREQUENCY) <= 960.0f) ||
+              ((LORA_RADIO4_FREQUENCY) >= 2400.0f && (LORA_RADIO4_FREQUENCY) <= 2500.0f),
+  "LORA_RADIO4_FREQUENCY must be 150-960 MHz or 2400-2500 MHz (LR1121)");
+#endif
+#ifdef LORA_RADIO4_BANDWIDTH
+static_assert(LORA_CHK_VALID_BW(LORA_RADIO4_BANDWIDTH),
+  "LORA_RADIO4_BANDWIDTH must be a valid LoRa bandwidth in kHz (sub-GHz or 2.4 GHz wideLora)");
+#endif
+#ifdef LORA_RADIO4_SPREAD_FACTOR
+static_assert((LORA_RADIO4_SPREAD_FACTOR) >= 5 && (LORA_RADIO4_SPREAD_FACTOR) <= 12,
+  "LORA_RADIO4_SPREAD_FACTOR must be 5-12");
+#endif
+#ifdef LORA_RADIO4_CODING_RATE
+static_assert((LORA_RADIO4_CODING_RATE) >= 5 && (LORA_RADIO4_CODING_RATE) <= 8,
+  "LORA_RADIO4_CODING_RATE must be 5-8 (denominator of 4/5..4/8)");
+#endif
+#ifdef LORA_RADIO4_SYNC_WORD
+static_assert((LORA_RADIO4_SYNC_WORD) >= 0x00 && (LORA_RADIO4_SYNC_WORD) <= 0xFF,
+  "LORA_RADIO4_SYNC_WORD must be a single byte (0x00-0xFF)");
+#endif
+#ifdef LORA_RADIO4_TX_POWER
+static_assert((LORA_RADIO4_TX_POWER) >= -9 && (LORA_RADIO4_TX_POWER) <= 22,
+  "LORA_RADIO4_TX_POWER must be -9..22 dBm");
+#endif

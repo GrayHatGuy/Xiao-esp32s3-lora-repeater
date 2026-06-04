@@ -132,10 +132,8 @@ static void appendRadio(String &page, int n) {
     uint8_t  sync  = BridgeConfig::radioSyncWord(idx);
     int8_t   txp   = BridgeConfig::radioTxPower(idx);
     uint8_t  preset= presetFromParams(bw, sf, cr);
-    const char *chName = (n == 1) ? BridgeConfig::radio1ChannelName()
-                                  : BridgeConfig::radio2ChannelName();
-    const char *chKey  = (n == 1) ? BridgeConfig::radio1ChannelKey()
-                                  : BridgeConfig::radio2ChannelKey();
+    const char *chName = BridgeConfig::radioChannelName(idx);
+    const char *chKey  = BridgeConfig::radioChannelKey(idx);
 
     char buf[16];
 
@@ -161,6 +159,26 @@ static void appendRadio(String &page, int n) {
                   "frequency (2400-2500 MHz). Reboot applies a chip change.</div>");
     }
 #endif
+
+    // Band selector — remote LR1121 radios (R3/R4) only. Drives the JS 2.4 GHz
+    // slot math and the co-processor band path.
+    if (n >= 3) {
+        uint8_t curBand = BridgeConfig::radioBand(idx);
+        page += F("<label>Band (LR1121, remote)</label><select id=\"r");
+        page += n;
+        page += F("band\" name=\"r");
+        page += n;
+        page += F("band\" onchange=\"updAll()\"><option value=\"0\"");
+        if (curBand == BridgeConfig::BAND_SUBGHZ) page += F(" selected");
+        page += F(">sub-GHz</option><option value=\"1\"");
+        if (curBand == BridgeConfig::BAND_2G4) page += F(" selected");
+        page += F(">2.4 GHz</option><option value=\"2\"");
+        if (curBand == BridgeConfig::BAND_SBAND) page += F(" selected");
+        page += F(">S-band (disabled stub)</option></select>"
+                  "<div class=\"hint\">R3/R4 are on the T-Lora-Dual over UART. "
+                  "2.4 GHz is region-exempt; S-band is accepted but the "
+                  "co-processor will not key up.</div>");
+    }
 
     // Protocol picker.
     page += F("<label>Protocol</label><select id=\"r");
@@ -308,6 +326,27 @@ static void appendRadio(String &page, int n) {
     page += F("Sync\" value=\"");
     page += buf;
     page += F("\"></div>");
+
+    // Routing matrix — which other radios this one repeats its RX to.
+    page += F("<div class=\"r");
+    page += n;
+    page += F("fld mt mc rns custom\"><label>Bridge received traffic to</label>");
+    uint8_t routeMask = BridgeConfig::radioRouteMask(idx);
+    for (int j = 1; j <= BridgeConfig::NUM_RADIOS; j++) {
+        if (j == n) continue;
+        page += F("<label style=\"font-weight:400;display:inline-block;margin-right:1em\">"
+                  "<input type=\"checkbox\" name=\"r");
+        page += n;
+        page += F("routeTo");
+        page += j;
+        page += F("\" value=\"1\"");
+        if (routeMask & (uint8_t)(1u << (j - 1))) page += F(" checked");
+        page += F(">R");
+        page += j;
+        page += F("</label>");
+    }
+    page += F("<div class=\"hint\">Cross-protocol translation is automatic per "
+              "destination; loops are dropped via bridge markers.</div></div>");
 }
 
 // Inline JS: region table, preset bandwidths, djb2 + slot formula, show/hide.
@@ -367,7 +406,8 @@ static void appendScript(String &page) {
     }
     page += F("};");
     page += F(
-      "var PC=[0,0];"                        // last computed freq per radio
+      "var NRADIOS=4;"                       // BridgeConfig::NUM_RADIOS
+      "var PC=[0,0,0,0];"                    // last computed freq per radio
       "function gv(i){return document.getElementById(i).value;}"
       "function djb2(s){var h=5381;for(var i=0;i<s.length;i++)"
         "h=((h*33)+s.charCodeAt(i))>>>0;return h;}"
@@ -375,12 +415,13 @@ static void appendScript(String &page) {
       // Detection: r2chip selector says LR1121 AND the current frequency
       // field value is in the 2400-2500 MHz range. r1 is always SX1262 so
       // is24(1) is always false.
-      "function is24(n){if(n!==2)return false;"
-        "var c=document.getElementById('r2chip');"
-        "if(!c||c.value!=='1')return false;"
-        "var ff=document.getElementById('r2freq');"
-        "var f=ff?parseFloat(ff.value):0;"
-        "return f>=2400&&f<=2500;}"
+      "function is24(n){"
+        "if(n===2){var c=document.getElementById('r2chip');"
+          "if(!c||c.value!=='1')return false;"
+          "var ff=document.getElementById('r2freq');"
+          "var f=ff?parseFloat(ff.value):0;return f>=2400&&f<=2500;}"
+        "var b=document.getElementById('r'+n+'band');"
+        "return b?(b.value==='1'):false;}"
       // slot(rg,nm,bw[,wide]): when wide=true compute over the 2.4 GHz band
       // (BAND24) instead of the regional sub-GHz band table.
       "function slot(rg,nm,bw,wide){"
@@ -403,6 +444,7 @@ static void appendScript(String &page) {
           "fl[i].style.display=sh?'':'none';}"
         "var fh=document.getElementById('r'+n+'fhint');"
         "var w=is24(n);"           // wideLora detect for THIS radio
+        "var sb=(function(){var b=document.getElementById('r'+n+'band');return b&&b.value==='2';})();"
         "if(p==='1'){var ps=gv('r'+n+'preset');"
           "var bw=w?PRE24[ps]:PRE[ps];"
           "setF(n,slot(gv('region'),PN[ps],bw,w),"
@@ -413,8 +455,9 @@ static void appendScript(String &page) {
             "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}}"
         "else if(p==='2'){fh.textContent="
           "'MeshCore: enter the exact frequency your community uses.';}"
-        "else{fh.textContent='';}}"
-      "function updAll(){upd(1);upd(2);}"
+        "else{fh.textContent='';}"
+        "if(sb)fh.textContent='S-band \\u2014 disabled stub (co-proc will not TX)';}"
+      "function updAll(){for(var i=1;i<=NRADIOS;i++)upd(i);}"
       "window.addEventListener('load',updAll);"
       "</script>");
 }
@@ -425,7 +468,7 @@ static String renderForm(const char *flash = nullptr) {
              (unsigned long)BridgeConfig::mtNodeId());
 
     String page;
-    page.reserve(12288);
+    page.reserve(20480);   // 4 radios + routing matrices
     page += F("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
               "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
               "<title>LoRa Bridge config</title><style>"
@@ -472,8 +515,8 @@ static String renderForm(const char *flash = nullptr) {
     page += F("\" required>");
 
     appendRegionSelect(page);
-    appendRadio(page, 1);
-    appendRadio(page, 2);
+    for (int n = 1; n <= BridgeConfig::NUM_RADIOS; n++)
+        appendRadio(page, n);
 
     page += F("<h2>Bridge behaviour</h2>");
     page += F("<label><input type=\"checkbox\" name=\"positionEnabled\" value=\"1\"");
@@ -520,6 +563,7 @@ static uint8_t syncForProtocol(uint8_t proto) {
 // Resolve a radio slot's chip. DUAL_* profiles are compile-time fixed; the
 // MIXED profile reads Radio 2 from the form (Radio 1 is always SX1262).
 static uint8_t radioChipForSlot(int n) {
+    if (n >= 3) return BridgeConfig::CHIP_LR1121;   // R3/R4 are remote LR1121
 #if defined(RADIO_PROFILE_DUAL_LR1121)
     (void)n; return BridgeConfig::CHIP_LR1121;
 #elif defined(RADIO_PROFILE_DUAL_SX1262)
@@ -555,9 +599,22 @@ static const char *applyRadio(int n, uint8_t region, uint8_t chip) {
 
     String freqStr = s_http.arg(String("r") + n + "Freq");
     float  freq    = freqStr.toFloat();
-    bool   freqOk  = (freq >= SX1262_FREQ_MIN && freq <= SX1262_FREQ_MAX);
+
+    // Band: explicit selector for remote R3/R4; derived from chip+freq for R1/R2.
+    uint8_t band;
+    if (n >= 3) {
+        band = (uint8_t)s_http.arg(String("r") + n + "band").toInt();
+        if (band > BridgeConfig::BAND_SBAND) band = BridgeConfig::BAND_SUBGHZ;
+    } else {
+        band = (chip == BridgeConfig::CHIP_LR1121 && freq >= 2400.0f)
+                   ? BridgeConfig::BAND_2G4 : BridgeConfig::BAND_SUBGHZ;
+    }
+
+    bool freqOk = (freq >= SX1262_FREQ_MIN && freq <= SX1262_FREQ_MAX);
     if (chip == BridgeConfig::CHIP_LR1121 && freq >= 2400.0f && freq <= 2500.0f)
         freqOk = true;   // LR1121 2.4 GHz band — region-exempt
+    if (band == BridgeConfig::BAND_SBAND)
+        freqOk = true;   // S-band stub — accepted but never transmitted
     if (!freqOk)
         return (chip == BridgeConfig::CHIP_LR1121)
             ? "Frequency must be 150-960 MHz or 2400-2500 MHz (LR1121)."
@@ -646,21 +703,22 @@ static const char *applyRadio(int n, uint8_t region, uint8_t chip) {
     BridgeConfig::setRadioCr(idx, cr);
     BridgeConfig::setRadioSyncWord(idx, sync);
     BridgeConfig::setRadioTxPower(idx, txp);
-    if (n == 1) {
-        BridgeConfig::setRadio1ChannelName(chName.c_str());
-        BridgeConfig::setRadio1ChannelKey(chKey.c_str());
-    } else {
-        BridgeConfig::setRadio2ChannelName(chName.c_str());
-        BridgeConfig::setRadio2ChannelKey(chKey.c_str());
+    BridgeConfig::setRadioChannelName(idx, chName.c_str());
+    BridgeConfig::setRadioChannelKey(idx, chKey.c_str());
+    BridgeConfig::setRadioBand(idx, band);
+
+    // Routing matrix: which other radios this one repeats its RX to.
+    uint8_t routeMask = 0;
+    for (int j = 1; j <= BridgeConfig::NUM_RADIOS; j++) {
+        if (j == n) continue;
+        if (s_http.arg(String("r") + n + "routeTo" + j) == "1")
+            routeMask |= (uint8_t)(1u << (j - 1));
     }
+    BridgeConfig::setRadioRouteMask(idx, routeMask);
     return nullptr;
 }
 
 static void handleSave() {
-    Serial.printf("[CP] POST args: r2chip='%s' r2proto='%s' region='%s'\n",
-              s_http.arg("r2chip").c_str(),
-              s_http.arg("r2proto").c_str(),
-              s_http.arg("region").c_str());
     // --- Meshtastic identity ---
     String mtNodeIdRaw  = s_http.arg("mtNodeId");
     String mtNodeIdStr  = s_http.arg("mtNodeIdStr");
@@ -695,31 +753,44 @@ static void handleSave() {
     uint8_t region = (uint8_t)s_http.arg("region").toInt();
     if (region >= RegionPreset::kRegionCount) region = BridgeConfig::REGION_UNSET;
 
-    // --- per-radio chip + protocol / RF / channel ---
-    const char *e1 = applyRadio(1, region, radioChipForSlot(1));
-    if (e1) { fail(e1); return; }
-    const char *e2 = applyRadio(2, region, radioChipForSlot(2));
-    if (e2) { fail(e2); return; }
-
-    uint8_t p1 = BridgeConfig::radioProtocol(0);
-    uint8_t p2 = BridgeConfig::radioProtocol(1);
+    // --- per-radio chip + protocol / RF / channel / band / routing ---
+    for (int n = 1; n <= BridgeConfig::NUM_RADIOS; n++) {
+        const char *e = applyRadio(n, region, radioChipForSlot(n));
+        if (e) { fail(e); return; }
+    }
 
     // At least one radio must be active.
-    if (p1 == BridgeConfig::PROTO_NONE && p2 == BridgeConfig::PROTO_NONE) {
-        fail("At least one radio must have a protocol (both set to None).");
+    int activeCount = 0;
+    for (int i = 0; i < BridgeConfig::NUM_RADIOS; i++)
+        if (BridgeConfig::radioProtocol(i) != BridgeConfig::PROTO_NONE) activeCount++;
+    if (activeCount == 0) {
+        fail("At least one radio must have a protocol (all set to None).");
         return;
     }
 
-    // Same-protocol relay must be between two DIFFERENT channels.
-    if (p1 != BridgeConfig::PROTO_NONE && p1 == p2 &&
-        (p1 == BridgeConfig::PROTO_MT || p1 == BridgeConfig::PROTO_MC)) {
-        if (strcmp(BridgeConfig::radio1ChannelName(),
-                   BridgeConfig::radio2ChannelName()) == 0 &&
-            strcmp(BridgeConfig::radio1ChannelKey(),
-                   BridgeConfig::radio2ChannelKey()) == 0) {
-            fail("Both radios run the same protocol \xe2\x80\x94 their two "
-                 "channels must differ (name or key).");
-            return;
+    // Same-protocol relay must use DIFFERENT channels. Check every routed pair
+    // (i -> j) of same-protocol MT/MC radios: an identical channel name+key
+    // would echo/loop. (Different channels of the same protocol is a valid relay.)
+    for (int i = 0; i < BridgeConfig::NUM_RADIOS; i++) {
+        uint8_t pi = BridgeConfig::radioProtocol(i);
+        if (pi != BridgeConfig::PROTO_MT && pi != BridgeConfig::PROTO_MC) continue;
+        uint8_t mask = BridgeConfig::radioRouteMask(i);
+        for (int j = 0; j < BridgeConfig::NUM_RADIOS; j++) {
+            if (j == i) continue;
+            if (!(mask & (uint8_t)(1u << j))) continue;
+            if (BridgeConfig::radioProtocol(j) != pi) continue;
+            if (strcmp(BridgeConfig::radioChannelName(i),
+                       BridgeConfig::radioChannelName(j)) == 0 &&
+                strcmp(BridgeConfig::radioChannelKey(i),
+                       BridgeConfig::radioChannelKey(j)) == 0) {
+                char msg[96];
+                snprintf(msg, sizeof(msg),
+                         "Radio %d routes to Radio %d on the same channel "
+                         "\xe2\x80\x94 their channels must differ (name or key).",
+                         i + 1, j + 1);
+                fail(msg);
+                return;
+            }
         }
     }
     (void)syncForProtocol;   // reserved for future per-protocol checks
