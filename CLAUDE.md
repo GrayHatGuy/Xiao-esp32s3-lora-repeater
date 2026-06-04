@@ -19,6 +19,23 @@ Phase 0 (dual SX1262, sub-GHz only) ships at v8.1 on `main`. Phase 1 is the work
 
 ## 2. Current state (2026-05-30, end of bench session 2)
 
+> ### ⭐ UPDATE — bench session 4 (2026-06-04): #5 method changed; front end OK
+>
+> **R2 front end is NOT damaged** — it decoded a −68 dBm packet at SNR 10 dB today
+> (`run-results/sweep-20260604-134553.log`); a blown LNA can't. The deficit is the original
+> pre-existing one, not new damage from OTA/point-blank tests.
+>
+> **HackRF/ChirpChat as a LoRa source: ABANDONED.** ChirpChat's CRC/header isn't
+> Semtech-compatible (R1 `ERROR -7` payload-CRC, R2 `irq=0x50` HEADER_ERR, 0 clean decodes,
+> while R2 decoded a *real* Meshtastic packet fine). Plus a cabled high-power source is a
+> hardware-kill hazard: LR1121 abs-max input = **+10 dBm** (datasheet Table 3-1); +30 dBm
+> cabled ≈ +23 dBm at the chip = destroyed.
+>
+> **New #5 method: over-the-air distance sweep with the T3S3 (real LoRa).** Walk the node
+> near→far, both radios log decode+RSSI, the point where R2 quits but R1 still hears = the
+> deficit. Zero hardware risk. Full runbook: **`docs/testbed/RX-DEFICIT-MEASUREMENT.md`**
+> (supersedes HACKRF-QUICKSTART/PLAN for #5).
+
 > ### ⭐ UPDATE — bench session 3 (2026-06-01): root cause reframed
 >
 > The session-2 "silicon damage / `-20` SPI cascade" framing below is a

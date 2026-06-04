@@ -1,5 +1,10 @@
 # HackRF + SDRAngel Diagnostic Plan — Wio-LR1121 RX Bring-Up (Dual-Band)
 
+> **⛔ For task #5, use [`RX-DEFICIT-MEASUREMENT.md`](RX-DEFICIT-MEASUREMENT.md) instead (session 4, 2026-06-04).**
+> The HackRF-as-LoRa-source method here was abandoned: ChirpChat packets aren't Semtech-compatible
+> (won't cleanly decode on the bridge radios), and a cabled high-power source is a damage hazard.
+> This doc is retained for the HackRF *receiver* tests (Test A/C) and historical reference only.
+
 > **▶ Just want to run task #5? Start with [`HACKRF-QUICKSTART.md`](HACKRF-QUICKSTART.md)** —
 > a short linear runbook for the current bench (sub-GHz, HackRF-as-source, RX-only firmware).
 > This document is the full reference (dual-band, every table/option); dip into it from the

@@ -1,5 +1,10 @@
 # HackRF #5 — Quick-Start Runbook (START HERE)
 
+> **⛔ SUPERSEDED (session 4, 2026-06-04). Do NOT use the HackRF/ChirpChat source.**
+> ChirpChat's LoRa CRC/header isn't Semtech-compatible — real Semtech radios won't cleanly
+> decode it (R1 `ERROR -7`, R2 `HEADER_ERR`), so the measurement is invalid. The HackRF-as-source
+> method is also a hardware-damage hazard at low attenuation. **Use [`RX-DEFICIT-MEASUREMENT.md`](RX-DEFICIT-MEASUREMENT.md)** — a safe over-the-air distance method with a real LoRa node. The content below is kept only for historical reference.
+
 **This is the digestible runbook for task #5.** The full reference with every
 table and option is `HACKRF-DIAGNOSTIC-PLAN.md` — open that only when you need
 detail on a step. This page is the linear "do this, then this."
