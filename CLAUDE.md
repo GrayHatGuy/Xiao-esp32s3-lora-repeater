@@ -11,71 +11,110 @@
 
 ## 0. HANDOFF — session 4 (2026-06-04) — READ THIS FIRST
 
-Branch `lr1121-phase1` @ `26d9870` (pushed; snapshot tag `lr1121-bringup-2026-05-26` bumped to it).
+**Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
+**Local:** `C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater`
+**Branch/HEAD:** `lr1121-phase1` @ `4216f12` (pushed). Snapshot tag `lr1121-bringup-2026-05-26` = HEAD (force-pushable; bump after each branch commit).
+**Owner:** `GrayHatGuy` (pseudonym), `grayhatguyllc@protonmail.com`. **Real name is ephemeral — never persist to docs.**
+**Shell:** PowerShell (Windows). HEREDOC commit messages via the Bash tool; no inline newlines in shell commands. Build/flash via PlatformIO (`pio`).
 
-### Ultimate goal
-Single XIAO ESP32-S3 hosting two LoRa radios — **R1 = Wio-SX1262** (sub-GHz reference, healthy)
-and **R2 = Wio-LR1121** (the problem child) — bridging Meshtastic ↔ MeshCore. Phase 1 ships
-when R2 receives well enough to bridge. Phase 0 (dual SX1262) ships at v8.1 on `main`.
+### 0.1 Ultimate goal
+**Phase 1:** one XIAO ESP32-S3 hosting **two** LoRa radios on a cross-protocol bridge (Meshtastic ↔ MeshCore):
+- **R1 = Wio-SX1262** — sub-GHz only. **Healthy reference radio.** Receives flawlessly (−22 to −88 dBm seen).
+- **R2 = Wio-LR1121** — dual-band (sub-GHz + 2.4 GHz). **The problem child.** "Interpretation B" is locked by the owner: **both bands must eventually work** on R2; a 2.4G-only partial does not ship. *Current debugging is sub-GHz* (906.875 MHz) because it gives a direct A/B against the SX1262.
+- Phase 0 (dual SX1262, sub-GHz) already ships at **v8.1 on `main`**. All Phase-1 work is on `lr1121-phase1`.
+- **Phase 1 ships when R2 receives well enough to bridge.** That is gated entirely on the one open bug below.
 
-### Current failing state (the one open bug)
-**R2 (Wio-LR1121) has a marginal sub-GHz RX deficit:** it is alive and in continuous RX, detects
-every preamble, and *occasionally* completes a packet, but completes only a small unreliable
-fraction even of strong ones. **Everything else has been ruled out** (see results). The open
-question for #5: is the deficit **small (≈5–15 dB → RSSI/image calibration, fixable via Seeed
-values) or large (structural)?**
+### 0.2 Hardware inventory
+- **XIAO ESP32-S3 bridge** on **COM6**: carries R1 (Wio-SX1262) + R2 (Wio-LR1121). Bridge node id `0x75D7AC1C`, name "B16B00B5 LoRa Bridge".
+- **R2 modules (two physical Wio-LR1121s, identical parts):** marked with sharpie — **red dot = "suspect-BAD"** (the one that showed `-20`), **no dot = "suspect-GOOD"**. **Suspect-GOOD is currently mounted**, chip-EUI **`00:16:C0:01:F0:9B:37:D5`**, LR1121 base FW **1.3**. (2 more pristine Wio-LR1121 on order.)
+- **Heltec V4** on **COM11**: Meshtastic node `0x0AC9F340`, US LongFast. **Has a PA front-end → up to +30 dBm (1 W).** Real-LoRa source.
+- **T3S3 LilyGO (LR1121)**: also a real-LoRa source/reference; interoperates on the mesh at sync 0x2B. Earlier swapped out as *receiver* over 2.4↔subG switch concerns — fine as a **sub-GHz transmitter**.
+- **Test gear (mostly unused now):** HackRF One SDR + SDRAngel; **KT3-2N-90/1S** step attenuator (0–90 dB / 1 dB); a **5 dB SMA fixed pad**; SMA↔N adapters, jumpers, IPEX-SMA pigtails. **WaveShare Core1121** LR1121 board on order (~2–10 days) for #8.
 
-### What was proven this session (results)
-- **`-20` "SPI cascade / silicon damage" = MISDIAGNOSIS.** It's `RADIOLIB_ERR_WRONG_MODEM` (software).
-  Reproduced on the *good* module under `MODE_STBY={0,0}`, no brick in a 10-min soak.
-- **Eliminated, with evidence:** silicon damage; the cascade; **sync word** (SX126x expands `0x2B`→`0x24B4`,
-  LR11x0 does the same internally, and a T3S3 LR1121 interops at `0x2B`); the **TX path**; the
-  **interrupt/DIO9 config** (RX IRQ mask = `RX_DONE` only, correct); a **hung receiver** (isr climbs).
-- **R2 front end is INTACT (not damaged by any OTA/point-blank test):** it decoded a **−68 dBm packet
-  at SNR 10** in `run-results/sweep-20260604-134553.log`. A blown LNA can't. The deficit is the
-  original pre-existing issue.
-- **HackRF/ChirpChat as a LoRa *source* = ABANDONED.** ChirpChat's CRC/header isn't Semtech-compatible:
-  R1 → `ERROR -7` (payload CRC), R2 → `irq=0x50` HEADER_ERR, **0 clean decodes** — while R2 decoded a
-  *real* Meshtastic packet fine in the same window. Also a cabled high-power source is a damage hazard
-  (LR1121 abs-max input **+10 dBm**, datasheet Table 3-1; +30 dBm cabled ≈ +23 dBm at the chip = destroyed).
+### 0.3 How the bridge works (orientation for code edits)
+- `src/main.cpp` runs two FreeRTOS tasks: **`radio1Task`** (R1 RX → forward to R2 TX) and **`radio2Task`** (R2 RX → forward to R1 TX). Each: poll `available()` → `read()` → log `[Rx RX]`/`[Rx decoded]` → `bridgePacket()` → re-`startReceive()`.
+- `makeRadio()` (`main.cpp:676`) builds `WioSX1262` or `WioLR1121` from `(nss, irqDio, reset, busy)`; **R2 IRQ = DIO9**.
+- `src/WioLR1121.cpp/.h` = the LR1121 driver (chip-generic despite the name). Uses the **`LR1121Access`** struct (`using`-promotes RadioLib protected methods: `getErrors`, `setRssiCalibration`, `getChipEui`, `getIrqStatus`). RF-switch table (~line 279) is locked to Seeed's SKY13373 truth table: `MODE_STBY={0,0}` (revert, see below), `MODE_RX={1,0}`, `MODE_TX={1,1}`, `MODE_TX_HP={0,1}`; V1=DIO5/V2=DIO6.
+- `platformio.ini` env `xiao_esp32s3`. R2 compile-time config: **906.875 MHz / BW 250 / SF11 / CR4-5 / 20 dBm / sync 0x2B**. Build flag **`-DR2_RX_ONLY_TEST` is currently SET** (see 0.6). `LORA_PREAMBLE_LEN=8`.
 
-### Bench state right now
-- Bridge = **COM6** (XIAO; R1 SX1262 + R2 LR1121, suspect-GOOD module EUI `00:16:C0:01:F0:9B:37:D5`).
-- Source/reference node = **Heltec V4 on COM11** (and a **T3S3 LR1121** also available — a real-LoRa source).
-- Firmware (commit `66dac8b`): chip-EUI boot logging; R2 IRQ-status heartbeat (`irq=`: `0x08`=RX_DONE,
-  `0x10`=preamble, `0x40`=HEADER_ERR); **`R2_RX_ONLY_TEST` build flag ACTIVE** — R2 is pure-listen, the
-  R1→R2 forward is gated off. Delete `-D R2_RX_ONLY_TEST` in `platformio.ini` + reflash to restore bridging.
-- `MODE_STBY={0,0}` is committed and correct (the revert stands; it was never the cause).
+### 0.4 Current failing state — the ONE open bug
+**R2 (Wio-LR1121) has a marginal sub-GHz RX deficit.** It is **alive and in continuous RX**; it **detects every preamble** (`irq` bit `0x10`); it **occasionally completes a packet** (decoded a real −68 dBm Meshtastic packet at SNR 10 on 2026-06-04); but it **completes only a small, unreliable fraction of packets — even strong ones** (a −42 dBm point-blank packet R1 decoded did NOT complete on R2). Symptom history across sessions: `isr` counter stuck low, `irq` latching `0x10` (preamble) or `0x50` (preamble+HEADER_ERR) without reaching `0x08` (RX_DONE). R1 (SX1262), same board/config, receives everything. **This deficit is the original problem from session 1 — it predates all the recent tests.**
+**Open question driving #5:** is the deficit **small (≈5–15 dB → RSSI/image calibration → fixable via Seeed values #7)** or **large (structural → matching network / module / chip)?**
 
-### NEXT STEP — #5, the safe method (full runbook: `docs/testbed/RX-DEFICIT-MEASUREMENT.md`)
-**Over-the-air distance sweep — distance is the attenuator, zero hardware risk:**
-1. Both radios on normal antennas. T3S3 (COM11) low power (`--set lora.tx_power 1`, never 0=max).
-2. Capture COM6 to a logfile.
-3. Walk the T3S3 near→far through ~5 positions, send 10 labeled packets each (`"P1 1"`…`"P5 10"`).
-4. Per position, count `[R1 decoded]`/`[R2 decoded]` /10 + R1 median RSSI.
-   **Where R2 collapses but R1 still hears = the deficit, read off R1's RSSI.**
-- **In parallel:** Seeed follow-up (#7) for the Wio-LR1121-specific `SetRssiCalibration` values —
-  the most likely fix if the deficit is calibration-class. (Awaiting reply since 2026-05-28.)
-- Gated: WaveShare Core1121 bring-up (#8) as the board-vs-chip control (hardware ~2–10 days out;
-  handoff in `docs/WAVESHARE-CORE1121-HANDOFF.md`).
+### 0.5 Experiments performed this session + RESULTS (chronological)
+1. **R1 — MODE_STBY `{1,0}`→`{0,0}` revert** (`efbf88c`/`66dac8b`). Hypothesis: commit `949176a`'s `{1,0}` removed antenna isolation during TX→STBY, stressing the LNA. **Result: the revert is correct and committed, but was NOT the cause** (the `-20` later reproduced *with* `{0,0}`). Verified via UM §2.4 timing that the 20 µs SKY13373 shutdown recovery is absorbed by the chip's mode transitions (FS→TX 102 µs etc.), so `{0,0}` is safe.
+2. **`{0,0}` 10-minute TX soak on suspect-GOOD module.** **Result: NO brick across full 600 s.** R1 RX healthy (−22…−85 dBm). R2 RX deaf (isr stuck at 1). R2 TX: every forward attempt failed `tx=-5` then `tx=-1`, `post-rx=-20`. **This killed the "cascade bricks the chip" story** — it just limps with per-TX errors.
+3. **Decoded the error codes from RadioLib 7.7.0 `TypeDef.h`:** `-1`=`UNKNOWN`, `-5`=`TX_TIMEOUT`, `-7`=`CRC_MISMATCH`, **`-20`=`RADIOLIB_ERR_WRONG_MODEM`**. **The "`state=-20` SPI cascade / silicon damage" framing from sessions 1–3 is a MISDIAGNOSIS — `-20` is a software modem-state error.** First transmit waited the airtime timeout (~1.1 s, RadioLib logged "Timeout in 1108992 us") then failed; subsequent transmits failed instantly (~1 ms). (Earlier "38 s TX blocks" was a misread — that was idle between packets.)
+4. **Added IRQ-status diagnostic** (`66dac8b`): `WioLR1121::debugIrqStatus()` reads the raw LR11x0 IRQ register via `getIrqFlags()`; printed each R2 heartbeat and post-`transmit()`. Lets us see, per power level, whether the chip reached preamble vs header vs RX_DONE.
+5. **RX-only isolation test** (`R2_RX_ONLY_TEST` flag gates off R1→R2 forward so R2 just listens). **Result: R2 detects a preamble (`irq=0x10`, latched), `isr` frozen at 1, never reaches `RX_DONE`.** A −32 dBm (R1's RSSI) Heltec packet was NOT completed by R2 — but R2 had latched the preamble of *earlier* traffic before that packet arrived, so the read was partly contaminated.
+6. **RadioLib IRQ-mask check:** `RADIOLIB_IRQ_RX_DEFAULT_MASK = (1<<RX_DONE)` only (`PhysicalLayer.h:24`); ISR is rising-edge (`LR_common.cpp:15`). **So DIO9 only fires on RX_DONE — the interrupt/DIO9 config is CORRECT. The "DIO9 wedged / IRQ-clear bug" hypothesis is REFUTED.**
+7. **Point-blank tests** (Heltec antenna ~touching). **Result: R2 `isr` climbed 1→2 over ~7 min** (so it is NOT permanently hung — it completes rare packets), but a −42 dBm point-blank packet R1 decoded did not complete on R2. Concluded hand-sends can't characterize a "completes ~1-in-N" rate.
+8. **Sync-word investigation (read RadioLib source):** `SX126x::setSyncWord(0x2B)` writes register `[0x24,0xB4]` = on-air `0x24B4` (nibble-expand with control byte 0x44). `LR11x0::setSyncWord(0x2B)` → `setLoRaSyncWord(0x2B)` sends the raw byte; the LR1121 expands it internally to the same `0x24B4` (Semtech SX126x-compat). **Plus** a T3S3 LR1121 interoperates on this mesh at 0x2B. **Sync word REFUTED** (and `ChirpChat` *does* have a sync-word field — it's gated behind setting Modulation=LoRa).
+9. **HackRF/ChirpChat-as-source attempt** (`run-results/sweep-20260604-134553.log`; R2 cabled, KT3=0). **Results:** (a) R2 cleanly decoded a **real** Meshtastic packet at **−68 dBm SNR 10** → its demod + front end work; (b) on the ChirpChat packets: **R1 → `ERROR -7`** (full demod, payload CRC fail), **R2 → `irq=0x50`** (HEADER_ERR + preamble), **0 completions on either**. **Conclusion: SDRAngel ChirpChat is not Semtech-CRC/header-compatible → useless as a LoRa source. HackRF-as-source ABANDONED.**
+10. **Safety analysis (datasheet-cited).** LR1121 datasheet **Table 3-1: abs-max RF input = +10 dBm** ("permanent device failure"); **Table 3-2: max operating input = 0 dBm**. Heltec V4 PA can emit **+30 dBm**. **Cabled** +30 dBm − ~7 dB chain = **+23 dBm at the LR1121 → destroyed.** **OTA** has 30–70 dB path loss even close (R1 saw the Heltec at −42 dBm during point-blank) → safe. **The damage hazard was the cabled HackRF/attenuator rig — which was never built. Front end confirmed intact (see 0.4/#9).**
 
-### Commit log — this session (newest first)
-| Commit | What changed |
+### 0.6 Hypotheses RULED OUT (with evidence)
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| Silicon damage / `-20` SPI cascade | **REFUTED** | `-20`=`WRONG_MODEM` (software); reproduced on suspect-GOOD; no brick in 10-min soak |
+| Front-end / LNA damaged by tests | **REFUTED** | decoded −68 dBm @ SNR 10 on 2026-06-04; a blown LNA can't |
+| Sync-word mismatch | **REFUTED** | both chips → on-air `0x24B4`; T3S3 LR1121 interops at 0x2B |
+| MODE_STBY `{1,0}` stressed the LNA | **NOT the cause** | `-20` occurs with `{0,0}` too; revert stands but didn't fix it |
+| Interrupt / DIO9 / IRQ-clear bug | **REFUTED** | RX IRQ mask = `RX_DONE` only (correct); `isr` does climb |
+| Hung receiver | **REFUTED** | `isr` climbed 1→2 over 7 min |
+| Hand-send measurement | **INADEQUATE** | can't resolve a probabilistic "~1-in-N" completion rate → need calibrated levels |
+
+### 0.7 Firmware & diagnostic state (on the board now, all committed)
+- **Chip-EUI boot logging** (`8f29bed`): `[Radio2-Edge] chip EUI = 00:16:C0:01:F0:9B:37:D5` — identifies which physical module is mounted. Registry: `docs/testbed/MODULE-REGISTRY.md`.
+- **IRQ-status heartbeat** (`66dac8b`): `[R2 HB] isr=N (+d/5s) rxFlag=x irq=0x________`. Decode the `irq` bits below.
+- **`R2_RX_ONLY_TEST` build flag is ACTIVE** in `platformio.ini` — R2 is pure-listen, the R1→R2 forward is gated off (ideal for RX measurement; the bridge is half-live with it on). **To restore normal dual-radio bridging: delete `-D R2_RX_ONLY_TEST` and reflash.**
+- **`MODE_STBY={0,0}`** committed and correct.
+
+### 0.8 Reference data (so a new session need not re-derive)
+- **RadioLib error codes:** `-1`=UNKNOWN, `-5`=TX_TIMEOUT, `-7`=CRC_MISMATCH, `-20`=WRONG_MODEM.
+- **LR11x0 IRQ register bits** (`irq=` field): `0x08`=RX_DONE(bit3), `0x10`=PREAMBLE_DETECTED(bit4), `0x20`=SYNC_WORD/HEADER_VALID(bit5), `0x40`=HEADER_ERR(bit6), `0x80`=CRC_ERR(bit7). RX IRQ→DIO9 mask = RX_DONE only.
+- **Sync word:** Meshtastic 0x2B → on-air `0x24B4` on both SX126x and LR11x0.
+- **LR1121 RF-input limits (datasheet):** abs-max **+10 dBm** (T3-1), operating max **0 dBm** (T3-2).
+- **Ports:** bridge=COM6, Heltec V4=COM11 (was T3S3/COM5 — re-enumerated/swapped).
+
+### 0.9 Open experiments / NEXT STEPS (with rationale + decision trees)
+**#5 — Quantify the R2 RX deficit (IMMEDIATE).** *Why:* the fix path forks on the *size* of the deficit; we must measure it. *Method (SAFE):* over-the-air **distance sweep** — distance is the attenuator, zero hardware risk (full runbook `docs/testbed/RX-DEFICIT-MEASUREMENT.md`):
+  1. Both radios on **normal antennas** (no cable rig). T3S3 (COM11) **low power**: `meshtastic --port COM11 --set lora.tx_power 1` (**never 0 — in Meshtastic 0 = "use MAX"**).
+  2. Capture COM6: `pio device monitor -p COM6 -b 115200 | Tee-Object -FilePath "docs\testbed\run-results\distance-$(Get-Date -f yyyyMMdd-HHmmss).log"`.
+  3. Walk the T3S3 near→far, ~5 positions (P1 ~1 m → P5 edge-of-range), **10 labeled packets each**: `1..10 | %{ meshtastic --port COM11 --sendtext "P1 $_"; Start-Sleep 2 }`.
+  4. Per position, count `[R1 decoded]`/`[R2 decoded]` /10 and R1 median RSSI. **Decision:** R2 tracks R1 → little deficit; **R2 collapses while R1 still hears → the deficit = R1's RSSI at that position.** Small (5–15 dB) ⇒ calibration ⇒ #7; large ⇒ structural ⇒ weight #8.
+  *Do NOT* use the HackRF/ChirpChat source (abandoned, see #9). HACKRF-QUICKSTART/PLAN are **superseded** for #5.
+**#7 — Seeed RSSI-calibration follow-up (parallel; the likely actual FIX).** *Why:* if the deficit is calibration-class, the Wio-LR1121-specific `SetRssiCalibration` byte values (UM §7.2.15 says RSSI "must be calibrated for each hardware type") are the remedy; reference Table 7-21 tunes already failed (RX-AUDIT Run 2). We asked Seeed (David Du) on **2026-05-28**; **awaiting reply** (also asked: FW-update path, HF_XOSC_START_ERR=0x0020 expected on POR). Follow up ~**2026-06-08**. Owner reviews all outbound. Attach #5 numbers if available.
+**#8 — WaveShare Core1121 bring-up (GATED).** *Why:* the decisive **board-vs-chip control** — does a *different* LR1121 board show the same deficit? If the WaveShare (which **publishes a schematic**, unlike Seeed) receives cleanly where the Wio doesn't → **Seeed-board design flaw**; if it's equally deficient → LR1121-chip/firmware-level. Gated on hardware arrival (~2–10 days) and the #5 baseline. Full plan: `docs/WAVESHARE-CORE1121-HANDOFF.md`.
+**#2 — Red-dot (suspect-BAD) module (LOW priority / near-moot).** *Why originally:* prove silicon damage. *Now:* the `-20` is software and reproduces on the GOOD module, so this is mostly overtaken — optional comparison only.
+
+### 0.10 Key documents (read in this order)
+1. **This file** (CLAUDE.md §0 handoff, §2 session blocks, §5 rules).
+2. **`docs/testbed/RX-DEFICIT-MEASUREMENT.md`** — the experiment to run (#5), safety facts, why HackRF was dropped.
+3. `docs/testbed/MODULE-REGISTRY.md` — module EUI ↔ sharpie mapping.
+4. `docs/WAVESHARE-CORE1121-HANDOFF.md` — #8 bring-up.
+5. `run-results/sweep-20260604-134553.log` — the front-end-intact + ChirpChat-fail evidence.
+6. `LR1121-RX-INIT-AUDIT.md` — the 9-run firmware DOE (all refuted) from earlier sessions.
+7. `SEEED_EMAIL_DRAFT.md` / `SEEED_EMAIL_REPLY_2026-05-28.md` — Seeed correspondence (#7).
+8. `docs/REFERENCES.md` — datasheet index; LR1121 §-citations refer to PDFs in `docs/datasheets/`.
+9. Superseded for #5 but retained: `docs/testbed/HACKRF-QUICKSTART.md`, `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md`.
+
+### 0.11 Commit log — this session (newest first)
+| Commit | What changed (file-level) |
 |---|---|
-| `26d9870` | **session-4 docs:** new `RX-DEFICIT-MEASUREMENT.md` (safe OTA distance method); marked HackRF source ABANDONED in QUICKSTART + PLAN; CLAUDE.md §2 session-4 block; task #5 repointed. |
-| `36a02c1` | HACKRF-QUICKSTART clarifications (now superseded): detection-rate definition, 50%-floor, isr-delta counting, exact-count/bookmark workflow. |
-| `71b9f50` | Added HACKRF-QUICKSTART runbook + pointer from the full plan (now superseded). |
-| `ae2f94f` | `docs/WAVESHARE-CORE1121-HANDOFF.md` — WaveShare bring-up handoff (#8). |
-| `7868d63` | CLAUDE.md §2 session-3 reframe block (root cause = RX deficit, not silicon). |
-| `66dac8b` | **firmware:** `WioLR1121::debugIrqStatus()` + IRQ-status heartbeat + `transmit()` irq log; `R2_RX_ONLY_TEST` build flag (currently active). |
-| `8f29bed` | **firmware:** LR1121 chip-EUI boot logging (via `LR1121Access`); `docs/testbed/MODULE-REGISTRY.md`. |
-| `1884e16` | CLAUDE.md §5 rule: datasheet-cited justification required for electrical/timing claims. |
-| `efbf88c` | (owner) MODE_STBY `{1,0}`→`{0,0}` revert + comment (the revert; not the cause). |
+| `4216f12` | CLAUDE.md: add this §0 handoff. |
+| `26d9870` | **NEW** `docs/testbed/RX-DEFICIT-MEASUREMENT.md` (safe OTA distance method + safety + why-not-HackRF); ⛔ SUPERSEDED banners on `HACKRF-QUICKSTART.md` + `HACKRF-DIAGNOSTIC-PLAN.md`; CLAUDE.md §2 session-4 block; task #5 repointed. |
+| `36a02c1` | `HACKRF-QUICKSTART.md` clarifications (now superseded): detection-rate def, 50%-floor, isr-delta counting, exact-count Repeat=N + Heltec-bookmark workflow, sync-word=LoRa-mode gotcha. |
+| `71b9f50` | **NEW** `HACKRF-QUICKSTART.md` runbook + pointer from the full plan (now superseded). |
+| `ae2f94f` | **NEW** `docs/WAVESHARE-CORE1121-HANDOFF.md` (#8 bring-up handoff). |
+| `7868d63` | `CLAUDE.md` §2 session-3 reframe block (root cause = RX deficit, not silicon). |
+| `66dac8b` | **firmware:** `WioLR1121.h/.cpp` add `debugIrqStatus()` (+ `getIrqStatus` via `LR1121Access`); `transmit()` logs post-TX irq; `main.cpp` R2 heartbeat prints `irq=`; `platformio.ini` adds `-DR2_RX_ONLY_TEST` (currently active) + RX-only gate in `radio1Task`. |
+| `8f29bed` | **firmware:** `WioLR1121.cpp` chip-EUI boot logging via `getChipEui`; **NEW** `docs/testbed/MODULE-REGISTRY.md`. |
+| `1884e16` | `CLAUDE.md` §5 rule: electrical/timing/safety claims require datasheet citation (incl. reverts and "no-op" conclusions). |
+| `efbf88c` | (owner) `WioLR1121.cpp` MODE_STBY `{1,0}`→`{0,0}` revert + comment; CLAUDE.md edits. (The revert; not the cause.) |
 
-### Rules of engagement (firm — see §5)
-No guessing — cite datasheets for electrical/safety claims; one variable per experiment; never cable
-a high-power source into an RX front end; PowerShell + HEREDOC commits via Bash; never force-push `main`
-(the snapshot tag is force-pushable, bump per commit).
+### 0.12 Rules of engagement (firm — see §5 and §7)
+**Do not guess** — cite the datasheet/code for electrical/timing/safety claims; say "I don't know" otherwise. **One variable per experiment.** **Never cable a high-power source into an RX front end** (LR1121 abs-max +10 dBm). **No mid-experiment edits** that contaminate the record. **Accepted edits ship — don't re-ask.** **Owner reviews all outbound** (Seeed, PRs) — drafts only. **PowerShell + HEREDOC commits via Bash; cite the active bench state, don't assume it. Never force-push `main`** (snapshot tag is force-pushable; bump per branch commit). **Keep CLAUDE.md current as you go — don't let bench reasoning live only in chat.**
 
 ---
 
