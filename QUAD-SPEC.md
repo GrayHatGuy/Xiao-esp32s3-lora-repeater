@@ -1,7 +1,9 @@
 # QUAD-SPEC — Phase 2: 4-Up Triband Omnidirectional Repeater
 
-Status: **design — no firmware code yet.** Branch `T_LORA_QUAD` (off `lr1121-phase1`).
-Companion to `V8-SPEC.md` (portal config) and `LR1121-SPEC.md` (Phase-1 Wio cross-band).
+Status: **implemented (stages A–E) on branch `T_LORA_QUAD`; both firmwares build clean; on-air
+bring-up pending hardware.** Companion to `V8-SPEC.md` (portal config) and `LR1121-SPEC.md`
+(Phase-1 Wio cross-band); shipped detail in [`CHANGELOG.md`](CHANGELOG.md) v10.0, contest
+write-up in [`CONTEST-PHASE2.md`](CONTEST-PHASE2.md).
 
 ## Goal
 

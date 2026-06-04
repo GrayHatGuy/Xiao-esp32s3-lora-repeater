@@ -1,5 +1,64 @@
 # Changelog
 
+## v10.0 — 2026-06-04 — Phase 2: 4-Up triband repeater (T-Lora-Dual) — UNRELEASED (branch `T_LORA_QUAD`)
+
+Status: **both firmwares build clean; on-air bring-up pending hardware.** Specced
+in [`QUAD-SPEC.md`](QUAD-SPEC.md); contest write-up draft in
+[`CONTEST-PHASE2.md`](CONTEST-PHASE2.md).
+
+Grows the bridge from 2 radios to **4**: R1/R2 stay SX1262 on the Xiao; a LilyGO
+**T-Lora-Dual** (ESP32 PICO-D4 + two **LR1121**) joins as R3/R4 over a framed
+**UART link**, adding 2.4 GHz (+ an S-band stub) for a sub-GHz / 2.4 GHz tri-band,
+any-to-any repeater with a portal-configurable routing matrix. Pivoted from the
+Phase-1 Wio-LR1121 (unresolved calibration/modem RX deficit; the SKY13373 switch
+was swept and exonerated) to the T-Lora-Dual, whose Factory firmware has working
+RX+TX.
+
+### What's new
+
+- **`BridgeConfig` schema v5 → v6** — radio table 2 → `NUM_RADIOS` (4); per-radio
+  `band` (sub-GHz / 2.4 GHz / S-band-stub) + `routeMask` (the routing matrix);
+  channel name/key moved into the per-radio slot. Real v5→v6 migration (the array
+  grew, so the v4→v5 pad-byte trick no longer applies) preserving the R1↔R2
+  crossover and defaulting R3/R4 disabled; the v2/v3/v5 chain still upgrades.
+  Indexed `radioChannelName/Key` + `radioBand` + `radioRouteMask` accessors (old
+  `radio1/2*` kept as thin wrappers).
+- **UART transport** — shared [`LinkProtocol.h`](src/LinkProtocol.h) wire format
+  (preamble + type + radio + len + payload + CRC-16/CCITT;
+  CFG_RADIO/TX/START_RX/PING/RESET ↔ RX/TX_DONE/READY/LOG/PONG), host `UartLink`
+  (serial owner + RX service task + per-radio queues + TX mutex) and `RemoteRadio`
+  (a `LoraRadio` over the link, so R3/R4 are drop-in radio slots).
+- **4-radio bridge core** — `main.cpp` drives `LoraRadio* g_radio[4]` via one
+  generic per-radio task that fans each RX out to the radios set in its
+  `routeMask`, reusing the cross-protocol translation + `[MT]/[MC]/[rns]` loop
+  markers. The UART link is opened only when a remote radio is enabled (a pure
+  R1/R2 build is byte-for-byte unchanged in behaviour). `NodeDB` gained a mutex +
+  copy-based `lookupShortName()` for multi-task safety.
+- **Portal + flags** — the captive portal renders all 4 radios with a band
+  selector (R3/R4) and a routing-matrix UI; `handleSave` validates every routed
+  same-protocol pair for distinct channels. `platformio.ini` documents
+  `LORA_RADIO3/4_*` + `BRIDGE_LINK_*` and drops the dead `R2_RX_ONLY_TEST`;
+  `LoraConfigCheck.h` gains dual-band R3/R4 guards.
+- **T-Lora-Dual co-processor firmware** — new self-contained project
+  [`coproc-tlora-dual/`](coproc-tlora-dual) (board `pico32`, RadioLib 7.7.0).
+  Drives the two LR1121s using the T-Lora-Dual **Factory** HAL (pin map +
+  `rfswitch_table` + `begin()`/config + `setTCXO(3.3)`); UART slave per
+  `LinkProtocol.h`; IRQ-driven RX; band-aware power (22 dBm sub-GHz / 13 dBm
+  2.4 GHz); S-band accepted-but-refused stub.
+
+### Build
+
+- Host: `pio run -e xiao_esp32s3` — Flash 25.9%.
+- Co-proc: `pio run -d coproc-tlora-dual` — pico32, Flash 23.7%. Both clean.
+
+### Known / pending (bench)
+
+- On-air 4-way bridge + 2.4 GHz decode not yet verified on hardware.
+- 2.4 GHz wideLora BW (406.25 / 812.5 / 1625 kHz) acceptance on the LR1121 high
+  band is a bench-verify item (the co-proc logs + skips the radio if RadioLib
+  rejects the BW).
+- UART link GPIOs (Xiao D6/D7 ↔ T-Lora-Dual GPIO22/23) to confirm vs wiring.
+
 ## v9.0 — 2026-05-25 — Phase 1: Wio-LR1121 cross-band hardware bring-up
 
 The LR1121 (Seeed Wio-LR1121, SKU 113991415) joins the project as Radio 2

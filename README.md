@@ -88,6 +88,35 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
 8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
+## Phase 2 — Quad-radio triband repeater (T-Lora-Dual add-on)
+
+*Branch [`T_LORA_QUAD`](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/tree/T_LORA_QUAD) — both firmwares build clean; on-air bring-up pending. Full design in [`QUAD-SPEC.md`](QUAD-SPEC.md), contest write-up in [`CONTEST-PHASE2.md`](CONTEST-PHASE2.md).*
+
+Phase 2 grows the bridge from two radios to **four**. R1/R2 stay the sub-GHz SX1262s on the Xiao; a second board — the LilyGO **T-Lora-Dual** (ESP32 PICO-D4 + two **LR1121** radios) — joins as **R3/R4** over a UART link, adding **2.4 GHz** (and an S-band stub) for a sub-GHz / 2.4 GHz tri-band repeater. Each radio's received traffic is repeated to the radios selected in its **routing matrix** (portal-configurable), with the same cross-protocol translation and loop-prevention as Phase 0/1.
+
+The LR1121s run on the T-Lora-Dual under a thin **co-processor firmware** ([`coproc-tlora-dual/`](coproc-tlora-dual)); the Xiao stays the brain and reaches R3/R4 through a framed UART wire protocol ([`src/LinkProtocol.h`](src/LinkProtocol.h), shared by both firmwares). R3/R4 default **disabled**, so an unmodified build behaves exactly like the 2-radio bridge until you enable them in the portal. (Phase 2 pivoted to the T-Lora-Dual from the Phase-1 Wio-LR1121, which had an unresolved calibration/modem RX deficit — see [`CONTEST-PHASE2.md`](CONTEST-PHASE2.md).)
+
+### Inter-board UART wiring
+
+| Signal | Xiao (host) | T-Lora-Dual (co-proc) |
+|--------|-------------|------------------------|
+| host TX → coproc RX | GPIO43 (D6) | GPIO23 |
+| host RX ← coproc TX | GPIO44 (D7) | GPIO22 |
+| GND | GND | GND |
+
+460800 baud, build-flag configurable (`BRIDGE_LINK_*` on the host, `LINK_*` on the co-proc). **Verify these pins against your physical headers before powering on.** Each board keeps its own USB power/serial.
+
+### Build & flash (two firmwares)
+
+```sh
+# Host bridge (Xiao ESP32-S3)
+pio run -e xiao_esp32s3 -t upload
+# Co-processor (T-Lora-Dual, ESP32 PICO-D4)
+pio run -d coproc-tlora-dual -t upload
+```
+
+Then in the captive portal, set **Radio 3 / Radio 4** protocol + **band** (sub-GHz / 2.4 GHz) + channel, and tick which radios each one should **bridge received traffic to**. The co-processor prints its LR1121 versions and per-config status back through the host serial as `[coproc] …` lines.
+
 ## Roadmap
 
 ### Other future work
@@ -104,7 +133,8 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 
 - [x] ~~**Phase 1 — Sub-GHz ↔ 2.4 GHz cross-band: LR1121 hardware bring-up.**~~ — **done** (v9.0); specced in [`LR1121-SPEC.md`](LR1121-SPEC.md). The Seeed Wio-LR1121 (SKU 113991415) joins the project as Radio 2 in the new **MIXED** build profile. `LoraRadio` abstract interface, `WioLR1121` wrapper on RadioLib's `LR1121` class, `RADIO_PROFILE` build flag (MIXED / DUAL_SX1262 / DUAL_LR1121), `BridgeConfig` schema v4→v5 with per-radio chip field, portal "Radio 2 chip" picker, chip-aware frequency validation (now accepts 2400-2500 MHz for LR1121), 2.4 GHz wideLora modem presets and `slotFrequency2G4()` in `RegionPreset.h`. RadioLib bumped 6.6.0 → 7.0.0 (6.6.0 LR11x0 driver had a chip-detection bug; 7.x fixes it but uses a different `begin()` signature, adapted in the wrapper). Manual NRESET pulse + ~141 ms BUSY-poll in `WioLR1121::begin()` (LA-confirmed boot-ROM time). **LR1121 RX hardware-verified at MT LongFast** — bridge's own NodeInfo received at -44 dBm SNR 9.8 dB. Phase 0 dual-SX1262 path unchanged and regression-clean. MeshCore reception on the LR1121 at MC RF profile (62.5 kHz / SF7 / sync 0x12) carries forward to v9.x as a known limitation to bench-isolate.
 
-- [ ] **Phase 2 — Dual-LR1121 (`DUAL_LR1121` profile).** Code path is already compile-verified; awaits Phase 1 MC verification before Phase 2 bring-up. Same firmware, swap the build flag, no other changes — either radio slot freely sub-GHz or 2.4 GHz at runtime. Tagged release target: **v9.1**.
+- [x] ~~**Phase 2 — 4-Up triband repeater (T-Lora-Dual add-on).**~~ — **implemented on branch [`T_LORA_QUAD`](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/tree/T_LORA_QUAD)** (both firmwares build clean; on-air bring-up pending). Adds R3/R4 — two LR1121 on a LilyGO T-Lora-Dual — over a UART link for a 4-radio sub-GHz/2.4 GHz tri-band repeater with a portal-configurable routing matrix, plus a co-processor firmware ([`coproc-tlora-dual/`](coproc-tlora-dual)). Pivoted here from the Phase-1 Wio-LR1121 (unresolved calibration/modem RX deficit). Specced in [`QUAD-SPEC.md`](QUAD-SPEC.md); see the **Phase 2** section above and [`CHANGELOG.md`](CHANGELOG.md) v10.0. Tagged release target: **v10.0**.
+- [ ] **Phase 2 (LR1121 profile) — Dual-LR1121 (`DUAL_LR1121` profile).** Code path is already compile-verified; awaits Phase 1 MC verification before bring-up. Same firmware, swap the build flag, no other changes — either radio slot freely sub-GHz or 2.4 GHz at runtime. Tagged release target: **v9.1**.
 
 - [ ] **Sub-GHz ↔ 2.4 GHz LoRa cross-band bridging.** The current build talks the SX1262's native sub-GHz ranges (902-928 MHz US ISM, 868 MHz EU, etc.). A long-horizon goal is to bridge those to 2.4 GHz LoRa networks (e.g. Meshtastic's 2.4 GHz preset) on the worldwide-licence-free **2.4 GHz ISM band** — the headline feature that makes this milestone worth doing.
 
