@@ -2,7 +2,7 @@
 
 Xiao ESP32S3 SPI cross-band LoRa repeater — a Seeed Wio-SX1262 (sub-GHz) bridged to a WaveShare Core1121 (Semtech LR1121, dual-band sub-GHz + 2.4 GHz).
 
-<img width="4096" height="3265" alt="PXL_20260507_021829300~2" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
+<img width="480" alt="XIAO ESP32-S3 dual-radio LoRa bridge — Wio-SX1262 + WaveShare Core1121 wired on a breadboard with sub-GHz antennas" src="docs/img/core1121-build.jpg" />
 
 ###### *touched by claude but not by epstein*
 
