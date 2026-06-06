@@ -3,7 +3,7 @@
 // Abstract interface for a LoRa radio wrapper, plus the shared LoraConfig
 // struct and the compile-time board constants. Lets the bridge pipeline hold
 // radios as LoraRadio* without knowing the underlying chip — WioSX1262 and
-// WioLR1121 both implement this. The bridge dispatcher is RF-agnostic: it
+// Core1121 both implement this. The bridge dispatcher is RF-agnostic: it
 // branches on the LoRa sync word, not the chip.
 // ---------------------------------------------------------------------------
 
@@ -19,7 +19,11 @@
   #define LORA_TCXO_VOLTAGE   1.8f     // Wio SX1262 module TCXO
 #endif
 #ifndef LR1121_TCXO_VOLTAGE
-  #define LR1121_TCXO_VOLTAGE 3.0f     // Wio-LR1121 module TCXO (bench-verify)
+  // WaveShare Core1121-XF TCXO reference = 3.0 V. Confirmed two ways:
+  // (1) schematic Core1121_XF_Sch.pdf (32 MHz TCXO on VTCXO); (2) WaveShare's
+  // own ESP32 demo sets LR11XX_SYSTEM_TCXO_CTRL_3_0V. Same value the Seeed Wio
+  // used, so this carried over unchanged.
+  #define LR1121_TCXO_VOLTAGE 3.0f
 #endif
 #ifndef LORA_MAX_PACKET
   #define LORA_MAX_PACKET     256

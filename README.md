@@ -1,6 +1,6 @@
 # Xiao-esp32s3-lora-repeater
 
-Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
+Xiao ESP32S3 SPI cross-band LoRa repeater — a Seeed Wio-SX1262 (sub-GHz) bridged to a WaveShare Core1121 (Semtech LR1121, dual-band sub-GHz + 2.4 GHz).
 
 <img width="4096" height="3265" alt="PXL_20260507_021829300~2" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
 
@@ -8,7 +8,7 @@ Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
 
 ## Introduction / Background
 
-A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles.
+A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense carrying two radios — a **Seeed Wio-SX1262** (sub-GHz) on the 40-pin B2B header, and a **WaveShare Core1121** (Semtech LR1121, dual-band sub-GHz + 2.4 GHz) hand-wired to the Xiao's edge pins. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles.
 
 Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (MT↔MC) or *same-protocol between two channels* (MC↔MC, MT↔MT — e.g. a private channel bridged to the public one). As of **v8.0** everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy. The `platformio.ini` `LORA_RADIO*` build flags remain available as optional first-boot defaults for source builds.
 
@@ -26,46 +26,63 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
 
 | Part | Notes |
 |------|-------|
-| [Wio SX1262 with Xiao ESP32S3 (B2B 40-pin)](https://www.seeedstudio.com/Wio-SX1262-with-XIAO-ESP32S3-p-5982.html) | Radio 1 (B2B). Kit ships with the Xiao ESP32S3 Sense MCU |
-| [Wio SX1262 for Xiao (edge-pin)](https://www.seeedstudio.com/Wio-SX1262-for-XIAO-p-6379.html) | Radio 2, sits on the Xiao's edge-pin header |
-| 2 × LoRa antennas tuned for your ISM band | **Don't skip this.** Running an SX1262 at +20 dBm into a missing antenna kills your TX range and risks the PA |
+| [Wio SX1262 with Xiao ESP32S3 (B2B 40-pin)](https://www.seeedstudio.com/Wio-SX1262-with-XIAO-ESP32S3-p-5982.html) | Radio 1 (B2B, sub-GHz). Kit ships with the Xiao ESP32S3 Sense MCU |
+| [WaveShare Core1121 (LR1121)](https://www.waveshare.com/wiki/Core1121-XF) | Radio 2 (dual-band: sub-GHz + 2.4 GHz), hand-wired to the Xiao's edge-pin header — see [Wiring](#wiring) |
+| LoRa antennas tuned for your band(s) | **Don't skip this.** One sub-GHz antenna per radio; the Core1121 also has a separate 2.4 GHz IPEX port for the 2.4 GHz band. Transmitting at +20 dBm into a missing antenna kills TX range and risks the PA |
 | USB-C cable | Power, programming, serial monitor |
 
 *Some assembly required.*
 
 ## Wiring
 
-This build uses **stacked shields** — there is no hand-wiring. The B2B SX1262
-mounts on top of the Xiao on the 40-pin board-to-board connector; the edge-pin
-SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmware (see `src/main.cpp`).
+Radio 1 (Seeed **Wio-SX1262**, sub-GHz) is a **stacked shield** — it mounts on the
+Xiao's 40-pin board-to-board connector, no hand-wiring. Radio 2 (**WaveShare
+Core1121**, LR1121) is a separate module with its own 16-pin header and two IPEX
+antenna ports, so it is **hand-wired** to the Xiao's edge pins — the same GPIOs the
+old edge-pin radio used. Both radios share one SPI bus; only the chip-select
+differs. Pin mapping lives in [`src/main.cpp`](src/main.cpp).
 
-| Signal | Radio 1 (B2B) | Radio 2 (edge) | Notes |
-|--------|---------------|----------------|-------|
-| SCK    | GPIO7 (D8)    | GPIO7 (D8)     | **shared** SPI bus |
-| MOSI   | GPIO9 (D10)   | GPIO9 (D10)    | **shared** |
-| MISO   | GPIO8 (D9)    | GPIO8 (D9)     | **shared** |
-| NSS / CS | GPIO41      | GPIO5 (D4)     | per-radio chip select |
-| DIO1 / IRQ | GPIO39    | GPIO2 (D1)     | RX-done interrupt |
-| RESET  | GPIO42        | GPIO3 (D2)     | per-radio |
-| BUSY   | GPIO40        | GPIO4 (D3)     | per-radio |
-| ANT_SW | GPIO38        | GPIO6 (D5)     | TX/RX RF switch |
-| VCC    | 3V3           | 3V3            | |
-| GND    | GND           | GND            | |
+| Signal | Radio 1 — Wio-SX1262 (B2B) | Radio 2 — Core1121 (hand-wired) | Notes |
+|--------|----------------------------|----------------------------------|-------|
+| SCK      | GPIO7 (D8)  | GPIO7 (D8) → SCK (U3.13)     | **shared** SPI bus |
+| MOSI     | GPIO9 (D10) | GPIO9 (D10) → MOSI (U3.12)   | **shared** |
+| MISO     | GPIO8 (D9)  | GPIO8 (D9) → MISO (U3.11)    | **shared** |
+| NSS / CS | GPIO41      | GPIO5 (D4) → NSS (U3.14)     | per-radio chip select |
+| IRQ      | GPIO39      | GPIO2 (D1) → DIO9 (U3.3)     | RX-done interrupt (LR1121 IRQ = DIO9) |
+| RESET    | GPIO42      | GPIO3 (D2) → NRESET (U3.10)  | per-radio |
+| BUSY     | GPIO40      | GPIO4 (D3) → BUSY (U3.9)     | per-radio |
+| ANT_SW   | GPIO38      | — (not used)                | Core1121's PE4259 switch is driven internally by the LR1121 over DIO5/DIO6 |
+| 3V3      | 3V3         | 3V3 → 3V3 (U3.8)            | |
+| GND      | GND         | GND → GND (U3.2 / 7 / 15)   | |
+
+(`U3.N` = pin N on the Core1121 module header, per [`Core1121_XF_Sch.pdf`](docs/datasheets/waveshare/Core1121_XF_Sch.pdf).)
 
 **Key points**
 
 - The two radios **share one SPI bus** (SCK/MOSI/MISO); the firmware serializes
-  access with a FreeRTOS mutex.
-- Each radio has its own **NSS, DIO1, RESET, BUSY, ANT_SW**, so they run
-  independently — one task per ESP32-S3 core.
+  access with a FreeRTOS mutex. Only **NSS/CS** is per-radio on the bus.
 - Radio 1's pins (GPIO38–42) are exposed **only on the 40-pin B2B connector**.
-- The TCXO is internal to each Wio SX1262 module (1.8 V) — not wired to a GPIO.
-- **Connect both u.FL antennas before power-on** — transmitting into a missing
-  antenna risks the PA.
+- Radio 2 needs **no `ANT_SW` GPIO**. Unlike the SX1262, the Core1121's antenna
+  switch (a pSemi **PE4259** SPDT) is driven by the LR1121 itself over **DIO5/DIO6**;
+  the firmware programs its truth table at boot. Full wiring + truth table:
+  [`docs/datasheets/waveshare/CORE1121-RF-SWITCH.md`](docs/datasheets/waveshare/CORE1121-RF-SWITCH.md),
+  derived from [the schematic](docs/datasheets/waveshare/Core1121_XF_Sch.pdf).
+- The TCXO is internal to both modules — **1.8 V** on the Wio-SX1262, **3.0 V** on
+  the Core1121 — not wired to a GPIO.
+- The Core1121 has **two antenna ports**: **ANT2 = sub-GHz** (LORA_ANT) and
+  **ANT1 = 2.4 GHz** (2.4G_ANT). Connect the sub-GHz antenna for the current
+  bridge; add the 2.4 GHz antenna when using the 2.4 GHz band.
+- **Connect antennas before power-on** — transmitting into a missing antenna
+  risks the PA.
+
+**Design docs:** [Core1121 RF-switch table](docs/datasheets/waveshare/CORE1121-RF-SWITCH.md) ·
+[Core1121 schematic](docs/datasheets/waveshare/Core1121_XF_Sch.pdf) ·
+[Core1121 bring-up handoff](docs/WAVESHARE-CORE1121-HANDOFF.md) ·
+[datasheet / reference index](docs/REFERENCES.md)
 
 ## Instructions
 
-1. **Stack the hardware.** Mate the B2B shield (radio 1) on top the Xiao, the edge-pin shield (radio 2) on bottom. Connect antennas to **both** radios before powering on. Correct orientation has all antennas on the same side.
+1. **Assemble the hardware.** Mate the Wio-SX1262 B2B shield (radio 1) on top of the Xiao, and hand-wire the WaveShare Core1121 (radio 2) to the Xiao's edge pins per the [Wiring](#wiring) table. Connect antennas to **both** radios before powering on.
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
 3. *(Optional — source builds only)* **Pre-seed the radios** in [`platformio.ini`](platformio.ini). As of v8.0 this is no longer required: a `.bin` built with no `LORA_RADIO*` flags first-boots straight into the captive portal where region, protocol and RF are all set. If you do build from source, these flags become the first-boot defaults the portal form pre-fills:
    ```ini
@@ -102,7 +119,7 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 - [x] ~~**v8: vanilla firmware — full portal config.**~~ — **done** (v8.0); specced in [`V8-SPEC.md`](V8-SPEC.md). A single distributable `.bin` configured *entirely* through the captive portal — no build flags required. Per-radio protocol picker (Meshtastic / MeshCore / Reticulum / Custom / None), global region selector (US, EU_868, EU_433, ANZ, CN, JP, IN, KR, RU + Custom/Other), Tier 2 Meshtastic channel-slot frequency computation (`RegionPreset.h`) with an editable override, null defaults (a no-flag image first-boots straight into the portal), and MAC-derived identity/SSID. `BridgeConfig` schema v3→v4. `platformio.ini` `LORA_RADIO*` flags are now optional first-boot pre-seeding only.
 - [x] ~~**Compile-time validation of build-flag config.**~~ — **done** (v8.1); `LoraConfigCheck.h` `static_assert` guards reject invalid `LORA_RADIO*` build flags at `pio run` time (frequency 150-960 MHz, SF 5-12, CR 5-8, valid BW, TX power -9..22 dBm; sync word byte-range only). Complements v8's portal-side runtime validation.
 
-- [x] ~~**Phase 1 — Sub-GHz ↔ 2.4 GHz cross-band: LR1121 hardware bring-up.**~~ — **done** (v9.0); specced in [`LR1121-SPEC.md`](LR1121-SPEC.md). The Seeed Wio-LR1121 (SKU 113991415) joins the project as Radio 2 in the new **MIXED** build profile. `LoraRadio` abstract interface, `WioLR1121` wrapper on RadioLib's `LR1121` class, `RADIO_PROFILE` build flag (MIXED / DUAL_SX1262 / DUAL_LR1121), `BridgeConfig` schema v4→v5 with per-radio chip field, portal "Radio 2 chip" picker, chip-aware frequency validation (now accepts 2400-2500 MHz for LR1121), 2.4 GHz wideLora modem presets and `slotFrequency2G4()` in `RegionPreset.h`. RadioLib bumped 6.6.0 → 7.0.0 (6.6.0 LR11x0 driver had a chip-detection bug; 7.x fixes it but uses a different `begin()` signature, adapted in the wrapper). Manual NRESET pulse + ~141 ms BUSY-poll in `WioLR1121::begin()` (LA-confirmed boot-ROM time). **LR1121 RX hardware-verified at MT LongFast** — bridge's own NodeInfo received at -44 dBm SNR 9.8 dB. Phase 0 dual-SX1262 path unchanged and regression-clean. MeshCore reception on the LR1121 at MC RF profile (62.5 kHz / SF7 / sync 0x12) carries forward to v9.x as a known limitation to bench-isolate.
+- [x] ~~**Phase 1 — Sub-GHz ↔ 2.4 GHz cross-band: LR1121 hardware bring-up.**~~ — **done** (v9.0); specced in [`LR1121-SPEC.md`](LR1121-SPEC.md). An LR1121 module joined the project as Radio 2 in the new **MIXED** build profile. `LoraRadio` abstract interface, an LR1121 wrapper on RadioLib's `LR1121` class, `RADIO_PROFILE` build flag (MIXED / DUAL_SX1262 / DUAL_LR1121), `BridgeConfig` schema v4→v5 with per-radio chip field, portal "Radio 2 chip" picker, chip-aware frequency validation (now accepts 2400-2500 MHz for LR1121), 2.4 GHz wideLora modem presets and `slotFrequency2G4()` in `RegionPreset.h`. RadioLib bumped 6.6.0 → 7.0.0 (6.6.0 LR11x0 driver had a chip-detection bug; 7.x fixes it but uses a different `begin()` signature, adapted in the wrapper). Manual NRESET pulse + ~141 ms BUSY-poll in `Core1121::begin()` (LA-confirmed boot-ROM time). **LR1121 RX hardware-verified at MT LongFast** during the initial v9.0 bring-up — bridge's own NodeInfo received at -44 dBm SNR 9.8 dB. Phase 0 dual-SX1262 path unchanged and regression-clean. MeshCore reception on the LR1121 at MC RF profile (62.5 kHz / SF7 / sync 0x12) carries forward to v9.x as a known limitation to bench-isolate. **On the `CORE1121` branch, Radio 2 is now the WaveShare Core1121** — same LR1121 silicon, with the board-specific PE4259 RF-switch table and 3.0 V TCXO; see [`CORE1121-RF-SWITCH.md`](docs/datasheets/waveshare/CORE1121-RF-SWITCH.md) and the [bring-up handoff](docs/WAVESHARE-CORE1121-HANDOFF.md). Bench re-verification on the Core1121 pending.
 
 - [ ] **Phase 2 — Dual-LR1121 (`DUAL_LR1121` profile).** Code path is already compile-verified; awaits Phase 1 MC verification before Phase 2 bring-up. Same firmware, swap the build flag, no other changes — either radio slot freely sub-GHz or 2.4 GHz at runtime. Tagged release target: **v9.1**.
 
@@ -110,7 +127,7 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 
   **Minimum viable hardware change:** keep the existing Xiao Wio-SX1262 on one of the two slots, and swap *only the other slot* for a radio that can reach 2.4 GHz. The bridge needs exactly one 2.4-GHz-capable side; the SX1262 stays as the sub-GHz endpoint.
 
-  **Prototype target:** the **Seeed Wio LR1121 breadboard** — already on hand, RadioLib-supported, multi-band on one die (sub-GHz **+ 2.4 GHz + S-band 1.9-2.1 GHz**), plus LR-FHSS. For this bridge it sits on the 2.4 GHz slot opposite the existing Xiao Wio SX1262; longer-term a single LR1121 could replace *both* SX1262s if collapsing to one radio family becomes interesting.
+  **2.4 GHz-capable radio:** the **WaveShare Core1121** (LR1121) — RadioLib-supported, multi-band on one die (sub-GHz **+ 2.4 GHz + S-band 1.9-2.1 GHz**), plus LR-FHSS. It sits on the edge-pin slot opposite the existing Xiao Wio-SX1262 (sub-GHz); longer-term a single LR1121 could replace *both* SX1262s if collapsing to one radio family becomes interesting.
 
   Other Semtech parts to track for later, in roughly increasing capability:
   - **SX1280** — 2.4 GHz only (~2400-2500 MHz). Cheapest and narrowest; useful if a smaller, lower-cost run is ever in scope.
@@ -118,7 +135,7 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 
   **MCU upgrade is conditional, not required.** If a Xiao-compatible 2.4 GHz module turns up (or can be hand-wired onto the edge pins next to the existing B2B Wio shield) the Xiao ESP32S3 Sense stays in service and the form factor barely changes. If the only available SX1280 / LR1121 carriers want full 0.1"-header access, the natural upgrade target is the **ESP32-S3 DevKitC-1 N-R** (e.g. N8R8 — standard ESP32-S3-WROOM-1 dev board with N flash + R PSRAM): ~40 broken-out GPIOs, more flash + PSRAM, and the ability to wire arbitrary off-the-shelf breakouts. `WioSX1262.{h,cpp}` already abstracts pin assignments, SPI bus sharing, and the mutex — switching MCU boards would mean a new `pinout.h` (or per-board `#ifdef` block) and not much else.
 
-  Good news on the firmware side: the protocol decoders and `bridgePacket()` dispatcher in this repo are RF-agnostic — they branch on the LoRa sync word, not the carrier frequency. Once a `WioSX1280` / `WioLR1121` / `WioLR2021` wrapper lands alongside `WioSX1262` (same `LoraConfig` struct, same `available()` / `read()` / `transmit()` surface), the existing bridge pipeline drops straight in with RF parameter changes in `platformio.ini`.
+  Good news on the firmware side: the protocol decoders and `bridgePacket()` dispatcher in this repo are RF-agnostic — they branch on the LoRa sync word, not the carrier frequency. With a `Core1121` wrapper already alongside `WioSX1262` (same `LoraConfig` struct, same `available()` / `read()` / `transmit()` surface) — and `WioSX1280` / `WioLR2021` able to follow the same pattern — the existing bridge pipeline drops straight in with RF parameter changes in `platformio.ini`.
 
 ### Reticulum / RNode — lowest priority
 

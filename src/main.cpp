@@ -24,7 +24,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include "WioSX1262.h"
-#include "WioLR1121.h"
+#include "Core1121.h"
 #include "RadioProfile.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
@@ -104,15 +104,22 @@ static void deriveMacIdentity()
 #define R1_ANT_SW   38  // Antenna switch   (B2B)
 
 // ============================================================
-//  Radio 2 — Wio SX1262 via perimeter (edge) header pins
-//  Pin order on module left side (top → bottom): D0, DIO1, RST, BUSY, NSS, RF_SW
+//  Radio 2 — WaveShare Core1121 (LR1121) via perimeter (edge) header pins.
+//  The Core1121 wires pad-for-pad onto the same XIAO edge header the R2 slot
+//  has always used, so the GPIO assignments are unchanged from the Seeed R2.
 //  XIAO ESP32S3: D0=GPIO1, D1=GPIO2, D2=GPIO3, D3=GPIO4, D4=GPIO5, D5=GPIO6
+//  Core1121 module header (U3) → XIAO GPIO (from Core1121_XF_Sch.pdf):
+//    NSS(U3.14)→GPIO5  DIO9/IRQ(U3.3)→GPIO2  NRESET(U3.10)→GPIO3
+//    BUSY(U3.9)→GPIO4  SCK(U3.13)→GPIO7  MOSI(U3.12)→GPIO9  MISO(U3.11)→GPIO8
+//    3V3(U3.8)→3V3  GND(U3.2/7/15)→GND
 // ============================================================
 #define R2_NSS      5   // SPI chip-select  (D4 / GPIO5)
-#define R2_DIO1     2   // IRQ              (D1 / GPIO2)
-#define R2_RESET    3   // Reset            (D2 / GPIO3)
-#define R2_BUSY     4   // Busy             (D3 / GPIO4)
-#define R2_ANT_SW   6   // RF switch        (D5 / GPIO6)
+#define R2_DIO1     2   // IRQ = LR1121 DIO9 (D1 / GPIO2)
+#define R2_RESET    3   // Reset / NRESET    (D2 / GPIO3)
+#define R2_BUSY     4   // Busy              (D3 / GPIO4)
+#define R2_ANT_SW   6   // (D5 / GPIO6) UNUSED for Core1121 — the module's PE4259
+                        //   switch is driven by the LR1121's own DIO5/DIO6.
+                        //   Retained only for the SX1262 R2 build variant.
 
 // ============================================================
 //  FreeRTOS configuration
@@ -139,7 +146,7 @@ LoraRadio *radio1 = nullptr;
 LoraRadio *radio2 = nullptr;
 // Diagnostic: when Radio 2 is the LR1121, this points to the same object so
 // radio2Task can read the ISR counter for the heartbeat. nullptr otherwise.
-WioLR1121 *radio2_lr_diag = nullptr;
+Core1121 *radio2_lr_diag = nullptr;
 
 // ============================================================
 //  Per-radio channel context — g_chan[0] = radio1, g_chan[1] = radio2.
@@ -683,7 +690,7 @@ static LoraRadio *makeRadio(uint8_t chip, int nss, int irqDio, int reset,
                             const LoraConfig &cfg)
 {
     if (chip == BridgeConfig::CHIP_LR1121)
-        return new WioLR1121(nss, irqDio, reset, busy, spi, spiMutex, name, cfg);
+        return new Core1121(nss, irqDio, reset, busy, spi, spiMutex, name, cfg);
     return new WioSX1262(nss, irqDio, reset, busy, antSw, spi, spiMutex, name, cfg);
 }
 
@@ -804,7 +811,7 @@ void setup()
     radio2 = makeRadio(chip1, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
                        R2_ANT_SW, "Radio2-Edge", radio2Config);
     if (chip1 == BridgeConfig::CHIP_LR1121) {
-        radio2_lr_diag = static_cast<WioLR1121 *>(radio2);
+        radio2_lr_diag = static_cast<Core1121 *>(radio2);
     }
 
     // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
