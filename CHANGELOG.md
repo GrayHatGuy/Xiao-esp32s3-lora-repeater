@@ -4,7 +4,7 @@
 
 The LR1121 (Seeed Wio-LR1121, SKU 113991415) joins the project as Radio 2
 in the **MIXED** build profile — the headline next step toward sub-GHz ↔
-2.4 GHz cross-band bridging. Specced in [`LR1121-SPEC.md`](LR1121-SPEC.md).
+2.4 GHz cross-band bridging. Specced in [`LR1121-SPEC.md`](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/blob/lr1121-phase1/LR1121-SPEC.md) (on the `lr1121-phase1` branch).
 
 This release lands all the firmware infrastructure for the LR1121 path
 plus the verified hardware bring-up on real silicon. **MT reception is

@@ -24,22 +24,41 @@ Chip-level command spec. Primary reference for `SetDioAsRfSwitch` (§4.2.1), `Se
 
 ---
 
-## Seeed Wio-LR1121 module (Phase 1 Radio 2)
+## Seeed Wio-LR1121 module (Phase 1 Radio 2 — superseded by the Core1121)
 
-### Wio-LR1121 Module Datasheet
+The Seeed Wio-LR1121 was the original Phase-1 Radio 2; it is **replaced by the WaveShare Core1121** on this branch (see below). The Wio module datasheet, the Skyworks **SKY13373-460LF** RF-switch datasheet, and the Seeed engineering correspondence that pinned down its `V1=DIO5 / V2=DIO6` switch wiring all live on the [`lr1121-phase1`](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/tree/lr1121-phase1) branch (`docs/datasheets/` + `SEEED_*.md`).
 
-Module-level integration spec. Documents the antenna pads (`SUBG_RF` pad 23, `2.4G_RF` pad 2), TCXO integration, pinout, RF switch wiring (incomplete — see Seeed correspondence chain in `../SEEED_EMAIL_DRAFT.md` for the authoritative SKY13373-460LF truth table provided by David Du after the published datasheet did not cover the V1/V2 control wiring).
+---
 
-- Local: [`datasheets/Wio-LR1121_Module_Datasheet.pdf`](datasheets/Wio-LR1121_Module_Datasheet.pdf)
-- Vendor wiki: https://wiki.seeedstudio.com/wio_lr1121_module/
-- Vendor direct PDF (may expire): https://files.seeedstudio.com/wiki/Wio-LR1121/Wio-LR1121_Module_Datasheet_v1.0.pdf
+## WaveShare Core1121-XF module (Phase 1 Radio 2 — current board)
 
-### Skyworks SKY13373-460LF RF switch datasheet
+The WaveShare Core1121 (Semtech LR1121) replaces the Seeed Wio-LR1121 as Radio 2 on the `CORE1121` branch — same chip, different board. Unlike Seeed, WaveShare **publishes the full schematic**, so the board-specific RF-switch wiring is derived directly rather than via support correspondence.
 
-The on-module SP3T antenna switch. Document number 310060742. Provided by David Du (Sensecap Support) with his 2026-05-28 reply to the original engineering inquiry. The truth table in this datasheet plus David's wiring confirmation (V1 ↔ DIO5, V2 ↔ DIO6) is what allowed Phase 1 to lock the RF switch table in commit `949176a`.
+### Core1121-XF schematic
 
-- Local: [`datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf`](datasheets/310060742_SKYWORKS_SKY13373-460LF_Datasheet.pdf)
-- Vendor product page: https://www.skyworksinc.com/Products/Switches/SKY13373-460LF
+Authoritative source for the board's RF-switch wiring (pSemi **PE4259** SPDT controlled by DIO5/DIO6), TCXO (32 MHz @ 3.0 V), the 32.768 kHz crystal on DIO10/DIO11, and the dual-antenna topology (ANT2 sub-GHz behind the switch, ANT1 2.4 GHz direct on `RFIO_HF`).
+
+- Local: [`datasheets/waveshare/Core1121_XF_Sch.pdf`](datasheets/waveshare/Core1121_XF_Sch.pdf)
+- Vendor wiki: https://www.waveshare.com/wiki/Core1121-XF
+- Vendor demos (ESP32-S3 / Raspberry Pi / Pico / STM32) and resources: https://www.waveshare.com/wiki/Core1121-XF
+
+### Core1121 RF-switch table (schematic-derived)
+
+The project's record of the Core1121 RF-switch truth table and how it differs from the Seeed SKY13373: only `MODE_TX` differs ({1,1}→{0,1}), because the PE4259 is an SPDT vs the SKY13373 SP3T. Cross-checked against WaveShare's own demo firmware. Cited by `src/Core1121.cpp`.
+
+- Local: [`datasheets/waveshare/CORE1121-RF-SWITCH.md`](datasheets/waveshare/CORE1121-RF-SWITCH.md)
+
+### pSemi PE4259 RF switch
+
+The SPDT antenna switch on the Core1121 (the counterpart to the Seeed module's SKY13373). No local PDF — see the vendor page. The board wires it in complementary-pin control mode (pin 6 ← DIO5, pin 4 ← DIO6).
+
+- Vendor product page: https://www.psemi.com/products/rf-switches/pe4259
+
+### Core1121 bring-up handoff
+
+The task-#8 board-vs-chip control plan and success criteria for the Core1121.
+
+- Local: [`WAVESHARE-CORE1121-HANDOFF.md`](WAVESHARE-CORE1121-HANDOFF.md)
 
 ---
 
@@ -58,7 +77,7 @@ The reference radio used as R1 throughout Phase 0 and Phase 1. SX1262 sub-GHz on
 
 ### XIAO ESP32-S3 pin multiplexing reference
 
-The host MCU that drives both radios over SPI. The pin-multiplexing wiki is the source of truth for which GPIOs map to which functions (SPI MOSI/MISO/SCK, NSS chip-select, RST, BUSY, DIO interrupt lines). Project pin map in `../src/main.cpp` and `../LR1121-SPEC.md` is derived from this reference.
+The host MCU that drives both radios over SPI. The pin-multiplexing wiki is the source of truth for which GPIOs map to which functions (SPI MOSI/MISO/SCK, NSS chip-select, RST, BUSY, DIO interrupt lines). Project pin map in `../src/main.cpp` and [`../CORE1121.md`](../CORE1121.md) is derived from this reference.
 
 - Vendor wiki: https://wiki.seeedstudio.com/xiao_esp32s3_pin_multiplexing/
 - Board variant: Seeed XIAO ESP32-S3 (also covered by Espressif ESP32-S3 official datasheet)

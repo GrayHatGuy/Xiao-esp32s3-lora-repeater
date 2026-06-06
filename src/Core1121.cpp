@@ -257,7 +257,8 @@ bool Core1121::begin()
 
     // ----- Module identity: LR1121 unique 64-bit chip EUI ------------------
     // Print the chip EUI at boot so every bridge run self-identifies which
-    // silicon produced the log — correlate against docs/testbed/MODULE-REGISTRY.md.
+    // silicon produced the log — record it in the module registry (kept on the
+    // lr1121-phase1 branch, docs/testbed/MODULE-REGISTRY.md).
     // This is the unambiguous way to tell the Core1121 apart from the Seeed
     // Wio-LR1121 modules in the captured logs for the #8 board-vs-chip control.
     // Read via the LR1121Access idiom because LR11x0::getChipEui() is protected
@@ -266,7 +267,7 @@ bool Core1121::begin()
     int16_t euiState = static_cast<LR1121Access*>(_radio)->getChipEui(chipEui);
     if (euiState == RADIOLIB_ERR_NONE) {
         Serial.printf("[%s] chip EUI = %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X "
-                      "(correlate w/ MODULE-REGISTRY.md)\n",
+                      "(record this EUI to identify the module)\n",
                       _name, chipEui[0], chipEui[1], chipEui[2], chipEui[3],
                       chipEui[4], chipEui[5], chipEui[6], chipEui[7]);
     } else {

@@ -2,7 +2,7 @@
 // ---------------------------------------------------------------------------
 // LoraRadio wrapper for the WaveShare Core1121-XF module (Semtech LR1121), on
 // top of RadioLib's LR1121 class. Same surface as WioSX1262 so either chip can
-// occupy a radio slot — see LR1121-SPEC.md.
+// occupy a radio slot — see CORE1121.md.
 //
 // This driver replaces the earlier Seeed Wio-LR1121 driver (WioLR1121.*) on the
 // CORE1121 branch. It is the same LR1121 silicon, so the chip-level init carries

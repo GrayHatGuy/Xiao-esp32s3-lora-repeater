@@ -81,7 +81,7 @@ Currently it appears to update region but skip BW/SF/CR re-derivation.
 
 ### Local impact
 
-Documented for the project's own benefit. Once the bench fully validates 2.4 GHz, file the upstream issue with reproduction steps + suggested fix. Until upstream is patched, anyone running our `docs/testbed/HACKRF-DIAGNOSTIC-PLAN.md` Test 0b at 2.4 GHz on a T3S3 must follow the manual workaround sequence above before trusting the T3S3 as a known-good reference radio.
+Documented for the project's own benefit. Once the bench fully validates 2.4 GHz, file the upstream issue with reproduction steps + suggested fix. Until upstream is patched, anyone using a T3S3 as a known-good 2.4 GHz reference radio must follow the manual workaround sequence above first. (The original 2.4 GHz bench procedure lives on the [`lr1121-phase1`](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/tree/lr1121-phase1) branch.)
 
 ---
 

@@ -1,6 +1,6 @@
 // RadioProfile.h
 // ---------------------------------------------------------------------------
-// Build-profile selection for the radio chips — see LR1121-SPEC.md §3.
+// Build-profile selection for the radio chips (the three profiles are below).
 //
 //   (default) MIXED            Radio 1 = SX1262, Radio 2 = SX1262 or LR1121.
 //                              Radio 2 chip is portal-selectable; both
