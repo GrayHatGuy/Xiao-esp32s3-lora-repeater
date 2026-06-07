@@ -55,6 +55,19 @@
 - **Serial logs interleave/garble** (two radio tasks → USB-CDC, byte-level). A `Serial` mutex would fix it (offered, not yet added) — a good first task next session for clean captures.
 - **Bridge pipeline is functional** (MC→MT forwarded with `tx=0`); the only blocker is **R2 RX at narrow-BW MeshCore**.
 
+### 0.8 Nudge-test RESULT (2026-06-07) — frequency offset CONFIRMED, R2 tuned LOW
+Swept R2 RX frequency at the MeshCore BW62.5 config (R1 fixed 910.525, Heltec 910.525):
+
+| R2 RX freq | offset | R2 `irq` | meaning |
+|---|---|---|---|
+| 910.495 | −30 kHz | `0x10` | preamble only |
+| 910.510 | −15 kHz | `0x10` | preamble only |
+| 910.525 |  0 | `0x10` | preamble only |
+| 910.540 | +15 kHz | `0x50` | preamble + **HEADER_ERR** (reached header) |
+| 910.555 | +30 kHz | `0x50` | preamble + HEADER_ERR |
+
+**Tuning R2 UP advances `0x10`→`0x50`; DOWN stays `0x10`.** ⇒ R2's RX center is **LOW by >30 kHz**, correction is **UP**. Frequency IS a cause (nudging changes behavior) ⇒ **NOT a pure BW mismatch**. But **no offset completed** (never `0x08`/RX_DONE), so either the offset is **>+30 kHz** OR a **BW co-factor** also blocks completion. Hypothesis 0.5#1 (frequency offset) is now **largely confirmed**; 0.5#2 (BW) still possible *in addition*. **DISCRIMINATE:** (a) flash the instrumented build (`getFrequencyError`), run the **Meshtastic BW250** config (R2 completes there) → read R2 `freqErr` magnitude; (b) continue the nudge **UP** at BW62.5 (910.570 / 910.585 / 910.600) → if R2 hits `0x08`/`[R2 decoded]`, it's pure frequency; if it never completes, it's (also) BW. Then fix: TCXO/XOSC config + explicit image/frequency recal on the LR1121.
+
 ---
 
 ## Branches
