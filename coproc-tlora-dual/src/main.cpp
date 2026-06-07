@@ -193,16 +193,31 @@ static void handleHostFrame(uint8_t type, uint8_t radio, const uint8_t *payload,
                 }
             }
             break;
-        case MSG_TX:
+        case MSG_TX: {
             // Enqueue only — dispatched non-blocking in loop() after CAD. Do NOT
             // transmit inline: that would block loop() (and the UART drain) for
             // the whole on-air time. The host gates the next MSG_TX on our
             // MSG_TX_DONE, so the queue normally holds at most one job.
-            if (radio < 2 && g_enabled[radio]) {
-                if (!txqPush(radio, payload, len))
-                    linkLog("TX queue full — frame dropped");
+            //
+            // EVERY MSG_TX must be answered by exactly one MSG_TX_DONE or the
+            // host's gate wedges. An accepted frame gets its MSG_TX_DONE when the
+            // TX completes (or fails to start) in loop(); a REJECTED frame (radio
+            // disabled / cfg failed — e.g. a 2.4 GHz BW RadioLib refused — or a
+            // full queue) is answered here with an error status so the host
+            // releases the gate immediately instead of stalling on the timeout.
+            if (radio >= 2) break;
+            int16_t st = RADIOLIB_ERR_NONE;
+            if (!g_enabled[radio]) {
+                st = RADIOLIB_ERR_WRONG_MODEM;        // not configured / cfg failed
+                linkLog("MSG_TX for a radio that is not enabled — rejected");
+            } else if (!txqPush(radio, payload, len)) {
+                st = RADIOLIB_ERR_TX_TIMEOUT;         // queue full
+                linkLog("TX queue full — frame dropped");
             }
+            if (st != RADIOLIB_ERR_NONE)
+                linkSend(MSG_TX_DONE, radio, (const uint8_t *)&st, sizeof(st));
             break;
+        }
         case MSG_START_RX:
             // Never re-arm RX mid-TX: that would abort the transmit and the
             // TxDone IRQ would never fire. The TX path returns to RX itself.
@@ -254,7 +269,7 @@ static void feedByte(uint8_t b) {
             if (s_payCount == (uint16_t)(s_payLen + CRC_LEN)) {
                 uint16_t rxCrc = (uint16_t)s_buf[s_payLen] |
                                  ((uint16_t)s_buf[s_payLen + 1] << 8);
-                uint8_t vb[4 + MAX_PAYLOAD];
+                static uint8_t vb[4 + MAX_PAYLOAD];   // single-threaded; off-stack
                 memcpy(vb, s_hdr, 4);
                 if (s_payLen) memcpy(vb + 4, s_buf, s_payLen);
                 if (crc16(vb, 4 + s_payLen) == rxCrc)
