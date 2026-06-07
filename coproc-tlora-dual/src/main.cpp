@@ -13,9 +13,16 @@
  * taken from the LilyGO T-Lora-Dual Factory example (the proven-working
  * reference), NOT from the abandoned Wio-LR1121 driver.
  *
- * TX is blocking (radio.transmit() then startReceive()) — same pattern the host
- * WioSX1262 uses; the host paces TX. RX is IRQ-driven (DIO9 -> flag), drained
- * in loop(). Single-threaded, so no locking is needed.
+ * TX is NON-BLOCKING (ROUTING-REDESIGN.md §4 keystone): each MSG_TX is pushed
+ * onto a small per-radio TX queue and dispatched one-at-a-time with
+ * startTransmit() + a TX-done IRQ, so loop() keeps draining the UART during the
+ * on-air time. CAD (scanChannel, listen-before-talk) gates every dispatch. This
+ * is what dissolves the UART-overflow class: the host gates each MSG_TX on the
+ * MSG_TX_DONE we send back, so it never hands us a frame we can't yet take.
+ * RX is IRQ-driven (DIO9 -> flag), drained in loop(). The SAME DIO9 IRQ fires
+ * for both RxDone and TxDone; g_txInFlight[] disambiguates (a radio mid-TX is
+ * deaf, so a DIO9 event while transmitting can only be TxDone). Single-threaded,
+ * so no locking is needed.
  */
 
 #include <Arduino.h>
@@ -58,8 +65,44 @@ HardwareSerial &LinkSerial = Serial;   // UART0 (GPIO1/3) — board's only UART
 LR1121 radio_3 = new Module(R3_CS, R3_DIO9, R3_RST, R3_BUSY);
 LR1121 radio_4 = new Module(R4_CS, R4_DIO9, R4_RST, R4_BUSY);
 LR1121 *g_radio[2]   = { &radio_3, &radio_4 };
-volatile bool g_rxFlag[2] = { false, false };
+volatile bool g_rxFlag[2] = { false, false };   // DIO9 fired (RxDone OR TxDone)
 bool          g_enabled[2] = { false, false };
+
+// --- Non-blocking TX state (ROUTING-REDESIGN keystone) ----------------------
+// One small TX queue per radio. The host fire-and-forwards MSG_TX frames; we
+// enqueue and dispatch them one at a time via startTransmit() so loop() never
+// blocks for the on-air duration. g_txInFlight gates the DIO9 IRQ meaning.
+bool     g_txInFlight[2] = { false, false };
+uint32_t g_txStartMs[2]  = { 0, 0 };
+// Belt-and-suspenders: if a TX-done IRQ is somehow missed, force-finish after
+// this long so the radio (and the host's MSG_TX_DONE gate) can never wedge.
+static const uint32_t TX_DONE_TIMEOUT_MS = 8000;
+
+struct TxJob { uint8_t data[LORA_MAX]; uint16_t len; };
+static const int TX_Q_DEPTH = 4;   // host gates 1-in-flight, so this is slack
+TxJob   g_txq[2][TX_Q_DEPTH];
+uint8_t g_txqHead[2] = { 0, 0 };
+uint8_t g_txqTail[2] = { 0, 0 };
+uint8_t g_txqCount[2] = { 0, 0 };
+
+static bool txqPush(int i, const uint8_t *d, size_t len) {
+    if (len > LORA_MAX) len = LORA_MAX;
+    if (g_txqCount[i] >= TX_Q_DEPTH) return false;   // full -> caller logs+drops
+    TxJob &j = g_txq[i][g_txqTail[i]];
+    memcpy(j.data, d, len);
+    j.len = (uint16_t)len;
+    g_txqTail[i] = (uint8_t)((g_txqTail[i] + 1) % TX_Q_DEPTH);
+    g_txqCount[i]++;
+    return true;
+}
+static TxJob *txqPeek(int i) {
+    return g_txqCount[i] ? &g_txq[i][g_txqHead[i]] : nullptr;
+}
+static void txqPop(int i) {
+    if (!g_txqCount[i]) return;
+    g_txqHead[i] = (uint8_t)((g_txqHead[i] + 1) % TX_Q_DEPTH);
+    g_txqCount[i]--;
+}
 
 // --- RF switch table — Factory verbatim (DIO5/6 + HF RX/TX on DIO7/8) -------
 static const uint32_t rfSwitchPins[] = {
@@ -151,14 +194,20 @@ static void handleHostFrame(uint8_t type, uint8_t radio, const uint8_t *payload,
             }
             break;
         case MSG_TX:
+            // Enqueue only — dispatched non-blocking in loop() after CAD. Do NOT
+            // transmit inline: that would block loop() (and the UART drain) for
+            // the whole on-air time. The host gates the next MSG_TX on our
+            // MSG_TX_DONE, so the queue normally holds at most one job.
             if (radio < 2 && g_enabled[radio]) {
-                int16_t st = g_radio[radio]->transmit(const_cast<uint8_t *>(payload), len);
-                g_radio[radio]->startReceive();   // auto-return to RX
-                linkSend(MSG_TX_DONE, radio, (const uint8_t *)&st, sizeof(st));
+                if (!txqPush(radio, payload, len))
+                    linkLog("TX queue full — frame dropped");
             }
             break;
         case MSG_START_RX:
-            if (radio < 2 && g_enabled[radio]) g_radio[radio]->startReceive();
+            // Never re-arm RX mid-TX: that would abort the transmit and the
+            // TxDone IRQ would never fire. The TX path returns to RX itself.
+            if (radio < 2 && g_enabled[radio] && !g_txInFlight[radio])
+                g_radio[radio]->startReceive();
             break;
         case MSG_PING: {
             uint32_t up = millis();
@@ -247,30 +296,75 @@ void setup() {
 }
 
 void loop() {
-    // Drain inbound host frames.
+    // Drain inbound host frames first — this keeps running even while a radio
+    // is transmitting (non-blocking TX), which is the whole point.
     while (LinkSerial.available() > 0) feedByte((uint8_t)LinkSerial.read());
 
-    // Drain received LoRa packets (IRQ-flagged) and forward to the host.
     for (int i = 0; i < 2; i++) {
-        if (!g_rxFlag[i]) continue;
-        g_rxFlag[i] = false;
-        if (!g_enabled[i]) { g_radio[i]->startReceive(); continue; }
-
-        size_t plen = g_radio[i]->getPacketLength();
-        if (plen == 0) { g_radio[i]->startReceive(); continue; }
-        if (plen > LORA_MAX) plen = LORA_MAX;
-
-        uint8_t data[LORA_MAX];
-        int16_t st = g_radio[i]->readData(data, plen);
-        if (st == RADIOLIB_ERR_NONE) {
-            uint8_t pl[sizeof(RxHeader) + LORA_MAX];
-            RxHeader h;
-            h.rssi = g_radio[i]->getRSSI();
-            h.snr  = g_radio[i]->getSNR();
-            memcpy(pl, &h, sizeof(h));
-            memcpy(pl + sizeof(h), data, plen);
-            linkSend(MSG_RX, (uint8_t)i, pl, sizeof(h) + plen);
+        // --- (1) TX in flight: wait for the TxDone IRQ (or the safety timeout)
+        // The radio is deaf while transmitting, so a DIO9 event here is TxDone.
+        if (g_txInFlight[i]) {
+            bool done     = g_rxFlag[i];
+            bool timedOut = (millis() - g_txStartMs[i]) > TX_DONE_TIMEOUT_MS;
+            if (done || timedOut) {
+                g_rxFlag[i] = false;
+                int16_t st = g_radio[i]->finishTransmit();
+                if (timedOut && !done) st = RADIOLIB_ERR_TX_TIMEOUT;
+                g_txInFlight[i] = false;
+                g_radio[i]->startReceive();          // back to listening ASAP
+                linkSend(MSG_TX_DONE, (uint8_t)i, (const uint8_t *)&st, sizeof(st));
+            }
+            continue;   // nothing else for this radio until TX settles
         }
-        g_radio[i]->startReceive();   // re-arm
+
+        // --- (2) RX: a real received packet -> forward to the host.
+        if (g_rxFlag[i]) {
+            g_rxFlag[i] = false;
+            if (!g_enabled[i]) { g_radio[i]->startReceive(); continue; }
+
+            size_t plen = g_radio[i]->getPacketLength();
+            if (plen) {
+                if (plen > LORA_MAX) plen = LORA_MAX;
+                uint8_t data[LORA_MAX];
+                int16_t st = g_radio[i]->readData(data, plen);
+                if (st == RADIOLIB_ERR_NONE) {
+                    uint8_t pl[sizeof(RxHeader) + LORA_MAX];
+                    RxHeader h;
+                    h.rssi = g_radio[i]->getRSSI();
+                    h.snr  = g_radio[i]->getSNR();
+                    memcpy(pl, &h, sizeof(h));
+                    memcpy(pl + sizeof(h), data, plen);
+                    linkSend(MSG_RX, (uint8_t)i, pl, sizeof(h) + plen);
+                }
+            }
+            g_radio[i]->startReceive();   // re-arm
+            continue;
+        }
+
+        // --- (3) TX dispatch: CAD (listen-before-talk) then non-blocking TX.
+        TxJob *job = g_enabled[i] ? txqPeek(i) : nullptr;
+        if (job) {
+            int16_t cad = g_radio[i]->scanChannel();
+            // CAD asserts DIO9 on its own — clear the flag so the CAD event is
+            // not later mistaken for an RxDone.
+            g_rxFlag[i] = false;
+            if (cad == RADIOLIB_LORA_DETECTED) {
+                // Channel busy: stay in RX and retry next loop (CSMA). The job
+                // remains queued; the host's airtime throttle bounds retries.
+                g_radio[i]->startReceive();
+            } else {
+                // Free, or CAD errored — fail open (prefer sending over wedging).
+                int16_t st = g_radio[i]->startTransmit(job->data, job->len);
+                if (st == RADIOLIB_ERR_NONE) {
+                    g_txInFlight[i] = true;
+                    g_txStartMs[i]  = millis();
+                    txqPop(i);
+                } else {
+                    txqPop(i);   // couldn't even start — drop + report
+                    g_radio[i]->startReceive();
+                    linkSend(MSG_TX_DONE, (uint8_t)i, (const uint8_t *)&st, sizeof(st));
+                }
+            }
+        }
     }
 }
