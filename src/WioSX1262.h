@@ -38,7 +38,7 @@ private:
     int               _antSw;
     const char       *_name;
     LoraConfig        _config;
-    bool              _txInFlight = false;   // non-blocking TX outstanding
+    volatile bool     _txInFlight = false;   // non-blocking TX outstanding
 
     void _setAnt(bool tx);
 };

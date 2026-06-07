@@ -47,9 +47,12 @@ namespace DedupCache {
   #define BRIDGE_DEDUP_TTL_MS 60000UL
 #endif
 
-// Number of distinct recent (body,srcId) hashes remembered. 256 * 8 B = 2 KB.
+// Number of distinct recent (body,srcId) hashes remembered. 512 * 12 B = 6 KB.
+// Sized with headroom so a busy 4-radio bridge doesn't saturate the table
+// within one TTL window (saturation would force eviction of still-live entries
+// and let a duplicate slip through). Override with -D as needed.
 #ifndef BRIDGE_DEDUP_TABLE_SIZE
-  #define BRIDGE_DEDUP_TABLE_SIZE 256
+  #define BRIDGE_DEDUP_TABLE_SIZE 512
 #endif
 
 // Create the internal mutex. Call once from setup() before the radio tasks

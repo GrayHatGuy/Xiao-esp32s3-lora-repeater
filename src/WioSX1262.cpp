@@ -148,11 +148,12 @@ int16_t WioSX1262::scanChannel()
 {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     int16_t state = _radio->scanChannel();   // blocking CAD — a few symbols only
-    xSemaphoreGive(_mutex);
-    // CAD toggles DIO1 (CAD-done) on its own; clear the flag so it is not later
-    // read as an RxDone. scanChannel() leaves the radio in standby — the caller
-    // either startTransmit()s (fine from standby) or startReceive()s if busy.
+    // CAD toggles DIO1 (CAD-done) on its own; clear the flag INSIDE the mutex —
+    // before the radio (now in standby) can raise any further DIO1 event — so it
+    // is never later read as an RxDone. The caller either startTransmit()s (fine
+    // from standby) or startReceive()s if the channel was busy.
     _rxFlag = false;
+    xSemaphoreGive(_mutex);
     return state;
 }
 

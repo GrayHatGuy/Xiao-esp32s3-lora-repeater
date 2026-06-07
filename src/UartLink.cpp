@@ -94,7 +94,7 @@ void UartLink::feedByte(uint8_t b) {
                 uint16_t rxCrc = (uint16_t)_buf[_payLen] |
                                  ((uint16_t)_buf[_payLen + 1] << 8);
                 // CRC covers type, radio, len_lo, len_hi, then payload.
-                uint8_t vb[4 + MAX_PAYLOAD];
+                static uint8_t vb[4 + MAX_PAYLOAD];   // single rxTask; off-stack
                 memcpy(vb, _hdr, 4);
                 if (_payLen) memcpy(vb + 4, _buf, _payLen);
                 uint16_t calc = crc16(vb, 4 + _payLen);

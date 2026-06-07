@@ -258,16 +258,12 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
 //  (no inline delay).
 // ============================================================
 
-// Tuning knobs for the RNS source path. Override any of these via
-// -D build flags in platformio.ini.
+// Tuning knobs for the RNS source path. Override via -D build flags.
+// (Inter-fragment pacing is no longer a per-fragment delay — the airtime
+// throttle paces queued fragments — so the old BRIDGE_RNS_FRAG_DELAY_* knobs
+// were removed.)
 #ifndef BRIDGE_RNS_MAX_FRAGS
   #define BRIDGE_RNS_MAX_FRAGS         8
-#endif
-#ifndef BRIDGE_RNS_FRAG_DELAY_MT_MS
-  #define BRIDGE_RNS_FRAG_DELAY_MT_MS  2000   // SF11/BW250 — slow airtime
-#endif
-#ifndef BRIDGE_RNS_FRAG_DELAY_MC_MS
-  #define BRIDGE_RNS_FRAG_DELAY_MC_MS  500    // SF7/BW62.5  — fast airtime
 #endif
 
 // Per-fragment raw-byte budgets, derived from:
@@ -714,7 +710,11 @@ void radioTask(void *pvParameters)
                         txLen, BridgeConfig::radioSf(i),
                         BridgeConfig::radioBandwidth(i),
                         BridgeConfig::radioCr(i), LORA_PREAMBLE_LEN);
-                    uint32_t gap = (air * 100u) / (uint32_t)BRIDGE_TX_DUTY_PERCENT;
+                    // DUTY=0 means "no duty cap" (just the min-gap floor); guard
+                    // the division either way.
+                    uint32_t gap = (BRIDGE_TX_DUTY_PERCENT > 0)
+                        ? (air * 100u) / (uint32_t)BRIDGE_TX_DUTY_PERCENT
+                        : air;
                     if (gap < air + BRIDGE_TX_MIN_GAP_MS)
                         gap = air + BRIDGE_TX_MIN_GAP_MS;
                     g_nextTxAllowedMs[i] = g_txStartMs[i] + gap;
@@ -819,9 +819,12 @@ void setup()
                                 BridgeConfig::radioChannelKey(i), g_chan[i]);
     }
 
-    // NodeDB is still populated from received NodeInfo (kept for future use),
-    // but the cross-protocol attribution prefix it fed was removed with the
-    // text marker — bridged bodies are now clean (ROUTING-REDESIGN §3.1).
+    // NodeDB is still POPULATED from received NodeInfo but is currently
+    // WRITE-ONLY: the cross-protocol attribution prefix it used to feed was
+    // removed along with the text marker (ROUTING-REDESIGN §3.1), so bridged
+    // bodies are now clean and lookupShortName() is unused. Kept (not torn out)
+    // as the basis for a future attribution/alias feature — see the session
+    // handoff. If that never lands, NodeDB can be removed to drop the NVS writes.
     NodeDB::begin();
     NodeDB::debugDump();
 
