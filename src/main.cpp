@@ -32,6 +32,8 @@
 #include "BridgeConfig.h"
 #include "CaptivePortal.h"
 #include "NodeDB.h"
+#include "DedupCache.h"        // content-hash loop/dup guard (replaces marker)
+#include "RouteQueue.h"        // per-destination outbound queue
 #include "RegionPreset.h"
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
 #include <esp_mac.h>
@@ -126,8 +128,8 @@ static void deriveMacIdentity()
 //  FreeRTOS configuration
 // ============================================================
 // Radio task stack. Bumped from 4096 to 8192 once F1 (NodeDB) landed:
-// bridgePacket() can nest extractMeshtasticNodeInfo (240 B pt + AES ctx
-// ~280 B) under its own body[256]+marked[280]+outPkt[256], plus the
+// ingestAndFanout() can nest extractMeshtasticNodeInfo (240 B pt + AES ctx
+// ~280 B) under body[256] plus enqueueTextForDest's outPkt[256], and the
 // fragmented-RNS path needs similar headroom. 8 KB leaves a comfortable
 // margin; the ESP32-S3 has 512 KB SRAM so it's free real estate.
 #define BRIDGE_TASK_STACK  8192
@@ -150,6 +152,45 @@ RadioChannel g_chan[NR];
 bool         g_radioEnabled[NR] = { false, false, false, false };
 uint8_t      g_routeMask[NR]    = { 0, 0, 0, 0 };
 static const char *kTag[NR]     = { "R1", "R2", "R3", "R4" };
+
+// ============================================================
+//  RX-priority routing state (ROUTING-REDESIGN.md)
+//  ----------------------------------------------------------------
+//  One outbound queue per destination radio. A source radio's task decodes,
+//  de-duplicates and re-encodes a packet, then PUSHES the finished bytes onto
+//  the destination's queue and returns to RX. The destination radio's task is
+//  the only one that pops + CAD-gates + transmits, one packet at a time, with a
+//  non-blocking send. So a slow TX never blocks any radio's RX.
+// ============================================================
+RouteQueue g_routeQ[NR];
+
+// Per-radio TX-scheduler state (owned by that radio's task).
+static bool                g_txBusy[NR]         = { false, false, false, false };
+static uint32_t            g_txStartMs[NR]      = { 0, 0, 0, 0 };
+static uint32_t            g_txBackoffUntil[NR] = { 0, 0, 0, 0 };
+static bool                g_txPendingValid[NR] = { false, false, false, false };
+static RouteQueue::Entry   g_txPending[NR];
+
+// Route-queue depth (PSRAM-backed) and the max age past which a queued packet
+// is dropped instead of delivered (stale mesh text isn't worth airtime).
+#ifndef BRIDGE_ROUTE_QUEUE_DEPTH
+  #define BRIDGE_ROUTE_QUEUE_DEPTH  64
+#endif
+#ifndef BRIDGE_ROUTE_MAX_AGE_MS
+  #define BRIDGE_ROUTE_MAX_AGE_MS   30000UL
+#endif
+
+// CSMA random backoff after a busy CAD, and the upper bound on waiting for a
+// non-blocking TX to report done before the scheduler force-recovers.
+#ifndef BRIDGE_CAD_BACKOFF_MIN_MS
+  #define BRIDGE_CAD_BACKOFF_MIN_MS 20
+#endif
+#ifndef BRIDGE_CAD_BACKOFF_MAX_MS
+  #define BRIDGE_CAD_BACKOFF_MAX_MS 120
+#endif
+#ifndef BRIDGE_TX_INFLIGHT_TIMEOUT_MS
+  #define BRIDGE_TX_INFLIGHT_TIMEOUT_MS 10000UL   // > co-proc 8 s TX_DONE timeout
+#endif
 
 // One UART link shared by the two remote radios (R3/R4). Only opened in
 // setup() if at least one remote radio is enabled, so a pure R1/R2 build
@@ -180,27 +221,25 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
 }
 
 // ============================================================
-//  Cross-protocol bridge core
+//  Cross-protocol bridge core (RX-priority pipeline, ROUTING-REDESIGN.md)
 //  ----------------------------------------------------------------
-//  One generic per-packet bridge step driven by the source/destination
-//  radios' LoRa sync words. Supports three protocols today:
-//    0x12 MeshCore   <-> [MC] marker, body = decoded UTF-8 text
-//    0x2B Meshtastic <-> [MT] marker, body = decoded UTF-8 text
-//    0x42 Reticulum  <-> [rns <seq> <x>/<y>] marker, body = base64 of raw
-//                        RNS bytes. Fragmented across multiple MT/MC text
-//                        packets when one wouldn't fit.
+//  RX path (ingestAndFanout): decode the packet ONCE into a clean body (+ a
+//  Meshtastic srcId), run it through the content-hash loop/dup guard, then
+//  re-encode for each routed destination and PUSH the bytes onto that
+//  destination's RouteQueue. No transmit happens here — that is the TX
+//  scheduler's job (in radioTask) — so the source radio returns to RX at once.
 //
-//  Behaviour for text sources (MT/MC):
-//    1. Extract the text body.
-//    2. Loop check — drop if body already starts with any known bridge
-//       marker (the strncmp uses 4 chars so "[rns ..." matches just as
-//       "[rns] ..." used to).
-//    3. Prepend the source marker.
-//    4. dst == RNS  -> log "No TX 2 RNS:" and drop (no RNS encoder yet).
-//       dst == MT/MC -> encode and transmit on dstRadio.
+//  Loop prevention no longer uses a prepended "[MT]/[MC]/[rns]" marker: the far
+//  side now receives the CLEAN body. Instead, DedupCache remembers the content
+//  hash of every packet received AND every packet emitted, so an echo of our
+//  own emission (or a mesh-flood replay, or the same packet heard twice) is
+//  dropped by hash. See DedupCache.h for why this is loop-safe, including for
+//  same-channel cross-band MT/MC twins.
 //
-//  Behaviour for RNS sources: see bridgeFromReticulum() below — base64,
-//  CRC-16 sequence ID, fragment loop with per-protocol pacing.
+//  Protocols: 0x12 MeshCore (GRP_TXT), 0x2B Meshtastic (text/pos/telemetry),
+//  0x42 Reticulum (base64, CRC-16 seq id, fragmented across MT/MC text). RNS
+//  fragments are queued like any other packet; the airtime throttle paces them
+//  (no inline delay).
 // ============================================================
 
 // Tuning knobs for the RNS source path. Override any of these via
@@ -226,24 +265,28 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
 #define BRIDGE_RNS_RAW_PER_FRAG_MC    117
 #define BRIDGE_RNS_RAW_PER_FRAG_MT    123
 
-static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio,
-                                const char *srcTag,
-                                const uint8_t *buf, size_t len)
+// Fragment an RNS frame for one destination protocol and ENQUEUE each fragment
+// on that destination's RouteQueue (the scheduler paces + CAD-gates the sends).
+static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
+                                    const char *srcTag,
+                                    const uint8_t *buf, size_t len)
 {
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) return;
     if (len == 0) return;
 
-    // Pick destination-specific fragment size and pacing
+    // srcId we stamp into the destination encoding — folded into the dedup hash
+    // so an echo of our own fragment is recognised as a loop.
+    uint32_t dstSrcId = (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC)
+                        ? BridgeConfig::mtNodeId() : 0;
+
+    // Pick destination-specific fragment size.
     size_t   rawPerFrag = 0;
-    uint32_t delayMs    = 0;
     const char *dstName = "?";
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MT;
-        delayMs    = BRIDGE_RNS_FRAG_DELAY_MT_MS;
         dstName    = "MT";
     } else if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
         rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MC;
-        delayMs    = BRIDGE_RNS_FRAG_DELAY_MC_MS;
         dstName    = "MC";
     } else {
         Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst protocol 0x%02X\n",
@@ -309,80 +352,109 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
             return;
         }
 
-        Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u (%u B): \"%s\"\n",
-                      millis(), srcTag, dstName,
-                      (unsigned)(idx + 1), (unsigned)totalFrags,
-                      (unsigned)outLen, marked);
-
-        int16_t txState = dstRadio->transmit(outPkt, outLen);
-        if (txState != RADIOLIB_ERR_NONE) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u TX ERROR %d\n",
+        // Remember this emission (clean fragment body) so its echo is dropped
+        // as a loop, then queue it. Inter-fragment pacing is now provided by
+        // the destination's airtime throttle, not an inline delay.
+        DedupCache::record(
+            DedupCache::hash((const uint8_t *)marked, strlen(marked), dstSrcId));
+        if (g_routeQ[destIdx].push(outPkt, outLen)) {
+            Serial.printf("[%8lu ms][%s->%s queued] frag %u/%u (%u B): \"%s\"\n",
                           millis(), srcTag, dstName,
-                          (unsigned)(idx + 1), (unsigned)totalFrags, txState);
-            // Continue with remaining fragments so the receiver at least sees
-            // partial reassembly state; could return here instead.
-        }
-
-        // Inter-fragment pacing — give the destination mesh time to relay
-        // fragment N before we step on it with N+1.
-        if (idx + 1 < totalFrags) {
-            vTaskDelay(pdMS_TO_TICKS(delayMs));
+                          (unsigned)(idx + 1), (unsigned)totalFrags,
+                          (unsigned)outLen, marked);
+        } else {
+            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u queue push failed\n",
+                          millis(), srcTag, dstName,
+                          (unsigned)(idx + 1), (unsigned)totalFrags);
         }
     }
 }
 
-// Build the bridge prefix for a text-source packet. For MT source, surfaces
-// the sender's canonical 32-bit ID in Meshtastic's "!<8 lowercase hex>" form
-// and appends the short_name from NodeDB when known:
-//   "[MT !3d3a87a3 KN5J]"  — id + name (NodeDB hit)
-//   "[MT !3d3a87a3]"       — id only (no NodeInfo seen yet for this node)
-//   "[MT]"                 — defensive fallback if buf < 8 B
-// MC packets already carry the sender's name inline in the body, so the MC
-// marker stays bare.
-static void buildTextSrcMarker(uint8_t srcSync,
-                               const uint8_t *buf, size_t len,
-                               char *out, size_t outCap)
+// Encode `body` for one destination protocol and ENQUEUE it on that
+// destination's RouteQueue (its scheduler CAD-gates + sends). Also records the
+// emission's content hash so its echo is recognised as a loop — the job the
+// prepended marker used to do, now done by DedupCache with a CLEAN far-side body.
+static void enqueueTextForDest(const RadioChannel &dstChan, int destIdx,
+                               const char *srcTag, const char *body)
 {
-    if (!out || outCap == 0) return;
-    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
-        if (len >= 8) {
-            uint32_t srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
-                           | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
-            char shortName[NodeDB::MAX_SHORT_NAME + 1] = {0};
-            if (NodeDB::lookupShortName(srcId, shortName, sizeof(shortName)) &&
-                shortName[0]) {
-                snprintf(out, outCap, "[MT !%08lx %s]",
-                         (unsigned long)srcId, shortName);
-            } else {
-                snprintf(out, outCap, "[MT !%08lx]",
-                         (unsigned long)srcId);
-            }
+    // Destination is Reticulum — log and drop. No RNS encoder yet.
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+        Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
+                      millis(), srcTag, body);
+        return;
+    }
+
+    uint8_t     outPkt[256];
+    size_t      outLen   = 0;
+    bool        encoded  = false;
+    const char *dstName  = "?";
+    uint32_t    dstSrcId = 0;   // the src we stamp into the re-encoded packet
+    switch (dstChan.protocol) {
+        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
+            encoded  = MeshEncoderDebug::encodeMeshtasticText(
+                           dstChan, BridgeConfig::mtNodeId(),
+                           body, outPkt, sizeof(outPkt), outLen);
+            dstName  = "MT";
+            dstSrcId = BridgeConfig::mtNodeId();
+            break;
+        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
+            encoded  = MeshEncoderDebug::encodeMeshCoreGrpTxt(
+                           dstChan, body, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+            dstName  = "MC";
+            dstSrcId = 0;   // MeshCore GRP_TXT has no stable per-sender id
+            break;
+        default:
+            Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
+                          millis(), srcTag, dstChan.protocol);
+            return;
+    }
+    if (!encoded) {
+        Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
+                      millis(), srcTag, dstName);
+        return;
+    }
+
+    // Remember our own emission (clean body + stamped src) so the echo is
+    // dropped as a loop, then queue it for the destination's TX scheduler.
+    DedupCache::record(
+        DedupCache::hash((const uint8_t *)body, strlen(body), dstSrcId));
+    if (g_routeQ[destIdx].push(outPkt, outLen)) {
+        Serial.printf("[%8lu ms][%s->%s queued] %u B: \"%s\"\n",
+                      millis(), srcTag, dstName, (unsigned)outLen, body);
+    } else {
+        Serial.printf("[%8lu ms][%s->%s bridge] queue push failed\n",
+                      millis(), srcTag, dstName);
+    }
+}
+
+// Decode a received packet ONCE, run the loop/dup guard, and fan the clean body
+// out to every routed destination's queue. No transmit happens here — the
+// destinations' schedulers do that — so the source radio returns to RX at once.
+static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
+{
+    const RadioChannel &srcChan = g_chan[srcIdx];
+    const char         *srcTag  = kTag[srcIdx];
+    const uint8_t       mask    = g_routeMask[srcIdx];
+
+    // RNS source: dedup the raw frame, then fragment to each routed destination.
+    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
+        if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
+            Serial.printf("[%8lu ms][%s bridge] loop-drop (RNS dup)\n",
+                          millis(), srcTag);
             return;
         }
-        snprintf(out, outCap, "[MT]");
-        return;
-    }
-    if (srcSync == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
-        snprintf(out, outCap, "[MC]");
-        return;
-    }
-    snprintf(out, outCap, "[?]");
-}
-
-static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstChan,
-                         LoraRadio *dstRadio, const char *srcTag,
-                         const uint8_t *buf, size_t len)
-{
-    // RNS source uses its own fragmenting path
-    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
-        bridgeFromReticulum(dstChan, dstRadio, srcTag, buf, len);
+        for (int j = 0; j < NR; j++) {
+            if (j == srcIdx) continue;
+            if (!(mask & (uint8_t)(1u << j))) continue;
+            if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            enqueueReticulumForDest(g_chan[j], j, srcTag, buf, len);
+        }
         return;
     }
 
-    // MT NodeInfo packets feed the NodeDB and are NOT bridged as text —
-    // they'd be constant noise on the destination mesh and the destination
-    // doesn't have a use for them. Try this before the text-body extract
-    // so we don't waste a Data-protobuf walk twice.
+    // MT NodeInfo packets feed the NodeDB and are NOT bridged as text — they'd
+    // be constant noise on the destination mesh. Try this before the text-body
+    // extract so we don't walk the Data protobuf twice.
     if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         uint32_t niNodeId = 0;
         char     niShort[NodeDB::MAX_SHORT_NAME + 1] = {0};
@@ -391,8 +463,8 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
                 buf, len, srcChan, niNodeId,
                 niShort, sizeof(niShort),
                 niLong,  sizeof(niLong))) {
-            // Skip our own NodeInfo bouncing back via a relay. Without this
-            // guard every echo would trigger an NVS write of our own ID.
+            // Skip our own NodeInfo bouncing back via a relay (would needlessly
+            // rewrite our own ID to NVS on every echo).
             if (niNodeId == BridgeConfig::mtNodeId()) {
                 Serial.printf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
                               millis(), srcTag, (unsigned long)niNodeId);
@@ -406,15 +478,19 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
         }
     }
 
-    // Text source (MT or MC): single-packet bridge.
-    // For MT we try POSITION_APP and TELEMETRY_APP first; if either yields
-    // structured data we format it as a compact text line and reuse the
-    // standard text-bridge pipeline below. TEXT_MESSAGE_APP is the final
-    // fallback. For MC we just lift the GRP_TXT body directly.
+    // Decode the body ONCE. For MT we try POSITION_APP and TELEMETRY_APP first;
+    // if either yields structured data we format it as a compact text line and
+    // reuse the text path below. TEXT_MESSAGE_APP is the final fallback. For MC
+    // we lift the GRP_TXT body directly. We also capture the Meshtastic src so
+    // identical text from different senders isn't false-dropped by the guard.
+    uint32_t srcId = 0;
     char body[256];
     bool decoded = false;
 
     if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        if (len >= 8)
+            srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
+                  | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
         if (!decoded && BridgeConfig::positionEnabled()) {
             MeshDecoderDebug::MeshtasticPositionInfo pos;
             if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, srcChan, pos)) {
@@ -471,75 +547,35 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
     }
     if (!decoded) return;
 
-    // Loop check — drop anything already carrying a bridge marker.
-    // We use 3-char "[MT" and "[MC" prefixes so the check survives the
-    // "[MT <SHORT>]" attribution form. The "[rns" 4-char prefix already
-    // covers both legacy and fragmented RNS markers.
-    if (strncmp(body, "[MT",  3) == 0 ||
-        strncmp(body, "[MC",  3) == 0 ||
-        strncmp(body, "[rns", 4) == 0) {
-        Serial.printf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
+    // Loop/dup guard on the CLEAN body (replaces the old marker check). A hit
+    // means a mesh-flood replay, the same packet heard on a second radio, or an
+    // echo of one of our own emissions — drop it. See DedupCache.h.
+    if (DedupCache::seenAndRecord(
+            DedupCache::hash((const uint8_t *)body, strlen(body), srcId))) {
+        Serial.printf("[%8lu ms][%s bridge] loop-drop (dup): \"%s\"\n",
                       millis(), srcTag, body);
         return;
     }
 
-    char srcMarker[32];   // fits "[MT !12345678 ABCDEFGH]" (23 chars) + room
-    buildTextSrcMarker(srcChan.protocol, buf, len, srcMarker, sizeof(srcMarker));
-    char marked[280];
-    snprintf(marked, sizeof(marked), "%s %s", srcMarker, body);
-
-    // Destination is Reticulum — log and drop. No RNS encoder yet.
-    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
-        Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
-                      millis(), srcTag, marked);
-        return;
-    }
-
-    uint8_t outPkt[256];
-    size_t  outLen  = 0;
-    bool    encoded = false;
-    const char *dstName = "?";
-    switch (dstChan.protocol) {
-        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
-            encoded = MeshEncoderDebug::encodeMeshtasticText(
-                          dstChan, BridgeConfig::mtNodeId(),
-                          marked, outPkt, sizeof(outPkt), outLen);
-            dstName = "MT";
-            break;
-        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
-            encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                          dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
-            dstName = "MC";
-            break;
-        default:
-            Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
-                          millis(), srcTag, dstChan.protocol);
-            return;
-    }
-
-    if (!encoded) {
-        Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
-                      millis(), srcTag, dstName);
-        return;
-    }
-
-    Serial.printf("[%8lu ms][%s->%s bridge] re-encoded %u B: \"%s\"\n",
-                  millis(), srcTag, dstName, (unsigned)outLen, marked);
-    int16_t txState = dstRadio->transmit(outPkt, outLen);
-    if (txState == RADIOLIB_ERR_NONE) {
-        Serial.printf("[%8lu ms][%s->%s bridge] TX OK\n",
-                      millis(), srcTag, dstName);
-    } else {
-        Serial.printf("[%8lu ms][%s->%s bridge] TX ERROR %d\n",
-                      millis(), srcTag, dstName, txState);
+    // Fan the CLEAN body out to every routed, enabled destination's queue.
+    for (int j = 0; j < NR; j++) {
+        if (j == srcIdx) continue;
+        if (!(mask & (uint8_t)(1u << j))) continue;
+        if (!g_radioEnabled[j] || !g_radio[j]) continue;
+        enqueueTextForDest(g_chan[j], j, srcTag, body);
     }
 }
 
 // ============================================================
-//  Generic per-radio FreeRTOS task. `pvParameters` carries the radio index.
-//  On RX, fans the packet out to every radio selected in this radio's
-//  routeMask (the configurable routing matrix). Meshtastic radios also emit
-//  periodic NodeInfo so MT clients reveal our bridged text.
+//  Generic per-radio FreeRTOS task — the RX-priority loop (ROUTING-REDESIGN).
+//  Each iteration, in priority order:
+//    (A) service an in-flight non-blocking TX (wait for done / safety timeout);
+//    (B) drain RX — read fast, re-arm RX, then decode + dedup + fan out (cheap);
+//    (C) enqueue periodic MT NodeInfo onto our own queue;
+//    (D) TX scheduler — pop ONE queued packet, CAD (listen-before-talk), and
+//        start a non-blocking send.
+//  Because the on-air wait happens between iterations (in (A)) rather than
+//  inside transmit(), a slow TX on this radio never blocks any radio's RX.
 // ============================================================
 void radioTask(void *pvParameters)
 {
@@ -552,9 +588,39 @@ void radioTask(void *pvParameters)
     uint32_t   nextNodeInfoMs = millis() + 10000;
 
     for (;;) {
-        // Periodic Meshtastic NodeInfo (MT radios only). Without it, MT
-        // clients tend to hide text from a node they've never seen NodeInfo
-        // for, so the bridge appears silent.
+        // --- (A) service an in-flight non-blocking TX --------------------
+        if (g_txBusy[i]) {
+            bool done     = self->txDone();
+            bool timedOut = (millis() - g_txStartMs[i]) > BRIDGE_TX_INFLIGHT_TIMEOUT_MS;
+            if (done || timedOut) {
+                self->finishTransmit();          // cleanup + return to RX
+                g_txBusy[i] = false;
+                if (timedOut && !done)
+                    Serial.printf("[%8lu ms][%s TX] done-timeout — recovered\n",
+                                  millis(), tag);
+            }
+            vTaskDelay(pdMS_TO_TICKS(BRIDGE_POLL_MS));
+            continue;   // radio is mid-TX (deaf) — nothing else to do
+        }
+
+        // --- (B) RX drain: read fast, re-arm RX, THEN decode + fan out ---
+        if (self->available()) {
+            size_t len  = sizeof(buf);
+            float  rssi = 0.0f, snr = 0.0f;
+            int16_t state = self->read(buf, len, &rssi, &snr);
+            if (state == RADIOLIB_ERR_NONE && len > 0) {
+                self->startReceive();            // back to listening BEFORE decode
+                Serial.printf("[%8lu ms][%s RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                              millis(), tag, (unsigned)len, rssi, snr);
+                MeshDecoderDebug::print(buf, len, g_chan[i], tag);
+                ingestAndFanout(i, buf, len);
+            } else if (state != RADIOLIB_ERR_NONE) {
+                Serial.printf("[%8lu ms][%s RX] ERROR %d\n", millis(), tag, state);
+                self->startReceive();
+            }
+        }
+
+        // --- (C) periodic MT NodeInfo -> our own queue (CAD-gated like any TX)
         if (isMT && (int32_t)(millis() - nextNodeInfoMs) >= 0) {
             uint8_t niPkt[256];
             size_t  niLen = 0;
@@ -562,49 +628,44 @@ void radioTask(void *pvParameters)
                     g_chan[i], BridgeConfig::mtNodeId(),
                     BridgeConfig::mtNodeIdStr(), BridgeConfig::mtLongName(),
                     BridgeConfig::mtShortName(), niPkt, sizeof(niPkt), niLen)) {
-                Serial.printf("[%8lu ms][%s NodeInfo TX] %u B id=%s name=\"%s\"\n",
-                              millis(), tag, (unsigned)niLen,
-                              BridgeConfig::mtNodeIdStr(), BridgeConfig::mtLongName());
-                int16_t txState = self->transmit(niPkt, niLen);
-                if (txState != RADIOLIB_ERR_NONE)
-                    Serial.printf("[%8lu ms][%s NodeInfo TX] ERROR %d\n",
-                                  millis(), tag, txState);
-                self->startReceive();
+                if (g_routeQ[i].push(niPkt, niLen))
+                    Serial.printf("[%8lu ms][%s NodeInfo] queued %u B id=%s\n",
+                                  millis(), tag, (unsigned)niLen,
+                                  BridgeConfig::mtNodeIdStr());
             } else {
-                Serial.printf("[%8lu ms][%s NodeInfo TX] encode failed\n",
-                              millis(), tag);
+                Serial.printf("[%8lu ms][%s NodeInfo] encode failed\n", millis(), tag);
             }
             nextNodeInfoMs = millis() + 300000;   // every 5 min
         }
 
-        if (self->available()) {
-            size_t len  = sizeof(buf);
-            float  rssi = 0.0f;
-            float  snr  = 0.0f;
-
-            int16_t state = self->read(buf, len, &rssi, &snr);
-
-            if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[%8lu ms][%s RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              millis(), tag, (unsigned)len, rssi, snr);
-
-                MeshDecoderDebug::print(buf, len, g_chan[i], tag);
-
-                // Fan out to every radio this one routes to (routing matrix).
-                const uint8_t mask = g_routeMask[i];
-                for (int j = 0; j < NR; j++) {
-                    if (j == i) continue;
-                    if (!(mask & (uint8_t)(1u << j))) continue;
-                    if (!g_radioEnabled[j] || !g_radio[j]) continue;
-                    bridgePacket(g_chan[i], g_chan[j], g_radio[j], tag, buf, len);
+        // --- (D) TX scheduler: CAD-gated non-blocking send of one queued pkt
+        if (!g_txPendingValid[i]) {
+            if (g_routeQ[i].pop(g_txPending[i])) g_txPendingValid[i] = true;
+        }
+        // Keep RX strictly first: skip TX while a packet is waiting to be read
+        // or we're still inside a CSMA backoff window.
+        if (g_txPendingValid[i] && !self->available() &&
+            (int32_t)(millis() - g_txBackoffUntil[i]) >= 0) {
+            int16_t cad = self->scanChannel();
+            if (cad == RADIOLIB_LORA_DETECTED) {
+                // Busy: random CSMA backoff, stay in RX, keep the pending job.
+                g_txBackoffUntil[i] = millis() +
+                    (uint32_t)random(BRIDGE_CAD_BACKOFF_MIN_MS,
+                                     BRIDGE_CAD_BACKOFF_MAX_MS + 1);
+                self->startReceive();
+            } else {
+                int16_t txs = self->startTransmit(g_txPending[i].data,
+                                                  g_txPending[i].len);
+                if (txs == RADIOLIB_ERR_NONE) {
+                    g_txBusy[i]         = true;
+                    g_txStartMs[i]      = millis();
+                    g_txPendingValid[i] = false;
+                } else {
+                    Serial.printf("[%8lu ms][%s TX] startTransmit failed %d — dropped\n",
+                                  millis(), tag, txs);
+                    g_txPendingValid[i] = false;
+                    self->startReceive();
                 }
-
-                // RadioLib exits RX mode on packet receipt; restore it.
-                self->startReceive();
-
-            } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][%s RX] ERROR %d\n", millis(), tag, state);
-                self->startReceive();
             }
         }
 
@@ -700,10 +761,22 @@ void setup()
                                 BridgeConfig::radioChannelKey(i), g_chan[i]);
     }
 
-    // Load persisted NodeDB before the radio tasks start so the very first
-    // bridged MT packet can already carry a [MT !<hexid> <SHORT>] attribution.
+    // NodeDB is still populated from received NodeInfo (kept for future use),
+    // but the cross-protocol attribution prefix it fed was removed with the
+    // text marker — bridged bodies are now clean (ROUTING-REDESIGN §3.1).
     NodeDB::begin();
     NodeDB::debugDump();
+
+    // RX-priority pipeline state: the content-hash loop/dup guard and one
+    // PSRAM-backed outbound queue per enabled (destination-capable) radio. Seed
+    // the RNG used for CSMA backoff from the hardware RNG so co-located bridges
+    // don't back off in lock-step.
+    DedupCache::begin();
+    randomSeed(esp_random());
+    for (int i = 0; i < NR; i++) {
+        if (g_radioEnabled[i])
+            g_routeQ[i].begin(BRIDGE_ROUTE_QUEUE_DEPTH, BRIDGE_ROUTE_MAX_AGE_MS, kTag[i]);
+    }
 
     // Start shared SPI bus with explicit XIAO ESP32S3 pin mapping
     spi.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
