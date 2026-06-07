@@ -68,6 +68,17 @@ Swept R2 RX frequency at the MeshCore BW62.5 config (R1 fixed 910.525, Heltec 91
 
 **Tuning R2 UP advances `0x10`→`0x50`; DOWN stays `0x10`.** ⇒ R2's RX center is **LOW by >30 kHz**, correction is **UP**. Frequency IS a cause (nudging changes behavior) ⇒ **NOT a pure BW mismatch**. But **no offset completed** (never `0x08`/RX_DONE), so either the offset is **>+30 kHz** OR a **BW co-factor** also blocks completion. Hypothesis 0.5#1 (frequency offset) is now **largely confirmed**; 0.5#2 (BW) still possible *in addition*. **DISCRIMINATE:** (a) flash the instrumented build (`getFrequencyError`), run the **Meshtastic BW250** config (R2 completes there) → read R2 `freqErr` magnitude; (b) continue the nudge **UP** at BW62.5 (910.570 / 910.585 / 910.600) → if R2 hits `0x08`/`[R2 decoded]`, it's pure frequency; if it never completes, it's (also) BW. Then fix: TCXO/XOSC config + explicit image/frequency recal on the LR1121.
 
+### 0.9 ⭐ PRIORITY 1 — START HERE NEXT SESSION
+Frequency offset is **confirmed** (§0.8); the open question is **pure-frequency vs frequency+BW**. Do BOTH P1 tests.
+
+**P1.1 — Continue the nudge UP (portal-only, no reflash).** MeshCore BW62.5 config; set ONLY R2 RX freq to **910.570**, then **910.575**, **910.585**. *Why these:* +30 kHz (910.555) reached HEADER_ERR (`0x50`) but didn't complete; BW62.5 needs residual offset < ~10–15 kHz to finish a packet, so the true offset is likely **~+45–50 kHz** → sweet spot ≈ 910.570–910.575.
+  - R2 hits **`0x08` / `[R2 decoded]`** at one → **PURE FREQUENCY OFFSET**; `winning_freq − 910.525` = the exact offset. Diagnosis done.
+  - Stays **`0x50`** however far up → a **BW co-factor** too → verify the on-chip BW actually == 62.5.
+
+**P1.2 — Measure the offset directly (instrumented build `c4445fa`/`53ec302`).** `pio run -t erase` then `-t upload`. Switch R2 to the **Meshtastic BW250** config (R2 completes packets there). Read the new **`freqErr=N Hz`** log line: R1 (SX1262) ≈ 0 vs R2 (LR1121) offset. Gives the magnitude **and** tells us whether BW250 carries the same offset (chip-wide mistune) or only BW62.5 fails (BW-specific).
+
+**Then the FIX (P2):** the offset is >+30 kHz (≈33–50 ppm) **low** — far beyond TCXO tolerance ⇒ a calibration/synthesis issue, likely tied to the recurring **`HF_XOSC_START_ERR` (0x0020)**. In `Core1121::begin()`, one variable at a time (re-measure `freqErr` after each): (1) review TCXO/XOSC config so the XOSC locks clean (clears `0x0020`); (2) force an explicit image/frequency recalibration for the operating band.
+
 ---
 
 ## Branches
