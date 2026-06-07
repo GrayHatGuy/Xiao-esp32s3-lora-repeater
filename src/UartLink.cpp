@@ -14,6 +14,10 @@ void UartLink::registerRxQueue(int localRadio, QueueHandle_t q) {
 void UartLink::begin(uint32_t baud, int rxPin, int txPin) {
     _txMutex = xSemaphoreCreateMutex();
     configASSERT(_txMutex != nullptr);
+    // Enlarge the RX ring so a burst of inbound frames survives even if the RX
+    // service task is briefly behind. The default (~256 B) is smaller than one
+    // MAX_FRAME (308 B), so a single oversized frame could otherwise be lost.
+    _serial.setRxBufferSize(4096);
     _serial.begin(baud, SERIAL_8N1, (int8_t)rxPin, (int8_t)txPin);
     // Service task on core 0 (the bridge pins its per-radio tasks to 0/1; the
     // link task is I/O-bound and light, so it shares core 0 happily).

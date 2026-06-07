@@ -218,6 +218,10 @@ static void feedByte(uint8_t b) {
 
 void setup() {
     // UART0 (GPIO3 RX / GPIO1 TX) is both the flashing port and the host link.
+    // Enlarge the RX ring: the host fire-and-forwards TX frames while we are
+    // blocked on-air in transmit(), so inbound frames must buffer until loop()
+    // resumes draining. The default (~256 B) is below one MAX_FRAME (308 B).
+    LinkSerial.setRxBufferSize(4096);
     LinkSerial.begin(LINK_BAUD, SERIAL_8N1, /*rx=*/3, /*tx=*/1);
 
     pinMode(R3_CS, OUTPUT); digitalWrite(R3_CS, HIGH);
