@@ -12,6 +12,51 @@
 
 ---
 
+## 0. BENCH INVESTIGATION — Core1121 RX deaf at narrow BW (READ FIRST)
+
+**Session: 2026-06-07. Status: OPEN — root cause not yet confirmed; instrumentation added, two tests queued.**
+
+### 0.1 Setup
+- **R1** = Wio-SX1262 (B2B header) — healthy reference. **R2** = WaveShare **Core1121** (LR1121), hand-wired to the XIAO edge pins (per [`CORE1121.md`](CORE1121.md) §5).
+- **Core1121 identity:** chip EUI **`00:16:C0:01:F0:61:63:6F`**, base FW **1.1** (Seeed Wio modules were FW 1.3). `getErrors()=0x0020` (**HF_XOSC_START_ERR**) on *every* boot — assumed benign POR latch (as on Seeed), but see hypotheses.
+- **External sources:** **Heltec V2** (SX1262, MeshCore, node `9506C57C`) and **T3S3** (LR1121, Meshtastic, node `…80`), plus ambient public-mesh traffic.
+
+### 0.2 Wiring incidents (both resolved; chip NOT damaged)
+1. **Missing 3V3** to the Core1121 → `R2 BUSY stuck HIGH → module absent/unpowered`, `begin()` aborts, all R2 ops `-705`. Fixed by wiring 3V3.
+2. **Suspected GND/VCC swap (reverse polarity)** earlier. Chip **survived**: boots, reads EUI, **TX works (`tx=0`)**, detects preambles, decoded a −109 dBm packet (see 0.3). Missing-wire = unpowered (not damaged); brief current-limited reverse polarity off the XIAO LDO evidently did no harm.
+
+### 0.3 Findings
+- **R2 hardware is healthy.** Boots clean (BUSY releases ~142 ms), installs the PE4259 RF-switch table, reads EUI, **TX returns `tx=0`** (MeshCore→Meshtastic bridge direction works, `TX OK`).
+- **R2 RX WORKS at the Meshtastic config** (906.875 / **BW250** / SF11 / sync **0x2B**): decoded a real POSITION packet at **−109 dBm / SNR −18.5 dB** (≈ SF11 demod floor) + one CRC-fail (`state=-7`). Low completion rate, but it *completes* even weak packets. → **NOT the Seeed deficit** (Seeed dropped a −42 dBm point-blank packet at SF11/BW250).
+- **R2 is DEAF at the MeshCore config** (910.525 / **BW62.5** / SF7 / sync **0x12**): **zero completions** over hundreds of seconds, even for **21-byte packets at −56 dBm** (≈67 dB above the SF7/BW62.5 sensitivity floor). `irq` latches **0x10** (preamble) only — **never 0x50** (header-err) or **0x08** (RX-done); `isr` stays 0. R1 (SX1262) on the **identical** config decodes ~10 strong packets (−56…−83 dBm) fine.
+
+### 0.4 Failure-mode characterization
+- **Hard / deterministic**, not marginal — even the shortest + strongest packets fail. **Length-independent** (a "short telemetry/position packet survives" theory was tested and **refuted**: 21-byte packets fail too).
+- **Strong-signal failure (−56 dBm) ⇒ NOT sensitivity / SNR.** Systematic.
+- **Clean preamble-only (`0x10`), no header errors** ⇒ never gets past the sync/header stage.
+- **Config-dependent:** fine at BW250, hard-fails at BW62.5.
+
+### 0.5 Hypotheses (ranked)
+1. **LEADING — LR1121 RX *frequency offset*, fatal at narrow BW.** A carrier offset of ~20–30 kHz sits *within* LoRa tolerance at BW250 (≈±37 kHz) but is ~48% over at BW62.5 (4× tighter) → hard, length-independent, strong-signal-immune fail; clean-preamble-only. Possibly tied to `HF_XOSC_START_ERR` / an image/frequency-calibration miss at 910.525. **Driver-fixable** if confirmed (explicit `calibrateImageRejection()` for the band, TCXO/XOSC config, frequency recal).
+2. **BW mismatch (owner's hypothesis):** the BW *programmed* into the LR1121 ≠ the BW the chip *actually uses* (so R2's RX filter doesn't match the Heltec's BW62.5). Fails identically. **Must verify** the on-chip BW == programmed BW62.5 (read-back / spectral scan / freqErr-scaling cross-check). NOTE: the nudge test (0.6 #2) **discriminates** — shifting R2's frequency recovers RX ⇒ frequency offset; no recovery ⇒ suspect BW.
+3. **Sync word 0x12 — DOWNWEIGHTED.** Source-checked: `LR11x0::setLoRaSyncWord(0x12)` sends the raw byte to the chip, which expands it SX126x-compatibly (`SX126x_config.cpp`: `0x12→0x1424`; prior session proved the LR1121 matches for `0x2B→0x24B4`). So `0x12` *should* match R1. The hard-fail pattern is consistent with sync too, but the source analysis makes it unlikely.
+4. **REFUTED — sensitivity / marginal-demod / packet length.** Killed by the 21-byte −56 dBm hard fail.
+5. **REFUTED — reverse-polarity / wiring damage.** R2 boots, TX, reads EUI, decoded −109 dBm — a damaged chip can't.
+
+### 0.6 Instrumentation added (this session) + NEXT STEPS
+- **ADDED (built, uncommitted):** `getFrequencyError()` logging in **both** `Core1121::read()` (under `LR1121_DEBUG`) and `WioSX1262::read()` — each read logs `freqErr=N Hz`. R1 is the ≈0 Hz reference; a large R2 offset on the same packets confirms LR1121 mistuning. Valid even on CRC-failed reads.
+1. **Measure the offset (instrumented build):** flash, run the **Meshtastic** config (906.875/BW250/SF11, where R2 *completes* packets), compare R1 `freqErr` (≈0) vs R2 `freqErr`. Tens-of-kHz on R2 = confirmed.
+2. **Nudge test (owner running now):** at the MeshCore BW62.5 config, change **only R2 RX frequency** (910.510 / 910.540 / 910.495 / 910.555). Decoding recovers ⇒ frequency offset (shift = the offset, and a workaround); no recovery ⇒ suspect BW mismatch (#2).
+3. **Verify on-chip BW** (owner's hypothesis): confirm the LR1121's actual RX BW == programmed BW62.5.
+4. **If frequency offset confirmed — fixes (one variable each):** explicit `calibrateImageRejection()` for the band; TCXO/XOSC config review (clear `HF_XOSC_START_ERR`); explicit frequency recal after XOSC stable.
+
+### 0.7 Config / bench state at session end
+- **`platformio.ini`:** R1 & R2 both MeshCore **910.525 / BW62.5 / SF7 / CR5 / sync 0x12** (A/B race), **`-DR2_RX_ONLY_TEST` ON** (R2 pure-listen), `-DRADIO2_CHIP=RADIO_CHIP_LR1121`, MC key `8b3387…` / `public`, MT `LongFast` / `AQ==`. **Build flags are first-boot defaults only** — erase NVS (`pio run -t erase`) to apply, else portal/NVS wins.
+- **Serial logs interleave/garble** (two radio tasks → USB-CDC, byte-level). A `Serial` mutex would fix it (offered, not yet added) — a good first task next session for clean captures.
+- **Bridge pipeline is functional** (MC→MT forwarded with `tx=0`); the only blocker is **R2 RX at narrow-BW MeshCore**.
+
+---
+
 ## Branches
 
 | Branch | What it holds |

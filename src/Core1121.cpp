@@ -313,10 +313,15 @@ int16_t Core1121::read(uint8_t *buf, size_t &len, float *rssi, float *snr)
     len = (state == RADIOLIB_ERR_NONE) ? toRead : 0;
 
 #ifdef LR1121_DEBUG
-    // Dump every read attempt so we can see why some ISR fires don't
-    // translate into an [R2 RX] line.
-    Serial.printf("[%s] read: pktLen=%u state=%d len=%u\n",
-                  _name, (unsigned)pktLen, (int)state, (unsigned)len);
+    // Dump every read attempt + the measured carrier frequency error (freqErr).
+    // DIAGNOSTIC (R2-deaf-at-BW62.5 investigation, see CLAUDE.md §0): a large
+    // freqErr on R2 (LR1121) vs ~0 on R1 (SX1262) for the same packets ==
+    // the LR1121 RX is mistuned at this band — tolerable at BW250, fatal at
+    // BW62.5 where the frequency tolerance is ~4x tighter. getFrequencyError()
+    // is valid after readData() even on a CRC-failed packet (state=-7).
+    float freqErr = _radio->getFrequencyError();
+    Serial.printf("[%s] read: pktLen=%u state=%d len=%u  freqErr=%.0f Hz\n",
+                  _name, (unsigned)pktLen, (int)state, (unsigned)len, freqErr);
 #endif
 
     if (state == RADIOLIB_ERR_NONE) {

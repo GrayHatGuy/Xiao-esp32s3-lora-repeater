@@ -109,6 +109,14 @@ int16_t WioSX1262::read(uint8_t *buf, size_t &len, float *rssi, float *snr)
         if (snr)  *snr  = _radio->getSNR();
     }
 
+    // Carrier frequency-error readout — the R1 (SX1262) reference for the
+    // R2 (LR1121) mistuning comparison. R1 should read ~0 Hz; a large R2
+    // freqErr on the same packets confirms an LR1121 RX frequency offset.
+    // (R2-deaf-at-BW62.5 investigation — see CLAUDE.md §0.)
+    Serial.printf("[%s] read: pktLen=%u state=%d len=%u  freqErr=%.0f Hz\n",
+                  _name, (unsigned)pktLen, (int)state, (unsigned)len,
+                  _radio->getFrequencyError());
+
     xSemaphoreGive(_mutex);
     return state;
 }
