@@ -1,5 +1,58 @@
 # Changelog
 
+## v10.1 — 2026-06-07 — RX-priority routing redesign — UNRELEASED (branch `T_LORA_QUAD_ROUTE`)
+
+Status: **both firmwares build green; on-air behaviour intentionally UNPROVEN**
+(implemented code-only per owner directive — no bench validation). Full design +
+as-built map in [`ROUTING-REDESIGN.md`](ROUTING-REDESIGN.md). Implements tracked
+task #1 (RX-priority route-queue + CAD + hash-dedup) and task #2 (full-mesh
+airtime throttle). Branch off `T_LORA_QUAD` @ `3b06f3c`; merge is a later owner
+decision.
+
+The bridge moves from "decode-and-blocking-transmit inline on RX" to an
+**RX-priority pipeline**: RX is read and re-armed immediately, decoded once, and
+the clean body is fanned out onto per-destination queues; a separate per-radio
+scheduler does listen-before-talk (CAD) and a **non-blocking** transmit. A slow
+TX can no longer clobber any radio's RX, which is the owner's stated priority.
+
+### What's new
+
+- **Non-blocking, CAD-gated TX everywhere.** New `LoraRadio` primitives
+  `scanChannel()/startTransmit()/txDone()/finishTransmit()` (blocking-fallback
+  defaults). `WioSX1262` (R1/R2) releases the shared SPI mutex for the on-air
+  time so the co-radio keeps receiving; the co-processor
+  (`coproc-tlora-dual/src/main.cpp`) moves to a per-radio TX queue +
+  `startTransmit()` + a TX-done IRQ, so `loop()` keeps draining the UART while
+  transmitting — the **keystone** that dissolves the UART-overflow class.
+- **Content-hash loop guard replaces the `[MT]/[MC]/[rns]` marker.** New
+  `DedupCache` (TTL-windowed FNV-1a of the decoded body + Meshtastic src). The
+  bridge records the hash of every packet received AND every packet emitted, so
+  echoes (incl. same-channel cross-band MT/MC twins) are dropped while far-side
+  bodies stay **clean** (no prepend). MeshCore is content-only (no stable
+  per-sender id) — an accepted collision tradeoff (see ROUTING-REDESIGN §8).
+- **Per-destination route queues** (`RouteQueue`): PSRAM-backed, age-bounded
+  (drop stale), drop-oldest on overflow.
+- **TX_DONE backpressure** (`UartLink::armTx/txDone`): the host never hands the
+  co-proc a frame faster than it can send; every `MSG_TX` is answered by exactly
+  one `MSG_TX_DONE` (rejects included) so the gate can't wedge.
+- **Full-mesh airtime throttle** (task #2): per-radio LoRa time-on-air estimate
+  + duty-cycle cap so fanning one message to 3 destinations can't hog a channel.
+- New `-D` tuning knobs documented in `platformio.ini` (dedup TTL/size, route
+  depth/max-age, CAD backoff, TX-done timeout, TX duty/min-gap).
+
+### Behaviour change
+
+- Cross-protocol **attribution prefix** (`[MT !id name]`) is **removed** with the
+  marker — bridged text is now clean. `NodeDB` is still populated from NodeInfo
+  but is currently **write-only** (kept as the basis for a future attribution
+  feature; can be removed if that never lands).
+
+### Not done (owner)
+
+On-air bring-up / bench validation of the new pipeline; merge to `T_LORA_QUAD`.
+The marker→hash-dedup swap, the non-blocking-co-proc-TX rework, CAD behaviour at
+2.4 GHz wideLora, and the throttle pacing are all unproven on hardware.
+
 ## v10.0 — 2026-06-04 — Phase 2: 4-Up triband repeater (T-Lora-Dual) — UNRELEASED (branch `T_LORA_QUAD`)
 
 Status: **both firmwares build clean; on-air bring-up pending hardware.** Specced

@@ -1,9 +1,12 @@
 # ROUTING-REDESIGN.md — RX-priority route-queue + CAD + hash-dedup
 
-**Status:** Design only — not implemented. Sequenced **after** the UART link and
-2.4 GHz wideLora BW are proven on hardware (don't stack a routing rewrite on an
-unverified bring-up). Tracked as task #1.
-**Author:** GrayHatGuy · **Branch:** `T_LORA_QUAD` · 2026-06-06
+**Status:** IMPLEMENTED on branch `T_LORA_QUAD_ROUTE` (off `T_LORA_QUAD` @ `3b06f3c`),
+**code-only** per owner directive 2026-06-07 — both firmwares build green; on-air
+behaviour is intentionally **UNPROVEN** (no bench validation). Covers task #1 (this
+doc) and task #2 (full-mesh airtime throttle, §6). The original sequencing note
+(§7, "implement after the link + 2.4 GHz are proven") was **waived** by the owner;
+merge to `T_LORA_QUAD` and hardware validation remain later owner decisions.
+**Author:** GrayHatGuy · **Branch:** `T_LORA_QUAD_ROUTE` · designed 2026-06-06, implemented 2026-06-07
 
 ---
 
@@ -99,11 +102,33 @@ construction*, and the `4af3663` buffer bump becomes moot.
   to arrival — fine for mesh text.
 
 ## 7. Sequencing & touch-points
-**Do not implement until** the link + 2.4 GHz wideLora are confirmed on hardware.
-Files: `src/main.cpp` (radioTask + pipeline), `src/UartLink.cpp` + `RemoteRadio`
-(TX_DONE backpressure), `coproc-tlora-dual/src/main.cpp` (non-blocking TX + CAD),
-`NodeDB.*` (sibling dedup cache), `LinkProtocol.h` (`TX_DONE` already defined).
+~~Do not implement until the link + 2.4 GHz wideLora are confirmed on hardware.~~
+**Waived (owner, 2026-06-07): implemented code-only, on-air unproven.**
 
-**Acceptance:** no RX drops under concurrent full-mesh; no UART overflow; clean
-far-side bodies (no marker); loops still prevented (incl. same-channel cross-band
-MT/MC twins).
+## 8. As-built map (T_LORA_QUAD_ROUTE)
+- **Keystone — non-blocking co-proc TX + CAD + TX-done IRQ:**
+  `coproc-tlora-dual/src/main.cpp` (per-radio TxJob ring; `scanChannel` CAD; DIO9
+  TxDone/RxDone disambiguated by `g_txInFlight`; every `MSG_TX` answered by one
+  `MSG_TX_DONE`).
+- **Non-blocking TX + CAD radio interface:** `src/LoraRadio.h`
+  (`scanChannel`/`startTransmit`/`txDone`/`finishTransmit`, blocking defaults);
+  real impls in `src/WioSX1262.cpp` (releases the SPI mutex for the on-air time)
+  and `src/RemoteRadio.cpp` (gated on the co-proc `MSG_TX_DONE`).
+- **TX_DONE backpressure:** `src/UartLink.*` (`armTx`/`txDone`/`txStatus`).
+- **Hash dedup (replaces the marker):** `src/DedupCache.*` — sibling of `NodeDB`
+  (NodeDB itself is now write-only). Recorded on RX and on every emission.
+- **Per-destination route queue:** `src/RouteQueue.*` (PSRAM-backed, age-bounded,
+  drop-oldest).
+- **Pipeline + TX scheduler + airtime throttle:** `src/main.cpp`
+  (`ingestAndFanout`, `enqueueTextForDest`, `enqueueReticulumForDest`,
+  `estimateAirtimeMs`, the RX-priority `radioTask`).
+- `LinkProtocol.h` `MSG_TX_DONE` was already defined and is now used.
+
+**Acceptance (to verify on hardware — NOT yet validated):** no RX drops under
+concurrent full-mesh; no UART overflow; clean far-side bodies (no marker); loops
+still prevented (incl. same-channel cross-band MT/MC twins). **Known accepted
+limitation:** MeshCore GRP_TXT has no stable per-sender id, so its dedup is
+content-only — two *different* MeshCore senders transmitting identical text
+within the TTL window will have the second copy dropped from the bridge (the
+message still reaches its own MeshCore mesh). A future improvement could fold the
+MeshCore sender-MAC prefix into the hash (its semantics need confirming first).
