@@ -768,9 +768,11 @@ static void handleSave() {
         return;
     }
 
-    // Same-protocol relay must use DIFFERENT channels. Check every routed pair
-    // (i -> j) of same-protocol MT/MC radios: an identical channel name+key
-    // would echo/loop. (Different channels of the same protocol is a valid relay.)
+    // Same-protocol self-bridge guard. Reject a routed pair (i -> j) of
+    // same-protocol MT/MC radios ONLY when they share channel name+key AND
+    // frequency — i.e. literally the same RF channel, so bridging it to itself.
+    // Same channel on a DIFFERENT frequency is a valid cross-band relay; the
+    // bridge's [MT]/[MC]/[rns] markers prevent loops there.
     for (int i = 0; i < BridgeConfig::NUM_RADIOS; i++) {
         uint8_t pi = BridgeConfig::radioProtocol(i);
         if (pi != BridgeConfig::PROTO_MT && pi != BridgeConfig::PROTO_MC) continue;
@@ -779,14 +781,17 @@ static void handleSave() {
             if (j == i) continue;
             if (!(mask & (uint8_t)(1u << j))) continue;
             if (BridgeConfig::radioProtocol(j) != pi) continue;
-            if (strcmp(BridgeConfig::radioChannelName(i),
+            bool sameFreq = fabsf(BridgeConfig::radioFrequency(i) -
+                                  BridgeConfig::radioFrequency(j)) < 0.001f;
+            if (sameFreq &&
+                strcmp(BridgeConfig::radioChannelName(i),
                        BridgeConfig::radioChannelName(j)) == 0 &&
                 strcmp(BridgeConfig::radioChannelKey(i),
                        BridgeConfig::radioChannelKey(j)) == 0) {
-                char msg[96];
+                char msg[112];
                 snprintf(msg, sizeof(msg),
-                         "Radio %d routes to Radio %d on the same channel "
-                         "\xe2\x80\x94 their channels must differ (name or key).",
+                         "Radio %d routes to Radio %d on the same channel AND "
+                         "frequency \xe2\x80\x94 that bridges a channel to itself.",
                          i + 1, j + 1);
                 fail(msg);
                 return;
