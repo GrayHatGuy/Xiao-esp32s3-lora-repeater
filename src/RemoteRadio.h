@@ -32,8 +32,21 @@ public:
     int16_t transmit(const uint8_t *buf, size_t len) override;
     void    startReceive() override;
 
+    // RX-priority CSMA extensions — see LoraRadio.h. CAD happens on the
+    // co-processor (the host can't sense a remote radio's channel), so
+    // scanChannel() always reports clear; the real gate is txDone(), which
+    // tracks the co-proc's MSG_TX_DONE for this radio.
+    int16_t scanChannel() override;
+    int16_t startTransmit(const uint8_t *buf, size_t len) override;
+    bool    txDone() override;
+    void    finishTransmit() override;
+
 private:
-    static constexpr int RX_QUEUE_DEPTH = 8;
+    static constexpr int      RX_QUEUE_DEPTH      = 8;
+    // Upper bound on how long the blocking transmit() fallback waits for the
+    // co-proc's MSG_TX_DONE before giving up (matches the co-proc safety
+    // timeout). The non-blocking pipeline uses its own scheduler timeout.
+    static constexpr uint32_t TX_DONE_TIMEOUT_MS  = 8000;
 
     UartLink     &_link;
     int           _localRadio;   // co-proc-local index: 0 = R3, 1 = R4

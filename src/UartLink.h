@@ -52,6 +52,15 @@ public:
     // whole frame was written.
     bool sendFrame(uint8_t type, uint8_t radio, const uint8_t *payload, size_t len);
 
+    // Per-remote-radio TX_DONE backpressure (ROUTING-REDESIGN §3.3). A
+    // RemoteRadio calls armTx() right before it sends an MSG_TX, then polls
+    // txDone() — which becomes true when the co-processor reports MSG_TX_DONE
+    // for that radio — before handing over the next frame. txStatus() carries
+    // the co-proc's RadioLib status from the last completed TX.
+    void    armTx(int localRadio);
+    bool    txDone(int localRadio) const;
+    int16_t txStatus(int localRadio) const;
+
     bool     isReady()    const { return _ready; }
     uint32_t lastPongMs() const { return _lastPongMs; }
 
@@ -67,6 +76,10 @@ private:
     QueueHandle_t     _rxQueues[MAX_REMOTE_RADIOS] = { nullptr, nullptr };
     volatile bool     _ready       = false;
     volatile uint32_t _lastPongMs  = 0;
+    // TX_DONE backpressure state, one slot per remote radio. Written by the RX
+    // service task (MSG_TX_DONE), read by RemoteRadio::txDone() on the radio task.
+    volatile bool     _txDone[MAX_REMOTE_RADIOS]   = { true, true };
+    volatile int16_t  _txStatus[MAX_REMOTE_RADIOS] = { 0, 0 };
 
     // Inbound framing state machine.
     enum class RxState : uint8_t { PRE0, PRE1, HDR, PAYLOAD };

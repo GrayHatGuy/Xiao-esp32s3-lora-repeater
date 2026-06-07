@@ -68,13 +68,47 @@ int16_t RemoteRadio::read(uint8_t *buf, size_t &len, float *rssi, float *snr)
 
 int16_t RemoteRadio::transmit(const uint8_t *buf, size_t len)
 {
-    // Fire-and-forget: the co-processor auto-returns its radio to RX after TX
-    // (mirrors WioSX1262::transmit). MSG_TX_DONE tracking can land later.
-    bool ok = _link.sendFrame(LinkProtocol::MSG_TX, (uint8_t)_localRadio, buf, len);
-    return ok ? RADIOLIB_ERR_NONE : RADIOLIB_ERR_UNKNOWN;
+    // Legacy blocking-style entry point: send the frame and wait (bounded) for
+    // the co-proc's MSG_TX_DONE so callers that still use transmit() keep their
+    // serialised semantics. The RX-priority pipeline uses the non-blocking trio.
+    if (startTransmit(buf, len) != RADIOLIB_ERR_NONE) return RADIOLIB_ERR_UNKNOWN;
+    uint32_t t0 = millis();
+    while (!txDone() && (millis() - t0) < TX_DONE_TIMEOUT_MS)
+        vTaskDelay(pdMS_TO_TICKS(2));
+    return txDone() ? _link.txStatus(_localRadio) : RADIOLIB_ERR_TX_TIMEOUT;
 }
 
 void RemoteRadio::startReceive()
 {
     _link.sendFrame(LinkProtocol::MSG_START_RX, (uint8_t)_localRadio, nullptr, 0);
+}
+
+// --- RX-priority CSMA path --------------------------------------------------
+
+int16_t RemoteRadio::scanChannel()
+{
+    // The host cannot sense a remote radio's RF channel; the co-processor runs
+    // its own CAD before each startTransmit(). Always report clear here so the
+    // scheduler proceeds to startTransmit(); the co-proc backs off if busy.
+    return RADIOLIB_CHANNEL_FREE;
+}
+
+int16_t RemoteRadio::startTransmit(const uint8_t *buf, size_t len)
+{
+    // Arm the backpressure gate BEFORE sending so a fast MSG_TX_DONE can't be
+    // missed, then hand the frame to the co-processor.
+    _link.armTx(_localRadio);
+    bool ok = _link.sendFrame(LinkProtocol::MSG_TX, (uint8_t)_localRadio, buf, len);
+    return ok ? RADIOLIB_ERR_NONE : RADIOLIB_ERR_UNKNOWN;
+}
+
+bool RemoteRadio::txDone()
+{
+    // True once the co-proc has reported it finished the on-air TX for us.
+    return _link.txDone(_localRadio);
+}
+
+void RemoteRadio::finishTransmit()
+{
+    // Nothing to do: the co-processor auto-returns its radio to RX after TX.
 }

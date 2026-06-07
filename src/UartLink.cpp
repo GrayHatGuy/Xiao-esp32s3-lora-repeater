@@ -11,6 +11,20 @@ void UartLink::registerRxQueue(int localRadio, QueueHandle_t q) {
     if (localRadio >= 0 && localRadio < MAX_REMOTE_RADIOS) _rxQueues[localRadio] = q;
 }
 
+void UartLink::armTx(int localRadio) {
+    if (localRadio >= 0 && localRadio < MAX_REMOTE_RADIOS) _txDone[localRadio] = false;
+}
+
+bool UartLink::txDone(int localRadio) const {
+    if (localRadio < 0 || localRadio >= MAX_REMOTE_RADIOS) return true;
+    return _txDone[localRadio];
+}
+
+int16_t UartLink::txStatus(int localRadio) const {
+    if (localRadio < 0 || localRadio >= MAX_REMOTE_RADIOS) return 0;
+    return _txStatus[localRadio];
+}
+
 void UartLink::begin(uint32_t baud, int rxPin, int txPin) {
     _txMutex = xSemaphoreCreateMutex();
     configASSERT(_txMutex != nullptr);
@@ -124,7 +138,13 @@ void UartLink::handleFrame(uint8_t type, uint8_t radio,
             _lastPongMs = millis();
             break;
         case MSG_TX_DONE:
-            // Fire-and-forget TX in stage B; status tracking can land later.
+            // Co-proc finished an on-air TX for this radio: release the
+            // backpressure gate so the next queued frame may be sent.
+            if (radio < MAX_REMOTE_RADIOS) {
+                if (len >= sizeof(int16_t))
+                    memcpy((void *)&_txStatus[radio], payload, sizeof(int16_t));
+                _txDone[radio] = true;
+            }
             break;
         default:
             break;

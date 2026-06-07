@@ -136,3 +136,54 @@ void WioSX1262::startReceive()
     _radio->startReceive();
     xSemaphoreGive(_mutex);
 }
+
+// --- RX-priority CSMA path (non-blocking TX + CAD) --------------------------
+// The SX1262 DIO1 IRQ is shared between RxDone and TxDone; _txInFlight marks
+// which a flag belongs to. Unlike transmit(), startTransmit() does NOT hold the
+// shared SPI mutex for the on-air duration — only for the brief command phases
+// — so the OTHER local radio can keep reading its FIFO while this one is on the
+// air. That is what stops a TX from clobbering a co-radio's RX.
+
+int16_t WioSX1262::scanChannel()
+{
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    int16_t state = _radio->scanChannel();   // blocking CAD — a few symbols only
+    xSemaphoreGive(_mutex);
+    // CAD toggles DIO1 (CAD-done) on its own; clear the flag so it is not later
+    // read as an RxDone. scanChannel() leaves the radio in standby — the caller
+    // either startTransmit()s (fine from standby) or startReceive()s if busy.
+    _rxFlag = false;
+    return state;
+}
+
+int16_t WioSX1262::startTransmit(const uint8_t *buf, size_t len)
+{
+    _setAnt(true);
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _rxFlag = false;                         // arm: the next DIO1 means TxDone
+    int16_t state = _radio->startTransmit(buf, len);
+    xSemaphoreGive(_mutex);
+    if (state == RADIOLIB_ERR_NONE) {
+        _txInFlight = true;
+    } else {
+        _setAnt(false);                      // never left the ground
+    }
+    return state;
+}
+
+bool WioSX1262::txDone()
+{
+    // The radio is deaf while transmitting, so a DIO1 event here is TxDone.
+    return !_txInFlight || _rxFlag;
+}
+
+void WioSX1262::finishTransmit()
+{
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _radio->finishTransmit();
+    _rxFlag = false;
+    _radio->startReceive();                  // auto-return to RX
+    xSemaphoreGive(_mutex);
+    _setAnt(false);
+    _txInFlight = false;
+}

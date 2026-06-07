@@ -21,7 +21,14 @@ public:
     int16_t transmit(const uint8_t *buf, size_t len) override;
     void    startReceive() override;
 
-    // Written by the IRAM ISR trampoline; read by the polling task.
+    // RX-priority CSMA extensions — see LoraRadio.h.
+    int16_t scanChannel() override;
+    int16_t startTransmit(const uint8_t *buf, size_t len) override;
+    bool    txDone() override;
+    void    finishTransmit() override;
+
+    // Written by the IRAM ISR trampoline; read by the polling task. The same
+    // DIO1 line signals both RxDone and TxDone; _txInFlight tells them apart.
     volatile bool _rxFlag = false;
 
 private:
@@ -31,6 +38,7 @@ private:
     int               _antSw;
     const char       *_name;
     LoraConfig        _config;
+    bool              _txInFlight = false;   // non-blocking TX outstanding
 
     void _setAnt(bool tx);
 };
