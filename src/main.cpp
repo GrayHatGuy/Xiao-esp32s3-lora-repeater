@@ -168,6 +168,7 @@ RouteQueue g_routeQ[NR];
 static bool                g_txBusy[NR]         = { false, false, false, false };
 static uint32_t            g_txStartMs[NR]      = { 0, 0, 0, 0 };
 static uint32_t            g_txBackoffUntil[NR] = { 0, 0, 0, 0 };
+static uint32_t            g_nextTxAllowedMs[NR]= { 0, 0, 0, 0 };  // airtime throttle
 static bool                g_txPendingValid[NR] = { false, false, false, false };
 static RouteQueue::Entry   g_txPending[NR];
 
@@ -190,6 +191,21 @@ static RouteQueue::Entry   g_txPending[NR];
 #endif
 #ifndef BRIDGE_TX_INFLIGHT_TIMEOUT_MS
   #define BRIDGE_TX_INFLIGHT_TIMEOUT_MS 10000UL   // > co-proc 8 s TX_DONE timeout
+#endif
+
+// --- Full-mesh airtime throttle (ROUTING-REDESIGN task #2) ------------------
+// Fanning one received message out to up to 3 destinations can triple the
+// bridge's own airtime; without a brake a busy mesh would let the bridge hog
+// the channel. After each transmit we hold that radio off the air until its
+// own emissions stay under a duty-cycle ceiling: a packet of on-air time A
+// makes the next TX wait until A*100/DUTY after it started (so the radio is
+// busy A and idle A*(100-DUTY)/DUTY). BRIDGE_TX_MIN_GAP_MS is an absolute floor
+// on the post-TX gap. DUTY=100 + MIN_GAP=0 disables the throttle.
+#ifndef BRIDGE_TX_DUTY_PERCENT
+  #define BRIDGE_TX_DUTY_PERCENT  50
+#endif
+#ifndef BRIDGE_TX_MIN_GAP_MS
+  #define BRIDGE_TX_MIN_GAP_MS    0
 #endif
 
 // One UART link shared by the two remote radios (R3/R4). Only opened in
@@ -566,6 +582,36 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     }
 }
 
+// Estimate LoRa time-on-air in ms for a packet of `payloadLen` bytes at the
+// given modulation (Semtech AN1200.13 / SX1276 datasheet §4.1.1.7). Assumes
+// explicit header + CRC on. Low-data-rate optimisation follows RadioLib's rule
+// (enabled when the symbol time reaches 16 ms). Used by the airtime throttle.
+static uint32_t estimateAirtimeMs(size_t payloadLen, uint8_t sf, float bwKhz,
+                                  uint8_t crDenom, uint16_t preambleLen)
+{
+    if (sf < 5)  sf = 5;
+    if (sf > 12) sf = 12;
+    if (bwKhz <= 0.0f) bwKhz = 125.0f;
+    int cr = (int)crDenom - 4;            // denom 5..8 -> 1..4
+    if (cr < 1) cr = 1;
+    if (cr > 4) cr = 4;
+
+    float tSym = (float)(1UL << sf) / bwKhz;          // symbol time, ms
+    int   de   = (tSym >= 16.0f) ? 1 : 0;             // low-data-rate optimise
+
+    float num = 8.0f * (float)payloadLen - 4.0f * sf + 28.0f + 16.0f /*CRC*/;
+    float den = 4.0f * (float)(sf - 2 * de);
+    int   payloadSymb = 8;
+    if (num > 0.0f && den > 0.0f) {
+        float b = num / den;
+        int blocks = (int)b;
+        if ((float)blocks < b) blocks++;              // ceil
+        payloadSymb += blocks * (cr + 4);
+    }
+    float toa = ((float)preambleLen + 4.25f) * tSym + (float)payloadSymb * tSym;
+    return (uint32_t)(toa + 0.999f);                  // round up to whole ms
+}
+
 // ============================================================
 //  Generic per-radio FreeRTOS task — the RX-priority loop (ROUTING-REDESIGN).
 //  Each iteration, in priority order:
@@ -642,10 +688,12 @@ void radioTask(void *pvParameters)
         if (!g_txPendingValid[i]) {
             if (g_routeQ[i].pop(g_txPending[i])) g_txPendingValid[i] = true;
         }
-        // Keep RX strictly first: skip TX while a packet is waiting to be read
-        // or we're still inside a CSMA backoff window.
+        // Keep RX strictly first: skip TX while a packet is waiting to be read,
+        // while inside a CSMA backoff window, or while the airtime throttle is
+        // holding this radio off the air.
         if (g_txPendingValid[i] && !self->available() &&
-            (int32_t)(millis() - g_txBackoffUntil[i]) >= 0) {
+            (int32_t)(millis() - g_txBackoffUntil[i])  >= 0 &&
+            (int32_t)(millis() - g_nextTxAllowedMs[i]) >= 0) {
             int16_t cad = self->scanChannel();
             if (cad == RADIOLIB_LORA_DETECTED) {
                 // Busy: random CSMA backoff, stay in RX, keep the pending job.
@@ -654,12 +702,22 @@ void radioTask(void *pvParameters)
                                      BRIDGE_CAD_BACKOFF_MAX_MS + 1);
                 self->startReceive();
             } else {
-                int16_t txs = self->startTransmit(g_txPending[i].data,
-                                                  g_txPending[i].len);
+                size_t  txLen = g_txPending[i].len;
+                int16_t txs = self->startTransmit(g_txPending[i].data, txLen);
                 if (txs == RADIOLIB_ERR_NONE) {
                     g_txBusy[i]         = true;
                     g_txStartMs[i]      = millis();
                     g_txPendingValid[i] = false;
+                    // Airtime throttle: hold this radio off the air until its
+                    // own duty cycle is back under the ceiling.
+                    uint32_t air = estimateAirtimeMs(
+                        txLen, BridgeConfig::radioSf(i),
+                        BridgeConfig::radioBandwidth(i),
+                        BridgeConfig::radioCr(i), LORA_PREAMBLE_LEN);
+                    uint32_t gap = (air * 100u) / (uint32_t)BRIDGE_TX_DUTY_PERCENT;
+                    if (gap < air + BRIDGE_TX_MIN_GAP_MS)
+                        gap = air + BRIDGE_TX_MIN_GAP_MS;
+                    g_nextTxAllowedMs[i] = g_txStartMs[i] + gap;
                 } else {
                     Serial.printf("[%8lu ms][%s TX] startTransmit failed %d — dropped\n",
                                   millis(), tag, txs);
