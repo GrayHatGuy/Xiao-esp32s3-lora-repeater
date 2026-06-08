@@ -211,6 +211,27 @@ static void loadDefaults() {
                         s_cfg.r2ChannelName, sizeof(s_cfg.r2ChannelName),
                         s_cfg.r2ChannelKey,  sizeof(s_cfg.r2ChannelKey));
 
+    // Diagnostic configs that put BOTH radios on the same protocol (e.g. the
+    // R1-vs-R2 RX race, both MeshCore) seed identical channel name+key here,
+    // which the portal's save-time validator (CaptivePortal: two same-protocol
+    // radios must differ in name OR key) then rejects — blocking the very first
+    // save after each erase until R2 is hand-edited. Pre-disambiguate R2's
+    // channel NAME by one character while KEEPING its KEY (so the on-air channel
+    // / hash is unchanged and the radios still race the same traffic). Normal
+    // cross-protocol configs (R1 MeshCore + R2 Meshtastic) already differ and
+    // are left untouched.
+    if (s_cfg.r1ChannelName[0] != 0 &&
+        strcmp(s_cfg.r1ChannelName, s_cfg.r2ChannelName) == 0 &&
+        strcmp(s_cfg.r1ChannelKey,  s_cfg.r2ChannelKey)  == 0) {
+        size_t n = strlen(s_cfg.r2ChannelName);
+        if (n < RADIO_CHANNEL_NAME_MAX) {
+            s_cfg.r2ChannelName[n]     = '2';   // "public" -> "public2"
+            s_cfg.r2ChannelName[n + 1] = 0;
+        } else {
+            s_cfg.r2ChannelName[RADIO_CHANNEL_NAME_MAX - 1] = '2';
+        }
+    }
+
     s_cfg.radio[0].syncWord  = (uint8_t)LORA_RADIO1_SYNC_WORD;
     s_cfg.radio[0].protocol  = protocolFromSync((uint8_t)LORA_RADIO1_SYNC_WORD);
     s_cfg.radio[0].frequency = (float)(LORA_RADIO1_FREQUENCY);

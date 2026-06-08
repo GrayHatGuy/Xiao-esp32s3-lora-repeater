@@ -85,6 +85,38 @@ Documented for the project's own benefit. Once the bench fully validates 2.4 GHz
 
 ---
 
+## RadioLib — LR1121 sub-GHz LoRa RX detects preamble but never completes (regression candidate)
+
+**Status:** Discovered 2026-06-07 (Core1121 + Seeed Wio-LR1121 bench). **CONDITIONAL / PENDING CONFIRMATION** — do NOT file until the two controls below confirm it. Owner reviews/submits all outbound (drafts only).
+
+**Affected:** `jgromes/RadioLib` **7.7.0**, LR11x0/LR1121 driver, on ESP32-S3 (Arduino). Suspected regression vs **7.4.0** (or a longstanding LR1121-RX defect across versions).
+
+**Repo:** https://github.com/jgromes/RadioLib
+
+### Symptom
+An LR1121 in continuous LoRa RX **detects the preamble** (IRQ `0x10` PREAMBLE_DETECTED latches) but **never advances to header/RX_DONE** (`0x40/0x50/0x08` never set, `isr` stays 0) — even on strong packets (−52 dBm, ~67 dB above the floor). A co-located SX1262 (RadioLib `SX126x`) on the identical channel/antenna receives every packet. Reproduced on **two different LR1121 boards** (WaveShare Core1121 + Seeed Wio-LR1121).
+
+### What was ruled OUT (so the report is airtight)
+Every config knob was matched against Semtech's official `lr11xx_driver` demo (which RXes fine on the same Core1121) and bench-eliminated: **sync word** (both `0x12`, byte-identical), **RF-switch table** (identical DIO5/DIO6 map), **IQ/header/CRC/LDRO** (all match; the LR1121 even *completes* at BW250 on the same settings), **TCXO recalibration** (`setTCXO`+`calibrate(ALL)` warm — cleared HF_XOSC_START_ERR, RX still dead), **carrier-frequency offset** (~+50 kHz correction reaches preamble only), and the **RSSI/AGC gain-tune table** RadioLib never programs (added via `setRssiCalibration` — no change). So the remaining variable is RadioLib's LR11x0 RX path itself.
+
+### Confirming controls (run before filing — gives the bisect)
+1. **OEM Semtech `lr11xx_driver` on the same Core1121** (repo env `core1121_oem_rx`): if it `RX_DONE`s where RadioLib only reaches preamble → RadioLib's LR1121 path is the bug.
+2. **RadioLib 7.4.0** on a T-Lora-Dual (dual LR1121), OEM example untouched: works → **7.7.0 regression**, then `git bisect` RadioLib 7.4.0→7.7.0 to the offending commit; fails too → driver-level defect across versions.
+
+### Suggested action
+- If 7.4.0 works and 7.7.0 doesn't: **file an issue** with the bisect result + minimal repro (LR1121 continuous RX of a standard SX126x LoRa packet at SF7/BW62.5, sync 0x12), then a **fix PR** reverting/correcting the regressing change in `src/modules/LR11x0/`.
+- Note also (independent of this bug) that `LR11x0::getFrequencyError()` is a **stub returning 0** (`LR11x0.cpp:1203`, `// TODO implement this`) — a small separate PR candidate.
+
+### Reproduction steps (for the issue)
+1. LR1121 board on Arduino-ESP32; `LR1121::begin()` → continuous `startReceive()` at **910.525 MHz / BW 62.5 / SF7 / CR4-5 / sync 0x12, explicit header, CRC on**.
+2. Transmit a standard LoRa packet (SX1262 / any compliant stack) on the same params from a few metres away.
+3. Poll `getIrqFlags()`: **bug =** `0x10` latches, never `0x08`; a co-located SX1262 decodes the same packet.
+
+### Local impact
+Blocks Phase-1 of this bridge (R2 = LR1121 can't receive). Workaround under evaluation = drive R2 with Semtech's `lr11xx_driver` (env `core1121_oem_rx`) instead of RadioLib, or pin RadioLib 7.4.0 if the bisect confirms a regression.
+
+---
+
 ## Template for future entries
 
 ```

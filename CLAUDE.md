@@ -14,7 +14,7 @@
 
 ## 0. BENCH INVESTIGATION — Core1121 RX deaf at narrow BW (READ FIRST)
 
-**Session: 2026-06-07. Status: OPEN — root cause not yet confirmed; instrumentation added, two tests queued.**
+**Status: OPEN. ⭐ JUMP TO [§0.11](#011--session-2026-06-07-evening--the-chip-receives-radiolib-is-the-deficient-path-read-first-next-session) — the latest + most important finding: Semtech's `lr11xx_driver` COMPLETES packets on this Core1121 where RadioLib never does ⇒ RadioLib's LR1121 RX path is the leading root cause. §0.1–§0.10 below are the earlier (frequency-offset / TCXO / RSSI-cal) investigation, all now superseded by §0.11.**
 
 ### 0.1 Setup
 - **R1** = Wio-SX1262 (B2B header) — healthy reference. **R2** = WaveShare **Core1121** (LR1121), hand-wired to the XIAO edge pins (per [`CORE1121.md`](CORE1121.md) §5).
@@ -75,9 +75,87 @@ Frequency offset is **confirmed** (§0.8); the open question is **pure-frequency
   - R2 hits **`0x08` / `[R2 decoded]`** at one → **PURE FREQUENCY OFFSET**; `winning_freq − 910.525` = the exact offset. Diagnosis done.
   - Stays **`0x50`** however far up → a **BW co-factor** too → verify the on-chip BW actually == 62.5.
 
-**P1.2 — Measure the offset directly (instrumented build `c4445fa`/`53ec302`).** `pio run -t erase` then `-t upload`. Switch R2 to the **Meshtastic BW250** config (R2 completes packets there). Read the new **`freqErr=N Hz`** log line: R1 (SX1262) ≈ 0 vs R2 (LR1121) offset. Gives the magnitude **and** tells us whether BW250 carries the same offset (chip-wide mistune) or only BW62.5 fails (BW-specific).
+**P1.2 — ⚠️ SUPERSEDED by §0.10 — DO NOT RELY ON R2 `freqErr`.** RadioLib's `getFrequencyError()` is a stub returning 0 on the LR1121, so R2's `freqErr` is always 0 and conveys nothing (verified — see §0.10). The offset must come from the **nudge (P1.1)** + the new **post-`begin()` `getErrors()`** read, not freqErr. *(Original, now-invalid plan: flash, switch R2 to Meshtastic BW250, read `freqErr=N Hz` for R1 vs R2.)*
 
 **Then the FIX (P2):** the offset is >+30 kHz (≈33–50 ppm) **low** — far beyond TCXO tolerance ⇒ a calibration/synthesis issue, likely tied to the recurring **`HF_XOSC_START_ERR` (0x0020)**. In `Core1121::begin()`, one variable at a time (re-measure `freqErr` after each): (1) review TCXO/XOSC config so the XOSC locks clean (clears `0x0020`); (2) force an explicit image/frequency recalibration for the operating band.
+
+### 0.10 Grounding + fix (2026-06-07, session 2) — root cause grounded, **P1.2 CORRECTED**, recal experiment ready
+A 4-strand research pass (RadioLib source · LR1121 DS/UM · Core1121 schematic · adversarial cross-check) reconciled the evidence. **Two findings change the plan.**
+
+**⚠️ CORRECTION — P1.2 (read R2 `freqErr` at BW250) is INVALID.** RadioLib `LR11x0::getFrequencyError()` is a hardcoded **stub**: `// TODO implement this` → `return(0)` (`.pio/.../LR11x0/LR11x0.cpp:1203-1206`; declared `LR11x0.h:490`; **no** LR1120/LR1121 override; no freq-error register in the LR11x0 map — verified directly). So the R2 `freqErr=` line **always prints 0 Hz and means nothing**; only **R1**'s SX1262 `freqErr` is real. The misleading read-time R2 `freqErr` line is **removed** (replaced with a cited note in `Core1121::read()`). **Characterize the R2 offset with the BW62.5 RX-frequency nudge + the new post-`begin()` `getErrors()` read — never freqErr.**
+
+**Root-cause ranking (cited):**
+
+| # | Cause | Likelihood | Key evidence |
+|---|---|---|---|
+| 1 | PLL/freq calibration baked against an unstable/unconfirmed 32 MHz TCXO during `begin()` | **leading** | RadioLib `modSetup` runs `setTCXO(3.0 V, ~5 ms budget)` then `config()`→`calibrate(ALL)` with **no XOSC-stable check** (`LR11x0.cpp:1656,1712`). LR1121 **skips POR calibration when a TCXO is fitted**; host must "program the TCXO … and re-launch the calibrations before further usage" (**DS §1.2.4 p.8**); HF_XOSC_START_ERR remedy = "SetTcxoMode + redo calibrations" (**UM v2.2 §3.6.1 p.32**). RadioLib never recalibrates after settle. Carrier = PLL × 32 MHz ref (**UM §7.2.1 p.51**) ⇒ wrong-ref trim = N-ppm carrier error. Matches bench: >33 ppm LOW, correction UP. |
+| 2 | **Fixed** HW reference / board-TCXO offset (no driver change fixes it) | plausible | 33 ppm static+monotonic fits a fixed error; >±10 ppm crystal budget (**DS §3.5 T3-12 p.22**). **This is the null hypothesis the experiment is built to refute.** |
+| 3 | Sync word 0x12 | unlikely | nudge reached HEADER_ERR (demod past sync) — a directional *frequency* response, not sync |
+| 4 | Stale band image cal | **refuted** | image cal tunes mixer image-rejection, **not** center (UM p.17); RadioLib already runs `calibrateImageRejection(906.5,914.5)` in begin() |
+| 5 | BW mismatch (owner hyp. 0.5#2) | **refuted** | `setBandwidth(62.5,high=false)`→`LORA_BW_62_5` maps correctly; a wrong filter can't give a *directional* response to a pure carrier shift |
+
+**Hardware confirmed (schematic):** Y1 is a real **active TCXO** (4-pin GND/GND/OUT/VCC, "32MHz", single-ended into **XTA**, XTB floating), VCC from the LR1121's internal **VTCXO** regulator via ferrite L1 — no external LDO. So 3.0 V is a firmware register choice (RegTcxoTune=0x06), the topology is correct, and WaveShare's own demo runs this board ⇒ favors a driver/config cause over a defective part. **POR latch:** today's `getErrors()=0x0020` is read **only pre-`begin()`** (`Core1121.cpp:181`) = the POR latch (POR cal fails when a TCXO is fitted, UM p.17). The post-`setTCXO`+`calibrate` XOSC state has **never** been observed — the fix adds that read.
+
+**THE FIX — `CORE1121_TCXO_RECAL` (build flag, DEFAULT OFF).** In `Core1121::begin()`, **sub-GHz only**, after the begin() success guard and before RX is armed (inside the already-held mutex): re-issue `setTCXO(3.0 V, CORE1121_TCXO_DELAY_US)` with the TCXO now warm, clear HF_XOSC_START_ERR if set, `calibrate(CALIBRATE_ALL)`, BUSY-wait, `setFrequency()` (relocks the synth; no image re-trigger), then log `getErrors()` before/after as a `[recal] … errPre=0x…. errPost=0x….` line. Flag OFF ⇒ begin() is **byte-for-byte the baseline**. This is BOTH the candidate fix AND the discriminator. (`LR1121Access` was extended with `using LR11x0::calibrate/clearErrors`.)
+
+**Owner-run A/B (next bench session):**
+1. **Baseline (flag OFF):** `pio run -t erase -t upload`. MeshCore BW62.5 — confirm R2 still deaf; note pre-begin `getErrors`=0x0020.
+2. **Nudge (flag OFF, portal-only):** sweep ONLY R2 RX up `910.555 → .570 → .575 → .585 → .600`. First freq hitting `0x08`/[R2 decoded] = the **offset** (`winning − 910.525`). Ground truth for the A/B.
+3. **Fix ON:** rebuild with `-DCORE1121_TCXO_RECAL`, erase+upload. Read the `[recal]` line — **PASS-1 = `errPost=0x0000`** (XOSC error cleared, not re-triggered). Re-run the nudge — **PASS-2 = winning freq moves DOWN toward 910.525**, ideally R2 completes at nominal with no nudge.
+4. **Discriminator:** after a clean warm recal (`errPost=0x0000`), if the winning nudge freq is **UNCHANGED** ⇒ **fixed HW reference error** (rank #2), stop chasing the driver. If it **moves** ⇒ cold-XOSC-calibration confirmed.
+5. **Variable 2 (only if needed):** if `errPost` stays 0x0020 or the nudge doesn't move, sweep `-DCORE1121_TCXO_DELAY_US=100000` then `=1000000` (RadioLib's LR2021 successor defaults the TCXO timeout to **1 s**).
+
+**Also added this session — Serial mutex** (`src/SerialLog.h`/`.cpp`: `logf()` + `SerialLogGuard`): one recursive mutex serialises all USB-CDC output across the two per-core radio tasks + drivers, so `[recal]`/`[Rn RX]` capture lines stop byte-interleaving. *Residual:* RadioLib's own `RADIOLIB_DEBUG_BASIC` spew bypasses the lock (serialised against itself by the SPI mutex); drop `-DRADIOLIB_DEBUG_BASIC=1` for fully clean captures.
+
+**Open unknowns:** post-begin XOSC state until the bench runs PASS-1; true offset magnitude (no freqErr — nudge only); warm-vs-fixed not resolvable from source; the adequate TCXO startup delay is in no datasheet (swept empirically); BW co-factor not fully excluded until a nudge COMPLETES a packet (`0x08`).
+
+> **Firmware status:** all of the above is **built (baseline + flag-on both compile) but UNCOMMITTED and UNVERIFIED on hardware** — the bench was offline this session. Confirm live state before assuming firmware matches docs.
+
+### 0.11 ⭐⭐ SESSION 2026-06-07 (evening) — THE CHIP RECEIVES; RadioLib is the deficient path (READ FIRST NEXT SESSION)
+
+**Headline result:** Driving the SAME physically-wired Core1121 with **Semtech's official `lr11xx_driver`** (not RadioLib), the chip **COMPLETED a real packet**: `*** RX_DONE @ 910.545 MHz *** 149 B  RSSI -74 dBm  SNR -1 dB  CRC-OK`. Our RadioLib build **never completed a single packet** in any bench test. So the Core1121 hardware *can* receive, and **RadioLib's LR11x0 RX path is the leading suspect** — confirming the owner's hypothesis (both failing boards run Claude/RadioLib code; others run both LR1121 chips fine with OEM code).
+
+**Every RadioLib-side config knob was matched to the OEM working code and bench-eliminated:**
+| Knob | OEM (works) | Ours (RadioLib) | Bench result |
+|---|---|---|---|
+| LoRa sync word | `0x12` | `0x12` (raw byte, same) | identical — NOT it |
+| RF-switch DIO map | RX=DIO5, TX=DIO6 | same | identical — NOT it |
+| IQ / header / CRC / LDRO | std / explicit / on / auto | same | match (R2 completes at BW250 on these) |
+| TCXO recal (`CORE1121_TCXO_RECAL`) | — | warm `setTCXO`+`calibrate(ALL)` | **cleared `HF_XOSC_START_ERR` (errPost=0x0000) but RX still dead** ⇒ cold-cal theory FALSIFIED |
+| Freq offset (`CORE1121_FREQ_OFFSET_HZ=50000`) | — | command +50 kHz | preamble only, no completion |
+| RSSI/AGC cal (`CORE1121_RSSI_CAL`) | OEM 600 M–2 G table | **was missing → now programmed** | **no change** — ruled out |
+
+**Failure modes observed (cleanly enumerated):**
+- **FM1 — RadioLib, both boards (Seeed Wio-LR1121 + WaveShare Core1121):** detects preamble (`irq 0x10`), **never** advances to sync/header/RX_DONE. `isr` ~0. Strong (−56 dBm) and weak alike.
+- **FM2 — OEM Semtech driver, same Core1121:** reaches **sync/header-VALID** (`0x20`) and occasionally **RX_DONE** — further than RadioLib, but rare (1 completion in ~3.5 min).
+- **FM3 — STRONG-signal anomaly (key):** point-blank sends (−38 dBm) only trip preamble; the one packet that COMPLETED was **weak (−74 dBm, SNR −1 dB)**. Strong-fails-weak-completes ⇒ smells like **front-end overload / near-field from transmitting point-blank**, or the strong source sitting off-frequency.
+- **FM4 — boot-variable carrier offset:** RX center is LOW and the magnitude varies per boot (RadioLib nudge said ~+30–50 kHz; the OEM completion was at **+20 kHz / 910.545**; another OEM boot reached header at nominal 910.525). Tied to TCXO/calibration; present regardless of driver.
+- **FM5 — SPI unreliable at 8 MHz** over the hand-soldered jumpers (the OEM driver's default). At 8 MHz the chip never answered → BUSY stuck → 10 s HAL timeouts. **Fixed by dropping to 1 MHz** (the bridge already uses 1 MHz).
+- **FM6 — chip needs ~142 ms post-reset BUSY wait;** the OEM `lr11xx_hal_reset()` didn't wait. **Fixed** by adding the wait (mirrors `Core1121::begin()`).
+
+**Root-cause hypotheses (ranked):**
+1. **LEADING — RadioLib's LR11x0 RX path is deficient vs Semtech's `lr11xx_driver`.** OEM completes / reaches header; RadioLib never completes / only preamble, identical config. The *specific* RadioLib defect is not yet isolated (candidates: AGC/RSSI-cal application — note RadioLib's `setRssiCalibration` packs 18 nibbles vs Semtech's 17, our packing may be wrong; the standby-RC-vs-XOSC + calibrate ordering; an RX-config gap; or a **7.4.0→7.7.0 regression**).
+2. **PLAUSIBLE — real boot-variable carrier offset (~+20–50 kHz LOW)** from the Core1121 TCXO/PLL calibration (recurring `HF_XOSC_START_ERR=0x0020` at POR). Present under both drivers; the OEM tolerates it enough to complete occasionally. `LR11x0::getFrequencyError()` is a **RadioLib stub returning 0**, so freqErr can't quantify it — only the BW62.5 nudge/sweep can.
+3. **PLAUSIBLE — front-end overload / near-field from point-blank transmitting** (FM3). Cheap to test (move the source a few metres).
+4. **PLAUSIBLE — the hand-wired XIAO setup** (long jumpers, shared SPI, grounding) degrades RF/SPI; common to BOTH failing boards. The self-contained **T-Lora-Dual** (no hand-wiring) is the control that isolates this.
+5. **DOWNWEIGHTED — chip/board hardware defect** on this specific Core1121 (a completion at all argues against a dead part).
+
+**Prioritized open experiments / path forward (do in this order):**
+1. **T-Lora-Dual control (owner already built it):** OEM example on RadioLib **7.4.0**, self-contained dual-LR1121, untouched by Claude. **7.4.0 RX works ⇒ our usage or a 7.7.0 regression** (→ bisect, pin 7.4.0, file the PR — task #5). **Also fails ⇒** RadioLib LR1121 broken across versions or it's our wiring/RF. THE decisive control.
+2. **Distance test on `core1121_oem_rx`:** send MeshCore from a few metres (NOT point-blank) — does completion rate jump? Tests FM3/H3. Cheap, high-value (the bench may have been fighting near-field the whole time).
+3. **`core1121_oem_rx` reliability at +20 kHz:** the env auto-sweeps 910.490–910.585 (7 s/step, locks on RX_DONE) — let it run with steady traffic at realistic distance; see if completions become reliable near 910.545.
+4. **Decide the fix:** if the OEM/Semtech driver reliably completes → **port R2 (the LR1121) of the bridge to Semtech's `lr11xx_driver`** (keep RadioLib for R1/SX1262). That is the real fix the evidence points to. Otherwise pin RadioLib 7.4.0 if the bisect shows a regression.
+5. **Isolate the RadioLib defect** (for the upstream PR): with the OEM proven good, diff the on-air/register behaviour (sync expansion, AGC/RSSI cal bytes, calibrate order) RadioLib-vs-Semtech; the `setRssiCalibration` 17-vs-18 nibble mismatch is the first thing to check.
+6. **Minor PR candidate:** implement `LR11x0::getFrequencyError()` (currently a stub returning 0).
+
+**The OEM control test is in the repo** (separate env, zero impact on the bridge):
+- `lib/waveshare_lr1121/` — vendored Semtech `lr11xx_driver` (90 files). **Edited only for our board:** pins remapped to the R2 wiring (`wavesahre_lora_1121.h`), SPI 8→1 MHz, post-reset BUSY wait (`lr11xx_hal.cpp`). RX logic untouched.
+- `src/oem_rx/` — `main.cpp` (auto-freq-sweep RX harness, per-event correlated logging: `rssi_inst`/`held ms`/`buf_len`/freq) + `lr1121_config.{h,cpp}` (OEM init, MeshCore-matched).
+- `platformio.ini` → `[env:core1121_oem_rx]`. Flash: `pio run -e core1121_oem_rx -t erase -t upload -t monitor`. The bridge env (`xiao_esp32s3`) excludes `oem_rx/` via `build_src_filter`; both envs build clean.
+
+**Debug build flags added to `Core1121.cpp`/`platformio.ini` (all default-OFF; flag-off == baseline):** `CORE1121_TCXO_RECAL` (+`CORE1121_TCXO_DELAY_US`), `CORE1121_FREQ_OFFSET_HZ`, `CORE1121_RSSI_CAL`, `CORE1121_RX_SYNC_OVERRIDE`. All bench-tested and ruled out (above); left in place as instruments.
+
+**Upstream PR ledger:** `docs/UPSTREAM-PR-CANDIDATES.md` has the (conditional) RadioLib-LR1121 regression entry + the `getFrequencyError()` stub note. Session task #5 tracks "draft the PR if the regression is confirmed."
 
 ---
 

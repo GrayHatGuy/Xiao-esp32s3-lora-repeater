@@ -1,4 +1,5 @@
 #include "WioSX1262.h"
+#include "SerialLog.h"   // logf() — serialise USB-CDC log across the two cores
 
 // Static ISR trampolines — supports up to 2 simultaneous instances.
 // Each ISR just sets a flag; SPI reads happen later in the polling task.
@@ -62,12 +63,12 @@ bool WioSX1262::begin()
     );
 
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.printf("[%s] begin() failed: %d\n", _name, state);
+        logf("[%s] begin() failed: %d\n", _name, state);
         xSemaphoreGive(_mutex);
         return false;
     }
 
-    Serial.printf("[%s] ready — %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x%02X\n",
+    logf("[%s] ready — %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x%02X\n",
                   _name,
                   _config.frequency, _config.bandwidth,
                   _config.spreadFactor, _config.codingRate,
@@ -113,7 +114,7 @@ int16_t WioSX1262::read(uint8_t *buf, size_t &len, float *rssi, float *snr)
     // R2 (LR1121) mistuning comparison. R1 should read ~0 Hz; a large R2
     // freqErr on the same packets confirms an LR1121 RX frequency offset.
     // (R2-deaf-at-BW62.5 investigation — see CLAUDE.md §0.)
-    Serial.printf("[%s] read: pktLen=%u state=%d len=%u  freqErr=%.0f Hz\n",
+    logf("[%s] read: pktLen=%u state=%d len=%u  freqErr=%.0f Hz\n",
                   _name, (unsigned)pktLen, (int)state, (unsigned)len,
                   _radio->getFrequencyError());
 

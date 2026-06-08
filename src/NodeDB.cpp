@@ -1,6 +1,7 @@
 // NodeDB.cpp — see NodeDB.h for design notes.
 
 #include "NodeDB.h"
+#include "SerialLog.h"   // logf() — upsert() prints from the bridge task path
 
 #include <Preferences.h>
 #include <string.h>
@@ -43,14 +44,14 @@ static void saveToNvs() {
     }
     Preferences prefs;
     if (!prefs.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
-        Serial.printf("[NodeDB] saveToNvs: prefs.begin RW failed\n");
+        logf("[NodeDB] saveToNvs: prefs.begin RW failed\n");
         return;
     }
     size_t bytes = s_count * sizeof(PersistedEntry);
     size_t wrote = prefs.putBytes(NVS_KEY_BLOB, s_scratch, bytes);
     prefs.end();
     if (wrote != bytes) {
-        Serial.printf("[NodeDB] saveToNvs: wrote %u of %u B\n",
+        logf("[NodeDB] saveToNvs: wrote %u of %u B\n",
                       (unsigned)wrote, (unsigned)bytes);
     }
 }
@@ -63,13 +64,13 @@ void begin() {
     // first boot, which looks alarming but is harmless. We never call
     // putBytes from begin(), so flash isn't written here.
     if (!prefs.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
-        Serial.printf("[NodeDB] prefs.begin failed; starting empty\n");
+        logf("[NodeDB] prefs.begin failed; starting empty\n");
         return;
     }
     size_t blobSize = prefs.getBytesLength(NVS_KEY_BLOB);
     if (blobSize == 0 || (blobSize % sizeof(PersistedEntry)) != 0) {
         prefs.end();
-        Serial.printf("[NodeDB] NVS blob missing or malformed (%u B), starting empty\n",
+        logf("[NodeDB] NVS blob missing or malformed (%u B), starting empty\n",
                       (unsigned)blobSize);
         return;
     }
@@ -78,7 +79,7 @@ void begin() {
     size_t got = prefs.getBytes(NVS_KEY_BLOB, s_scratch, n * sizeof(PersistedEntry));
     prefs.end();
     if (got != n * sizeof(PersistedEntry)) {
-        Serial.printf("[NodeDB] NVS getBytes returned %u, expected %u\n",
+        logf("[NodeDB] NVS getBytes returned %u, expected %u\n",
                       (unsigned)got, (unsigned)(n * sizeof(PersistedEntry)));
         return;
     }
@@ -91,7 +92,7 @@ void begin() {
         s_table[s_count].longName[MAX_LONG_NAME] = 0;
         s_count++;
     }
-    Serial.printf("[NodeDB] loaded %u entries from NVS\n", (unsigned)s_count);
+    logf("[NodeDB] loaded %u entries from NVS\n", (unsigned)s_count);
 }
 
 bool upsert(uint32_t nodeId, const char *shortName, const char *longName) {
@@ -121,7 +122,7 @@ bool upsert(uint32_t nodeId, const char *shortName, const char *longName) {
         for (size_t i = 1; i < s_count; i++) {
             if (s_table[i].lastSeenMs < s_table[slot].lastSeenMs) slot = i;
         }
-        Serial.printf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
+        logf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
                       (unsigned long)s_table[slot].nodeId,
                       (unsigned long)nodeId);
     }
@@ -146,10 +147,10 @@ const char *lookupShortName(uint32_t nodeId) {
 }
 
 void debugDump() {
-    Serial.printf("[NodeDB] %u/%u entries:\n",
+    logf("[NodeDB] %u/%u entries:\n",
                   (unsigned)s_count, (unsigned)MAX_NODES);
     for (size_t i = 0; i < s_count; i++) {
-        Serial.printf("  !%08lX  short=\"%s\"  long=\"%s\"  last=%lu ms\n",
+        logf("  !%08lX  short=\"%s\"  long=\"%s\"  last=%lu ms\n",
                       (unsigned long)s_table[i].nodeId,
                       s_table[i].shortName, s_table[i].longName,
                       (unsigned long)s_table[i].lastSeenMs);

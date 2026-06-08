@@ -35,6 +35,7 @@
 #include "NodeDB.h"
 #include "RegionPreset.h"
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
+#include "SerialLog.h"         // logf() / serialLogBegin() — serialise USB-CDC log
 #include <esp_mac.h>
 
 // Per-radio LoRa RF is resolved at RUNTIME from BridgeConfig (schema v4) —
@@ -74,7 +75,7 @@ static void deriveMacIdentity()
     snprintf(idStr, sizeof(idStr), "!%08lx", (unsigned long)id);
     BridgeConfig::setMtNodeId(id);
     BridgeConfig::setMtNodeIdStr(idStr);
-    Serial.printf("[setup] MAC-derived identity: 0x%08lX (%s)\n",
+    logf("[setup] MAC-derived identity: 0x%08lX (%s)\n",
                   (unsigned long)id, idStr);
 }
 
@@ -177,7 +178,7 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
         if (!chName) chName = "";
         strncpy(out.name, chName, sizeof(out.name) - 1);
         out.name[sizeof(out.name) - 1] = 0;
-        Serial.printf("[radio] protocol 0x%02X — no channel key\n", syncWord);
+        logf("[radio] protocol 0x%02X — no channel key\n", syncWord);
     }
 }
 
@@ -254,7 +255,7 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
         delayMs    = BRIDGE_RNS_FRAG_DELAY_MC_MS;
         dstName    = "MC";
     } else {
-        Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst protocol 0x%02X\n",
+        logf("[%8lu ms][%s->RNS-src bridge] unknown dst protocol 0x%02X\n",
                       millis(), srcTag, dstChan.protocol);
         return;
     }
@@ -262,7 +263,7 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
     // Fragment count + bound check
     size_t totalFrags = (len + rawPerFrag - 1) / rawPerFrag;
     if (totalFrags > BRIDGE_RNS_MAX_FRAGS) {
-        Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B needs %u frags "
+        logf("[%8lu ms][%s->%s bridge] RNS %u B needs %u frags "
                       "(max %u) — drop\n",
                       millis(), srcTag, dstName, (unsigned)len,
                       (unsigned)totalFrags, (unsigned)BRIDGE_RNS_MAX_FRAGS);
@@ -273,7 +274,7 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
     // shared by all fragments of this frame.
     uint8_t seq = (uint8_t)(MeshDecoderDebug::crc16_ccitt(buf, len) & 0xFF);
 
-    Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B -> %u frag(s), seq=%02X\n",
+    logf("[%8lu ms][%s->%s bridge] RNS %u B -> %u frag(s), seq=%02X\n",
                   millis(), srcTag, dstName, (unsigned)len,
                   (unsigned)totalFrags, seq);
 
@@ -287,7 +288,7 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
         int b64rc = mbedtls_base64_encode(b64chunk, sizeof(b64chunk), &b64Len,
                                            buf + rawStart, rawLen);
         if (b64rc != 0) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u base64 fail %d\n",
+            logf("[%8lu ms][%s->%s bridge] frag %u/%u base64 fail %d\n",
                           millis(), srcTag, dstName,
                           (unsigned)(idx + 1), (unsigned)totalFrags, b64rc);
             return;
@@ -311,20 +312,20 @@ static void bridgeFromReticulum(const RadioChannel &dstChan, LoraRadio *dstRadio
                           dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
         }
         if (!encoded) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u encode failed\n",
+            logf("[%8lu ms][%s->%s bridge] frag %u/%u encode failed\n",
                           millis(), srcTag, dstName,
                           (unsigned)(idx + 1), (unsigned)totalFrags);
             return;
         }
 
-        Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u (%u B): \"%s\"\n",
+        logf("[%8lu ms][%s->%s bridge] frag %u/%u (%u B): \"%s\"\n",
                       millis(), srcTag, dstName,
                       (unsigned)(idx + 1), (unsigned)totalFrags,
                       (unsigned)outLen, marked);
 
         int16_t txState = dstRadio->transmit(outPkt, outLen);
         if (txState != RADIOLIB_ERR_NONE) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u TX ERROR %d\n",
+            logf("[%8lu ms][%s->%s bridge] frag %u/%u TX ERROR %d\n",
                           millis(), srcTag, dstName,
                           (unsigned)(idx + 1), (unsigned)totalFrags, txState);
             // Continue with remaining fragments so the receiver at least sees
@@ -401,12 +402,12 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
             // Skip our own NodeInfo bouncing back via a relay. Without this
             // guard every echo would trigger an NVS write of our own ID.
             if (niNodeId == BridgeConfig::mtNodeId()) {
-                Serial.printf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
+                logf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
                               millis(), srcTag, (unsigned long)niNodeId);
                 return;
             }
             NodeDB::upsert(niNodeId, niShort, niLong);
-            Serial.printf("[%8lu ms][%s NodeDB] upsert !%08lX short=\"%s\" long=\"%s\"\n",
+            logf("[%8lu ms][%s NodeDB] upsert !%08lX short=\"%s\" long=\"%s\"\n",
                           millis(), srcTag,
                           (unsigned long)niNodeId, niShort, niLong);
             return;     // not a text packet — don't bridge
@@ -485,7 +486,7 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
     if (strncmp(body, "[MT",  3) == 0 ||
         strncmp(body, "[MC",  3) == 0 ||
         strncmp(body, "[rns", 4) == 0) {
-        Serial.printf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
+        logf("[%8lu ms][%s bridge] loop-drop: \"%s\"\n",
                       millis(), srcTag, body);
         return;
     }
@@ -497,7 +498,7 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
 
     // Destination is Reticulum — log and drop. No RNS encoder yet.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
-        Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
+        logf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
                       millis(), srcTag, marked);
         return;
     }
@@ -519,25 +520,25 @@ static void bridgePacket(const RadioChannel &srcChan, const RadioChannel &dstCha
             dstName = "MC";
             break;
         default:
-            Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
+            logf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
                           millis(), srcTag, dstChan.protocol);
             return;
     }
 
     if (!encoded) {
-        Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
+        logf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
                       millis(), srcTag, dstName);
         return;
     }
 
-    Serial.printf("[%8lu ms][%s->%s bridge] re-encoded %u B: \"%s\"\n",
+    logf("[%8lu ms][%s->%s bridge] re-encoded %u B: \"%s\"\n",
                   millis(), srcTag, dstName, (unsigned)outLen, marked);
     int16_t txState = dstRadio->transmit(outPkt, outLen);
     if (txState == RADIOLIB_ERR_NONE) {
-        Serial.printf("[%8lu ms][%s->%s bridge] TX OK\n",
+        logf("[%8lu ms][%s->%s bridge] TX OK\n",
                       millis(), srcTag, dstName);
     } else {
-        Serial.printf("[%8lu ms][%s->%s bridge] TX ERROR %d\n",
+        logf("[%8lu ms][%s->%s bridge] TX ERROR %d\n",
                       millis(), srcTag, dstName, txState);
     }
 }
@@ -569,18 +570,18 @@ void radio1Task(void *pvParameters)
                     BridgeConfig::mtLongName(),
                     BridgeConfig::mtShortName(),
                     niPkt, sizeof(niPkt), niLen)) {
-                Serial.printf("[%8lu ms][R1 NodeInfo TX] %u B id=%s name=\"%s\"\n",
+                logf("[%8lu ms][R1 NodeInfo TX] %u B id=%s name=\"%s\"\n",
                               millis(), (unsigned)niLen,
                               BridgeConfig::mtNodeIdStr(),
                               BridgeConfig::mtLongName());
                 int16_t txState = radio1->transmit(niPkt, niLen);
                 if (txState != RADIOLIB_ERR_NONE) {
-                    Serial.printf("[%8lu ms][R1 NodeInfo TX] ERROR %d\n",
+                    logf("[%8lu ms][R1 NodeInfo TX] ERROR %d\n",
                                   millis(), txState);
                 }
                 radio1->startReceive();
             } else {
-                Serial.printf("[%8lu ms][R1 NodeInfo TX] encode failed\n",
+                logf("[%8lu ms][R1 NodeInfo TX] encode failed\n",
                               millis());
             }
             nextNodeInfoMs = millis() + 300000;   // every 5 min
@@ -594,7 +595,7 @@ void radio1Task(void *pvParameters)
             int16_t state = radio1->read(buf, len, &rssi, &snr);
 
             if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                logf("[%8lu ms][R1 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
 
                 MeshDecoderDebug::print(buf, len, g_chan[0], "R1");
@@ -609,7 +610,7 @@ void radio1Task(void *pvParameters)
                 radio1->startReceive();
 
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][R1 RX] ERROR %d\n", millis(), state);
+                logf("[%8lu ms][R1 RX] ERROR %d\n", millis(), state);
                 radio1->startReceive();
             }
         }
@@ -637,7 +638,7 @@ void radio2Task(void *pvParameters)
             bool     flag  = radio2_lr_diag->_rxFlag;
             uint32_t delta = cnt - lastIsrCount;
             uint32_t irqRg = radio2_lr_diag->debugIrqStatus();
-            Serial.printf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d irq=0x%08lX%s\n",
+            logf("[%8lu ms][R2 HB] isr=%lu (+%lu/5s) rxFlag=%d irq=0x%08lX%s\n",
                           millis(),
                           (unsigned long)cnt,
                           (unsigned long)delta,
@@ -656,7 +657,7 @@ void radio2Task(void *pvParameters)
             int16_t state = radio2->read(buf, len, &rssi, &snr);
 
             if (state == RADIOLIB_ERR_NONE && len > 0) {
-                Serial.printf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
+                logf("[%8lu ms][R2 RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
                               millis(), (unsigned)len, rssi, snr);
 
                 MeshDecoderDebug::print(buf, len, g_chan[1], "R2");
@@ -667,13 +668,13 @@ void radio2Task(void *pvParameters)
                 radio2->startReceive();
 
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][R2 RX] ERROR %d\n", millis(), state);
+                logf("[%8lu ms][R2 RX] ERROR %d\n", millis(), state);
                 radio2->startReceive();
             } else {
                 // state==ERR_NONE but len==0: ISR fired and read() succeeded
                 // but returned zero bytes — getPacketLength() was 0 at read
                 // time. Phase B-2 instrumentation to surface this case.
-                Serial.printf("[%8lu ms][R2 RX EMPTY] state=%d len=%u\n",
+                logf("[%8lu ms][R2 RX EMPTY] state=%d len=%u\n",
                               millis(), state, (unsigned)len);
                 radio2->startReceive();
             }
@@ -701,6 +702,9 @@ void setup()
 {
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
+    // Stand up the serial log mutex before anything else logs, and well before
+    // the two per-core radio tasks are spawned, so their output never garbles.
+    serialLogBegin();
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Crossover Bridge ===");
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
@@ -732,7 +736,7 @@ void setup()
         const uint32_t windowMs  = 5000;
         const uint32_t windowEnd = millis() + windowMs;
         bool trigger = false;
-        Serial.printf("[setup] press BOOT — or send any character over serial — "
+        logf("[setup] press BOOT — or send any character over serial — "
                       "within %lu s to enter the config portal...\n",
                       (unsigned long)(windowMs / 1000));
         while (millis() < windowEnd) {
@@ -797,7 +801,7 @@ void setup()
     chip0 = BridgeConfig::CHIP_SX1262;
     chip1 = BridgeConfig::radioChip(1);
 #endif
-    Serial.printf("[setup] Radio1 = %s, Radio2 = %s\n",
+    logf("[setup] Radio1 = %s, Radio2 = %s\n",
                   chip0 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262",
                   chip1 == BridgeConfig::CHIP_LR1121 ? "LR1121" : "SX1262");
 
@@ -830,7 +834,7 @@ void setup()
         digitalWrite(resetPin, HIGH);
         uint32_t t0 = millis();
         while (digitalRead(busyPin) && millis() - t0 < 50);
-        Serial.printf("[diag] %s  BUSY after reset = %d  (%lu ms)  %s\n",
+        logf("[diag] %s  BUSY after reset = %d  (%lu ms)  %s\n",
                       label, digitalRead(busyPin), millis() - t0,
                       digitalRead(busyPin) ? "STUCK-HIGH -> module absent/unpowered!" : "OK");
     };
@@ -850,7 +854,7 @@ void setup()
         uint8_t r1Status = SPI.transfer(0x00);  // read status byte
         digitalWrite(R1_NSS, HIGH);
         SPI.endTransaction();
-        Serial.printf("[diag] R1 raw SPI GetStatus = 0x%02X  "
+        logf("[diag] R1 raw SPI GetStatus = 0x%02X  "
                       "(0x00/0xFF = MISO open; 0x20-0x2E = chip alive)\n", r1Status);
     }
 
@@ -869,11 +873,11 @@ void setup()
         for (int n = 0; n < 6; n++) { ver[n] = SPI.transfer(0x00); }
         digitalWrite(R1_NSS, HIGH);
         SPI.endTransaction();
-        Serial.printf("[diag] R1 reg 0x0320 raw: "
+        logf("[diag] R1 reg 0x0320 raw: "
                       "%02X %02X %02X %02X %02X %02X  = '%.6s'\n",
                       ver[0], ver[1], ver[2], ver[3], ver[4], ver[5],
                       (char*)ver);
-        Serial.printf("[diag] RadioLib expects '%.6s' at 0x0320\n", "SX1261");
+        logf("[diag] RadioLib expects '%.6s' at 0x0320\n", "SX1261");
     }
 
     // Initialise — applies the runtime RF config. A PROTO_NONE radio is

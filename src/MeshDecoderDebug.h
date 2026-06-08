@@ -25,6 +25,7 @@
 #include <mbedtls/base64.h>
 
 #include "RadioChannel.h"        // per-radio { protocol, key, keyLen, channelHash, name }
+#include "SerialLog.h"           // SerialLogGuard — keep each decoder dump contiguous
 
 namespace MeshDecoderDebug {
 
@@ -916,6 +917,11 @@ inline bool reassembleReticulumFragment(const char * /*body*/,
 // --- Public entry point: dispatch by the radio's protocol -------------------
 inline void print(const uint8_t *buf, size_t len,
                    const RadioChannel &ch, const char *tag) {
+    // Hold the serial lock for the whole multi-line dump so the other core's
+    // task output can't interleave between this decoder's printf/write/println
+    // calls. The mutex is recursive, so the raw Serial.* calls below (and any
+    // logf()) are safe inside this region.
+    SerialLogGuard _logGuard;
     if (ch.protocol == SYNC_WORD_MESHCORE) {
         printMeshCore(buf, len, ch, tag);
     } else if (ch.protocol == SYNC_WORD_MESHTASTIC) {
