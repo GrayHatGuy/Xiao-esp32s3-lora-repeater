@@ -199,6 +199,89 @@ R1 (SX1262) decoded the source at −60…−71 dBm throughout (positive control
 
 ---
 
+### 0.12 ⛔⭐⭐ SESSION 2026-06-08 — HONEST RESET: §0.11's premise is unverified; the known-good OEM (Factory) control was never used (READ FIRST)
+
+**THE CORRECTION.** §0.11 concluded "RadioLib 7.7.0's LR11x0 RX path is deficient" from ONE comparison:
+the Semtech `lr11xx_driver` (env `core1121_oem_rx`) COMPLETES packets where "RadioLib never does." But
+the RadioLib side of that comparison is **Claude-written bridge code** — `src/Core1121.cpp` and its
+begin() order, PE4259 RF-switch install, TCXO/`calibrate()`, IRQ/DIO9 mapping, and the
+`CORE1121_FREQ_OFFSET_HZ` handling. It was **NEVER** compared against a **clean, minimal, correct
+RadioLib LR1121 RX**. So the only thing actually shown is "**proven vendor code receives; Claude's
+bridge code does not**" — which does NOT isolate RadioLib. The deficit is **at least as likely a bug in
+the bridge code.** This unverified conclusion was propagated into `docs/PATH-B-PLAN.md` and
+`docs/LR1121-7.7.0-PROPAGATION.md`, which the two sibling projects were told to follow. Full writeup:
+[`docs/HANDOFF-2026-06-08-RESET.md`](docs/HANDOFF-2026-06-08-RESET.md).
+
+**THE KNOWN-GOOD CONTROL WE NEVER USED.** The **LilyGO T-Lora-Dual Factory firmware** drives the LR1121
+and is proven on real hardware (`…\Projects\T-Lora-Dual-master\…\examples\Factory\Factory.ino`). Its RX
+bring-up — `radio.begin/setFrequency/setBandwidth/setSpreadingFactor/setCodingRate/setSyncWord/
+setTCXO(3.3)/startReceive` — is the oracle. **OPEN QUESTION (load-bearing): what radio library does the
+Factory actually link?** The API is RadioLib-style but RadioLib is NOT pinned in its `platformio.ini`
+(`lib_deps = ./lib`, only Adafruit_NeoPixel). If the Factory uses **RadioLib** and RXes on hardware,
+that alone proves RadioLib is fine and the bug is the bridge — collapsing the entire Path-B effort.
+
+**BENCH-DATA RELIABILITY CAVEAT (FM7).** The bridge's `logf()` (`src/SerialLog.h`) **races across the
+two FreeRTOS cores** — observed clipping/interleaving (`Mech=0x11` for `MeshCore GRP_TXT ch=0x11`,
+`o1-B2B]` for `[Radio1-B2B]`). Every §0–§0.11 bench log was read through this, so even the symptom data
+("reaches `0x50`, never `0x08`") is partially unreliable.
+
+**WHAT IS ACTUALLY PROVEN (high confidence):**
+- The Core1121 LR1121 (Base FW 1.1) **can receive ≥1 real packet** under the Semtech driver
+  (`core1121_oem_rx`: RX_DONE/CRC-OK, 149 B @ 910.545, −74 dBm). HW/antenna/wiring CAN receive. (Rare:
+  ~1 completion in 3.5 min; frequency-confounded.)
+- RadioLib (SX126x) + Semtech (lr11xx) **co-link cleanly** in one binary (Path-B M0 static link PASS).
+- RadioLib **7.4.0** builds + links clean on the bridge, no source change (the "7.7.0-only symbols"
+  worry was wrong). One run: R2 reached only `0x10` (preamble) at commanded 910.545 — boot-variable
+  offset, sources +0.6/+9.8 kHz off → NOT a clean result.
+- The LR11x0 driver was **heavily reworked 7.4.0→7.7.0** (begin-rework + new `LR_common` SPI-command
+  layer + RxBw/AGC changes), so 7.4.0 ≠ 7.7.0 RX code (Path C is a *real* test, not a no-op).
+
+**WHAT IS SUSPECT / UNVERIFIED:** essentially all of §0.11's "RadioLib RX deficit"; the fine-sweep
+"`0x50`-never-`0x08`"; "Path A ruled out / Path B is the fix / Path C"; and both downstream docs
+(`PATH-B-PLAN.md`, `LR1121-7.7.0-PROPAGATION.md`).
+
+**FAILURE MODES (consolidated):** FM1 RadioLib-bridge detects preamble, rarely advances [via suspect
+code]; FM2 OEM Semtech reaches header / occasional RX_DONE [chip RXes]; FM3 strong point-blank → preamble
+only, the one completion was weak −74 dBm → near-field/front-end overload suspected; FM4 boot-variable
+carrier offset ~+20–50 kHz low (`getFrequencyError()` is a RadioLib stub → unmeasurable); FM5 8 MHz SPI
+unreliable over jumpers → 1 MHz; FM6 ~142 ms post-reset BUSY wait; **FM7 (new) cross-core `logf` race →
+corrupted bench logs**; **FM8 (new) vendored Semtech HAL reads garble (consistent `hw=0x13 fw=0xC000`)
+when co-linked with RadioLib on a shared SPI bus** — its persistent-transaction + raw-`SPI.transfer`
+design doesn't share a bus (Path-B M0 runtime, unsolved after ~7 iterations).
+
+**ROOT-CAUSE HYPOTHESES (re-ranked):**
+1. **NEW LEADING — bug in Claude's bridge LR1121 setup, not RadioLib.** Never tested against correct
+   RadioLib usage; the Factory is the unused control. Cheapest to settle.
+2. **Real boot-variable carrier offset (FM4)** — driver-independent; would need AFC / per-board cal;
+   `getFrequencyError` stub blocks direct measurement.
+3. **RadioLib 7.7.0 LR11x0 RX genuinely deficient** (the old §0.11 lead — now downgraded to *unproven*).
+4. **Front-end overload / near-field (FM3).**
+5. **Symptom inflated by the cross-core log race (FM7).**
+
+**OPEN TESTS / EXPERIMENTS — PRIORITIZED:**
+- **P0 (THE DECIDER):** minimal, **single-radio, correct RadioLib LR1121 RX** on the Core1121, mirroring
+  the **Factory** bring-up exactly — no bridge, no `Core1121.cpp`, no port/smoke-test scaffolding.
+  Receive 910.525 / BW62.5 / SF7 / sync 0x12 from a few metres with the source TXing. **RXes ⇒ RadioLib
+  fine, bridge is the bug, Path B moot. Doesn't ⇒ deficit real, established cleanly.** *Prereq:* confirm
+  the Factory's actual radio library (read `Factory.ino` + its `lib/`).
+- **P1:** fix the **cross-core `logf` race** (`SerialLog.h`) so all future bench data is trustworthy.
+- **P2 (if P0 = bridge-bug):** diff `Core1121.cpp`'s LR1121 setup vs the Factory/minimal sketch; rewrite
+  the bridge's LR1121 path to match. (This likely also fixes the Seeed Wio path.)
+- **P3 (if P0 = RadioLib-deficient):** THEN §0.11 is valid — re-run the fine sweep (offset 15/20/25k, per
+  boot) with P1 done; decide Path A (trim + AFC) vs Path B (Semtech port).
+- **P4:** implement `LR11x0::getFrequencyError()` (or BW250 `freqErr` cross-check) to make FM4 measurable.
+- **P5:** only after P0/P2 — revisit `LR1121-7.7.0-PROPAGATION.md` before touching the siblings.
+
+**RECOMMENDATION:** do **P0 first**; everything is gated on it. Do NOT resume the Path-B smoke test
+(`src/colink_test/`, FM8) or propagate to siblings until P0 says whether RadioLib or the bridge is at
+fault. Keep next steps small and skeptical — this project over-scaled on an unproven premise.
+
+**Repo state at handoff:** `platformio.ini` `[env:xiao_esp32s3]` is on the Path-C test pins (RadioLib
+`@ 7.4.0`, `CORE1121_FREQ_OFFSET_HZ=20000`); baseline was `@ 7.7.0` / offset `0`. `core1121_oem_rx`
+(Semtech driver — the one thing that received) and the paused `xiao_esp32s3_colink_test` envs are intact.
+
+---
+
 ## Branches
 
 | Branch | What it holds |

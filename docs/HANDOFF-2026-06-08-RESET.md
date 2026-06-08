@@ -77,3 +77,53 @@ bridge, not RadioLib.
   the bridge build via `build_src_filter`).
 - The `core1121_oem_rx` env (vendored Semtech driver) is intact and is the one thing that
   demonstrably received.
+
+---
+
+## 🔖 Bootstrap prompt for the next session (copy-paste this)
+
+```
+Repo: C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater - CORE1121 · branch CORE1121 (pushed).
+READ FIRST, IN ORDER: (1) docs/HANDOFF-2026-06-08-RESET.md, (2) CLAUDE.md §0.12. These SUPERSEDE §0.11.
+Owner = GrayHatGuy (pseudonym; never write the real name to docs). Shell = PowerShell; build/flash via pio;
+HEREDOC commits via Bash. One variable per experiment; cite sources for RF claims; never force-push main.
+The owner is out of patience with scaffolding built on unproven premises — keep it SMALL and SKEPTICAL,
+research before bench-testing, and confirm the bench/source state before assuming anything.
+
+CORRECTED PREMISE: §0.11's "RadioLib 7.7.0 LR1121 RX is deficient → Path B (Semtech driver port)" is
+UNVERIFIED. It only ever compared the proven Semtech lr11xx_driver vs CLAUDE-WRITTEN bridge code
+(src/Core1121.cpp), never vs a clean, correct RadioLib LR1121 RX. So the deficit may be a BRIDGE-CODE
+bug, not RadioLib — which would make Path A/B/C and the propagation docs moot. Bench logs are also partly
+corrupt (FM7: the bridge logf races across the two cores and clips/interleaves output).
+
+PROVEN: the chip RXes >=1 real packet under the Semtech driver (env core1121_oem_rx); RadioLib + Semtech
+co-link in one binary; the bridge builds+links clean on RadioLib 7.4.0; the LR11x0 RX path differs
+substantially 7.4.0<->7.7.0 (begin-rework + new LR_common SPI layer).
+SUSPECT: all of §0.11; the fine-sweep "0x50-never-0x08"; the Path A/B/C conclusions; docs/PATH-B-PLAN.md;
+docs/LR1121-7.7.0-PROPAGATION.md (now ON HOLD).
+
+DO FIRST — P0 (THE DECIDER): build a minimal, single-radio, CORRECT RadioLib LR1121 RX on the Core1121,
+mirroring the LilyGO T-Lora-Dual Factory bring-up EXACTLY — no bridge, no Core1121.cpp, no port/smoke-test
+scaffolding. Receive MeshCore 910.525/BW62.5/SF7/sync0x12 from a few metres with the source TXing.
+  RXes  => RadioLib is fine, the bridge is the bug (Path B moot; fix the bridge to match the Factory).
+  Doesn't => the deficit is real, established cleanly.
+PREREQ: confirm what radio library the Factory actually links — its API is RadioLib-style but RadioLib is
+NOT pinned in its platformio.ini (lib_deps=./lib, only Adafruit_NeoPixel). Read
+…\Projects\T-Lora-Dual-master\T-Lora-Dual-master\T-Lora-Dual\examples\Factory\Factory.ino + its lib/.
+
+THEN (prioritized): P1 fix the cross-core logf race (src/SerialLog.h) so bench data is trustworthy;
+P2 (if bridge-bug) diff & rewrite Core1121.cpp's LR1121 setup to match the Factory (likely fixes Seeed
+Wio too); P3 (if RadioLib-deficient) re-run the fine sweep (offset 15/20/25k, per boot) with the log
+fixed, decide Path A (trim+AFC) vs B (Semtech port); P4 implement LR11x0::getFrequencyError() for FM4;
+P5 only then revisit docs/LR1121-7.7.0-PROPAGATION.md before touching the siblings.
+
+DEAD ENDS (do not repeat): the Path-B M0 smoke test src/colink_test/ — the vendored Semtech HAL reads
+garble (consistent hw=0x13/fw=0xC000) when co-linked with RadioLib on the shared SPI (FM8); ~7 bench
+iterations were burned on it. Don't resume without rewriting the HAL read framing RadioLib-style
+(two transactions, bus released between phases).
+
+REPO STATE: platformio.ini [env:xiao_esp32s3] is on Path-C test pins (RadioLib @ 7.4.0,
+CORE1121_FREQ_OFFSET_HZ=20000); baseline was 7.7.0 / offset 0. The core1121_oem_rx (Semtech, the one
+thing that received) and the paused xiao_esp32s3_colink_test envs are intact.
+```
+
