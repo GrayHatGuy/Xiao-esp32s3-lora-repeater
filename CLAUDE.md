@@ -14,6 +14,14 @@
 
 ## 0. BENCH INVESTIGATION — Core1121 RX deaf at narrow BW (READ FIRST)
 
+> ⛔ **CORRECTION (2026-06-08) — READ [`docs/HANDOFF-2026-06-08-RESET.md`](docs/HANDOFF-2026-06-08-RESET.md) FIRST.**
+> The §0.11 conclusion below ("RadioLib's LR1121 RX path is the deficient root cause") is **UNVERIFIED**:
+> it compared the proven Semtech driver against **Claude-written bridge code**, never against a clean,
+> correct RadioLib LR1121 RX. The "deficit" may be a bug in the bridge code, not RadioLib. The bench
+> logs are also partially unreliable (the bridge's `logf` races across cores and clips output). Do NOT
+> act on §0.11 / `PATH-B-PLAN.md` / `LR1121-7.7.0-PROPAGATION.md` until the minimal-correct-RadioLib-RX
+> test in the handoff is run. Everything below is retained for history, not as established fact.
+
 **Status: OPEN. ⭐ JUMP TO [§0.11](#011--session-2026-06-07-evening--the-chip-receives-radiolib-is-the-deficient-path-read-first-next-session) — the latest + most important finding: Semtech's `lr11xx_driver` COMPLETES packets on this Core1121 where RadioLib never does ⇒ RadioLib's LR1121 RX path is the leading root cause. §0.1–§0.10 below are the earlier (frequency-offset / TCXO / RSSI-cal) investigation, all now superseded by §0.11.**
 
 ### 0.1 Setup
