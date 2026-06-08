@@ -165,6 +165,19 @@ A 4-strand research pass (RadioLib source · LR1121 DS/UM · Core1121 schematic 
 - **Read the log:** completion (PASS) = `[R2 RX] N bytes RSSI… SNR…` (main.cpp:660) — that alone = RX_DONE; the follow-on `[R2 decoded] …` only prints for public text packets, so its absence ≠ failure. Heartbeat `[R2 HB] … irq=0x…` (5 s) auto-flags `0x08` (`<-- RX_DONE latched!`); read the rest by hand: `0x10`=preamble-only(fail), `0x40`/`0x50`=header reached(partial), `0x20`=sync/header-valid. `[Radio2-Edge] read: … state=-7` = CRC mismatch = demod ran **past the header** (near the sweet spot — better than `0x10`). Driver lines are `[Radio2-Edge]`, not `[R2]`. Optional clean capture: drop `-DRADIOLIB_DEBUG_BASIC=1` (platformio.ini:30) as a *separate* pass (its spew bypasses the serial mutex).
 - **Outcome:** RX_DONE at/near effective 910.545 ⇒ frequency + nudge-granularity, fix = trim/AFC, no port (Path A). Stuck ≤`0x50`/only `state=-7` at the OEM's exact 910.545 across boots ⇒ RadioLib RX-path deficit confirmed with frequency controlled ⇒ greenlight Path B (`docs/LR1121-7.7.0-PROPAGATION.md`).
 
+**✅ FINE-SWEEP RESULT (2026-06-07 ~22:00, offset=0, valid run — banners confirmed `offset +0 Hz`):**
+| Commanded R2 | R2 `irq` | Meaning |
+|---|---|---|
+| 910.535 | `0x10` | preamble only |
+| 910.540 | `0x10` | preamble only |
+| 910.542 | `0x10` | preamble only |
+| **910.545** | **`0x50`** | **HEADER_ERR — reached header, held ~50 s, NEVER `0x08`** |
+| 910.550 | `0x10` | preamble only |
+
+R1 (SX1262) decoded the source at −60…−71 dBm throughout (positive control solid). **910.545 is the sweet spot — the only freq past preamble, matching the OEM's winning frequency exactly** (confirms the ~20 kHz-low carrier). **But RadioLib reaches only HEADER_ERR there and never completes**, where the OEM Semtech driver COMPLETES (RX_DONE/CRC-OK) at the **same commanded 910.545 on the same chip**. ⇒ **Frequency confound CLOSED. Hypothesis #1 CONFIRMED: RadioLib's LR11x0 RX path is deficient** (fails at the preamble→header→done stage). **Path A (trim) is RULED OUT** — 910.545 IS the optimal trim and RadioLib still can't complete. ⇒ **THE FIX IS PATH B** (port R2's LR1121 RX to Semtech `lr11xx_driver`; see `docs/LR1121-7.7.0-PROPAGATION.md`).
+*Airtight-confirmation still recommended (cheap, RESET-only): 2–3 more boots at 910.545 + a finer 910.543/910.547 — confirm RadioLib never reaches valid header (`0x20`)/`0x08` near the sweet spot across boots (FM4). Strategic call already clear: a fix needing a ±2 kHz window that drifts per boot is not release-grade; the OEM's wider tolerance is the robust answer.*
+*Note: the §0.11 procedure's "Method 1" said `-t erase` per step, but erase forces the config portal on boot (main.cpp:732-734, `isConfigured()==false`); the working run instead erased ONCE then used `-t upload` only for later steps so cfg stayed 910.525. The prior `CORE1121_FREQ_OFFSET_HZ=50000` invalidated the FIRST sweep attempt (commanded 910.585–910.600, all preamble-only); flag is now 0 and the comment's false "+50 kHz completed" claim was corrected.*
+
 **The OEM control test is in the repo** (separate env, zero impact on the bridge):
 - `lib/waveshare_lr1121/` — vendored Semtech `lr11xx_driver` (90 files). **Edited only for our board:** pins remapped to the R2 wiring (`wavesahre_lora_1121.h`), SPI 8→1 MHz, post-reset BUSY wait (`lr11xx_hal.cpp`). RX logic untouched.
 - `src/oem_rx/` — `main.cpp` (auto-freq-sweep RX harness, per-event correlated logging: `rssi_inst`/`held ms`/`buf_len`/freq) + `lr1121_config.{h,cpp}` (OEM init, MeshCore-matched).
