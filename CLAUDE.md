@@ -166,6 +166,8 @@ A 4-strand research pass (RadioLib source · LR1121 DS/UM · Core1121 schematic 
 
 **Upstream PR ledger:** `docs/UPSTREAM-PR-CANDIDATES.md` has the (conditional) RadioLib-LR1121 regression entry + the `getFrequencyError()` stub note. Session task #5 tracks "draft the PR if the regression is confirmed."
 
+**Cross-project propagation:** `docs/LR1121-7.7.0-PROPAGATION.md` is the living guide for carrying the fix proven here to the two siblings (**Seeed Wio-LR1121** on `lr1121-phase1`; **T_LORA_DUAL** = the `coproc-tlora-dual` co-processor on branch `T_LORA_QUAD`). It has the affected-projects table, the three fix paths (A trim / B Semtech-driver port / C 7.4.0 regress) with per-project file-level recipes, a living findings ledger, and the shared acceptance test. Update it whenever a CORE1121 finding lands.
+
 ---
 
 ## Branches
@@ -207,6 +209,7 @@ flaw or an LR1121 *chip* issue — full reasoning and status in [`CORE1121.md`](
 4. [`docs/REFERENCES.md`](docs/REFERENCES.md) — datasheet / reference index.
 5. [`CHANGELOG.md`](CHANGELOG.md) — release history. [`V8-SPEC.md`](V8-SPEC.md) — Phase-0 portal-config spec.
 6. **Background:** the `lr1121-phase1` branch (full Wio-LR1121 record).
+7. **[`docs/LR1121-7.7.0-PROPAGATION.md`](docs/LR1121-7.7.0-PROPAGATION.md)** — ⭐ the cross-project conversion/regression guide: how the LR1121 RX fix proven here propagates to the Seeed Wio-LR1121 and T_LORA_DUAL siblings (living; per-project file-level recipes for fix paths A/B/C + a shared acceptance test).
 
 ## Quick recovery for a fresh session
 
