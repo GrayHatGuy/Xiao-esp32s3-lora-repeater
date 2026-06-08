@@ -858,6 +858,17 @@ void setup()
     chip1 = BridgeConfig::radioChip(1);
 #endif
 
+    // Park BOTH local chip-selects HIGH before ANY radio is constructed or
+    // probed — including a DISABLED slot. The WioSX1262 ctor deasserts its own
+    // CS, but it only runs for ENABLED slots; a disabled local radio would
+    // otherwise leave its CS floating, and that chip can then drive the shared
+    // MISO during the other radio's begin(), corrupting detection. Observed on
+    // the bench: setting Radio 2 = None made Radio 1 begin() fail with
+    // CHIP_NOT_FOUND (MISO read 0x2A then 0x00). Deasserting here is safe for
+    // both SX1262 and LR1121 local modules and idempotent with the ctor.
+    pinMode(R1_NSS, OUTPUT); digitalWrite(R1_NSS, HIGH);
+    pinMode(R2_NSS, OUTPUT); digitalWrite(R2_NSS, HIGH);
+
     // Construct LOCAL radios (R1/R2) on the XIAO SPI bus.
     if (g_radioEnabled[0])
         g_radio[0] = makeRadio(chip0, R1_NSS, R1_DIO1, R1_RESET, R1_BUSY,
