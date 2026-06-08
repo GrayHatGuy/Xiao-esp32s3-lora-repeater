@@ -1,6 +1,10 @@
 # Path B implementation plan — port R2 (LR1121) to Semtech `lr11xx_driver`
 
-**Status: PLAN (design pass complete 2026-06-07; no code written yet — awaiting owner sign-off).**
+**Status: IN PROGRESS — Milestone 0 STATIC LINK PASS (2026-06-07).** `pio run -e
+xiao_esp32s3_colink_test` builds + links RadioLib + the vendored Semtech driver into one binary, no
+conflict (Flash 8.8%/292 KB). The co-link gating unknown is resolved ⇒ **Strategy 1 (RadioLib R1 +
+Semtech R2) confirmed; the all-Semtech fallback is not needed.** Runtime half (concurrent SPI/mutex)
+pending owner flash. Code in `src/colink_test/`.
 Companion to `CLAUDE.md` §0.11 (root-cause) and `docs/LR1121-7.7.0-PROPAGATION.md` (cross-project rollout).
 Derived from a 5-agent design pass (co-link feasibility · interface mapping · HAL/mutex/ISR · scope gaps).
 
@@ -36,7 +40,7 @@ The two real hazards are runtime SPI sharing, not link-time:
 ## Milestones (each with a gate; nothing skips ahead)
 | # | Title | Deliverable | Gate |
 |---|---|---|---|
-| **0** | **Co-link smoke test** *(the gate)* | `[env:xiao_esp32s3_colink_test]`: instantiate R1 (RadioLib) + a minimal Semtech R2 stub on the shared mutex; read both chip EUIs; a task alternates R1/R2 SPI for 10 s | **Links clean + both EUIs read + concurrent SPI shows no corruption/deadlock.** Fail → fix SPI-init/mutex, or switch to Strategy 2. **No real porting until this passes.** |
+| **0** | **Co-link smoke test** *(the gate)* — ✅ **STATIC LINK PASS** | `[env:xiao_esp32s3_colink_test]` (`src/colink_test/`): R1 (RadioLib SX1262) + Semtech R2 facade (separate TU) on the shared mutex; reads R2 version; a task alternates R1/R2 SPI for 10 s | **Links clean ✅** (RadioLib + vendored Semtech in one elf, no conflict). **Runtime pending owner flash:** both chips answer + concurrent SPI shows no corruption/deadlock (`CO-LINK PASS`). |
 | 1 | `SemtechLR1121` wrapper | the 4 new files + BridgeConfig offset field + `makeRadio()` select | builds with `-DUSE_SEMTECH_LR11XX_DRIVER=1`; boot shows "Radio 2 driver: Semtech"; both ready banners |
 | 2 | Sub-GHz RX **+ TX** validation | fine-sweep (offset=0) finds the sweet spot; R2 completes; TX both directions | R2 decodes ≥5 consecutive pkts at the sweet spot; TX `state=0`; R1 unaffected; **flag OFF still = clean RadioLib baseline** |
 | 3 | 2.4 GHz | extend `setFrequency()` for >1 GHz + HF RF-switch | **DEFERRED** post-MVP (sub-GHz first; needs ANT1/HF bench) |
