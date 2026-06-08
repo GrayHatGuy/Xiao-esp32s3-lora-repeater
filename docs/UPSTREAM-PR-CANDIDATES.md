@@ -99,6 +99,8 @@ An LR1121 in continuous LoRa RX **detects the preamble** (IRQ `0x10` PREAMBLE_DE
 ### What was ruled OUT (so the report is airtight)
 Every config knob was matched against Semtech's official `lr11xx_driver` demo (which RXes fine on the same Core1121) and bench-eliminated: **sync word** (both `0x12`, byte-identical), **RF-switch table** (identical DIO5/DIO6 map), **IQ/header/CRC/LDRO** (all match; the LR1121 even *completes* at BW250 on the same settings), **TCXO recalibration** (`setTCXO`+`calibrate(ALL)` warm — cleared HF_XOSC_START_ERR, RX still dead), **carrier-frequency offset** (~+50 kHz correction reaches preamble only), and the **RSSI/AGC gain-tune table** RadioLib never programs (added via `setRssiCalibration` — no change). So the remaining variable is RadioLib's LR11x0 RX path itself.
 
+> **Note on `setRssiCalibration` (the "first thing to check" per CLAUDE.md §0.11 #5):** source-diffed and **eliminated as a cause of this deficit** — see the standalone entry below. Short version: RadioLib has **zero internal callers** of `setRssiCalibration` (the baseline deficit happens with the AGC table never programmed), and our explicit `CORE1121_RSSI_CAL` call already emits a byte-identical command to Semtech's, which is exactly why the bench saw "no change." The nibble mismatch is real but is a *separate, latent API bug*, not this RX defect.
+
 ### Confirming controls (run before filing — gives the bisect)
 1. **OEM Semtech `lr11xx_driver` on the same Core1121** (repo env `core1121_oem_rx`): if it `RX_DONE`s where RadioLib only reaches preamble → RadioLib's LR1121 path is the bug.
 2. **RadioLib 7.4.0** on a T-Lora-Dual (dual LR1121), OEM example untouched: works → **7.7.0 regression**, then `git bisect` RadioLib 7.4.0→7.7.0 to the offending commit; fails too → driver-level defect across versions.
@@ -114,6 +116,39 @@ Every config knob was matched against Semtech's official `lr11xx_driver` demo (w
 
 ### Local impact
 Blocks Phase-1 of this bridge (R2 = LR1121 can't receive). Workaround under evaluation = drive R2 with Semtech's `lr11xx_driver` (env `core1121_oem_rx`) instead of RadioLib, or pin RadioLib 7.4.0 if the bisect confirms a regression.
+
+---
+
+## RadioLib — `LR11x0::setRssiCalibration` reads 18 gain nibbles; the LR1121 has only 17 (OOB read + phantom reserved nibble)
+
+**Status:** Confirmed 2026-06-07 by **source diff against Semtech's vendored `lr11xx_driver`** (no bench needed). Standalone **minor** API-correctness bug. **NOT the cause of the LR1121 RX deficit** (entry above) — recorded separately so the two are never conflated. Owner reviews/submits all outbound.
+
+**Affected:** `jgromes/RadioLib` 7.7.0 — `LR11x0::setRssiCalibration(const int8_t* tune, int16_t gainOffset)`, `src/modules/LR11x0/LR11x0_commands.cpp:629`.
+
+**Repo:** https://github.com/jgromes/RadioLib
+
+### The bug
+The LR1121's RSSI-cal command carries a **17-field** gain-tune table. Semtech's driver models this exactly: the `lr11xx_radio_rssi_calibration_table_t.gain_tune` struct has **17** members `g4..g13hp7` (`lr11xx_radio_types.h:609-625`), and `lr11xx_radio_set_rssi_calibration` packs the 9th gain byte as just `(g13hp7 & 0x0F)` (`lr11xx_radio.c:951`) — i.e. **the high nibble of that byte is forced to 0 / reserved.**
+
+RadioLib instead reads **18** nibbles `tune[0..17]` and places `tune[17]` into that high nibble (`LR11x0_commands.cpp:639`: `... | (uint8_t)(tune[17] & 0x0F) << 4`). Bytes `buff[0..7]` and the low nibble of `buff[8]` match Semtech exactly; only that 18th nibble is the defect — RadioLib invents a gain field the silicon does not have.
+
+### Consequences
+1. **Out-of-bounds read.** A caller who passes the natural **17-element** array (one entry per documented gain `g4..g13hp7`) makes RadioLib read `tune[17]` — one past the end — and write that garbage into the reserved high nibble of the AGC table. Possible RSSI/AGC miscalibration; UB on the read.
+2. Even with a deliberately-sized 18-element array, the API exposes a phantom nibble that must always be 0; nothing in the signature or docs says so.
+
+### Suggested fix
+Read 17 nibbles and force the reserved high nibble to 0, mirroring Semtech (`lr11xx_radio.c:951`):
+```cpp
+// buff[8]: low nibble = tune[16] (g13hp7); high nibble reserved = 0
+(uint8_t)(tune[16] & 0x0F),
+```
+Drop the `tune[17]` term and document the array length as **17**. (`getRSSI()`-only users are unaffected; this only touches callers of `setRssiCalibration`.)
+
+### Suggested PR title
+"LR11x0: `setRssiCalibration` reads 18 gain nibbles; chip has 17 (OOB read, phantom reserved nibble)"
+
+### Local impact
+**None** — our `CORE1121_RSSI_CAL` path (`src/Core1121.cpp:348-352`) already passes an 18-element array with `tune[17]=0`, so our emitted command is byte-identical to Semtech's. Filed only so the upstream fix isn't lost and so the RX-deficit investigation isn't sidetracked chasing it.
 
 ---
 
