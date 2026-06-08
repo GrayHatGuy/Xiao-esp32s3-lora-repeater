@@ -39,6 +39,7 @@ static Module r1mod(R1_NSS, R1_DIO1, R1_RESET, R1_BUSY, SPI,
 static SX1262 r1(&r1mod);
 
 static volatile uint32_t s_r1ok = 0, s_r1err = 0, s_r2ok = 0, s_r2err = 0;
+static int16_t s_r1begin = RADIOLIB_ERR_UNKNOWN;   // captured at boot, reprinted in RESULT
 
 // R1 SPI liveness: standby() round-trips a command (RadioLib brackets its own SPI
 // transaction; we add only the shared mutex, exactly as WioSX1262 does).
@@ -64,6 +65,11 @@ static void colinkTask(void*)
     const bool pass = (s_r1ok > 0 && s_r1err == 0 && s_r2ok > 0 && s_r2err == 0);
     Serial.println();
     Serial.println("[colink] === RESULT: 10 s of alternating shared-SPI access ===");
+    // Reprint the boot diagnostics here — the USB-CDC monitor reattaches after
+    // setup() runs, so these are the only place they're reliably captured.
+    Serial.printf ("[colink] boot: R2 BUSY-after-reset=%d  R2 get_version st=%d hw=0x%02X type=0x%02X fw=0x%04X\n",
+                   r2_boot_busy(), r2_boot_status(), r2_boot_hw(), r2_boot_type(), r2_fw());
+    Serial.printf ("[colink] boot: R1 SX1262 begin=%d\n", (int)s_r1begin);
     Serial.printf ("[colink] R1 (RadioLib SX1262): ok=%lu err=%lu\n",
                    (unsigned long)s_r1ok, (unsigned long)s_r1err);
     Serial.printf ("[colink] R2 (Semtech LR1121):  ok=%lu err=%lu  (fw held 0x%04X)\n",
@@ -77,7 +83,9 @@ static void colinkTask(void*)
 void setup()
 {
     Serial.begin(115200);
-    delay(600);
+    // Wait (briefly) for the USB-CDC monitor to attach so the boot prints aren't lost.
+    for (uint32_t t = millis(); !Serial && (millis() - t) < 4000; ) delay(10);
+    delay(300);
     Serial.println();
     Serial.println("=== Path B M0 — co-link smoke test (RadioLib SX1262 + Semtech LR1121) ===");
 
@@ -102,6 +110,7 @@ void setup()
         if (st == RADIOLIB_ERR_NONE) r1.setDio2AsRfSwitch(true);   // Wio module RF switch on DIO2
         xSemaphoreGive(spiMutex);
     }
+    s_r1begin = st;
     Serial.printf("[colink] R1 SX1262 begin = %d (%s)\n",
                   (int)st, st == RADIOLIB_ERR_NONE ? "OK" : "non-zero -> RadioLib err code");
 

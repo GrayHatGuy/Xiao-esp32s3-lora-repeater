@@ -21,3 +21,10 @@ uint16_t r2_fw();
 // Re-read the version over SPI (mutex-guarded). True iff the chip answered AND
 // the firmware version matches expectFw (i.e. the bus wasn't corrupted by R1).
 bool r2_ping(uint16_t expectFw);
+
+// Boot diagnostics captured during r2_begin() (so they can be reprinted in the
+// RESULT block, which always survives the USB-CDC reattach window).
+int     r2_boot_busy();     // digitalRead(BUSY) right after reset: 0=ready, 1=stuck
+int     r2_boot_status();   // lr11xx_status_t from the boot get_version (0=OK)
+uint8_t r2_boot_hw();
+uint8_t r2_boot_type();
