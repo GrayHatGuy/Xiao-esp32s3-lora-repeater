@@ -132,3 +132,33 @@ content-only — two *different* MeshCore senders transmitting identical text
 within the TTL window will have the second copy dropped from the bridge (the
 message still reaches its own MeshCore mesh). A future improvement could fold the
 MeshCore sender-MAC prefix into the hash (its semantics need confirming first).
+
+## 9. ⚠️ Foundational risk — co-proc RX runs on RadioLib 7.7.0 LR11x0
+**The co-processor's R3/R4 are LR1121s driven by RadioLib 7.7.0**
+(`coproc-tlora-dual/platformio.ini`). A separate bench session (2026-06-07,
+WaveShare **Core1121**, `CORE1121` branch CLAUDE.md §0.11) established that
+**Semtech's official `lr11xx_driver` COMPLETES LoRa RX on this silicon (RX_DONE +
+CRC-OK, 149 B @ 910.545 MHz, −74 dBm) while the RadioLib build never completes a
+packet** — and that all RadioLib-side knobs (TCXO recal, freq offset, RSSI/AGC
+cal, sync, RF-switch) were bench-tested and ruled out. The same RX deficit
+appears on both the Seeed Wio-LR1121 and the WaveShare Core1121, i.e. it tracks
+**RadioLib's LR11x0 RX path**, not the board.
+
+**Implication for this redesign:** the host SX1262 side (R1/R2) and all the
+software logic here (dedup, route queue, scheduler, loop prevention) are
+unaffected — but the co-proc **R3/R4 RX may not function at all** on RadioLib
+7.7.0. If so, R3/R4 could end up effectively **TX-only** (the deficit is RX
+completion; TX likely still keys up), which makes the RX-priority benefit and the
+2.4 GHz CAD moot for those slots. **The redesign neither causes nor fixes this** —
+it rides above the `LoraRadio` interface, so it will work unchanged on top of a
+*working* LR11x0 RX. Do not mis-blame the routing code at bench time.
+
+**Decisive control (owner has the board):** run the LR1121 OEM example on the
+**T-Lora-Dual** — it pins **RadioLib 7.4.0**. 7.4.0 RX works ⇒ a 7.4.0→7.7.0
+**regression** (downgrade the co-proc, reconcile the unified-IRQ API, file the
+upstream PR — `CORE1121` task #5). 7.4.0 fails too ⇒ RadioLib-LR11x0-wide ⇒ the
+fix is to **port R3/R4 to Semtech `lr11xx_driver`**, keeping RadioLib for the
+SX1262s. That port is scoped in [`COPROC-LR1121-DRIVER-PORT.md`](COPROC-LR1121-DRIVER-PORT.md).
+The Phase-2 pivot premise ("the T-Lora-Dual Factory firmware has working RX+TX")
+must be re-validated against *our* 7.7.0 co-proc build, which is not the Factory
+sketch.
