@@ -231,6 +231,7 @@ flaw or an LR1121 *chip* issue — full reasoning and status in [`CORE1121.md`](
 5. [`CHANGELOG.md`](CHANGELOG.md) — release history. [`V8-SPEC.md`](V8-SPEC.md) — Phase-0 portal-config spec.
 6. **Background:** the `lr1121-phase1` branch (full Wio-LR1121 record).
 7. **[`docs/LR1121-7.7.0-PROPAGATION.md`](docs/LR1121-7.7.0-PROPAGATION.md)** — ⭐ the cross-project conversion/regression guide: how the LR1121 RX fix proven here propagates to the Seeed Wio-LR1121 and T_LORA_DUAL siblings (living; per-project file-level recipes for fix paths A/B/C + a shared acceptance test).
+8. **[`docs/PATH-B-PLAN.md`](docs/PATH-B-PLAN.md)** — ⭐ the Path B implementation plan (port R2/LR1121 to Semtech `lr11xx_driver`): architecture, co-link verdict, the all-Semtech fallback, milestones (M0 co-link gate → M4 siblings), file-by-file, risks, open owner decisions. Design pass done; awaiting sign-off before code.
 
 ## Quick recovery for a fresh session
 
