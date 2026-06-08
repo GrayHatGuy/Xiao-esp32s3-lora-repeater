@@ -198,9 +198,10 @@ change (owner directive: verify the design is capable before modifying code).
   **(action item — closes §9)**
 - **Found + fixed a real bug:** disabling a local SX1262 in the portal left its
   SPI chip-select floating and broke the *other* local radio's detection
-  (CHIP_NOT_FOUND, FATAL). Fixed in `2255d1d` (park both local CS HIGH up front).
-  **The flashed device is the earlier `e4122d3` build and does NOT have this
-  fix** — until it is reflashed, do not set a local radio (R1/R2) to None.
+  (CHIP_NOT_FOUND, FATAL). Fixed in `db98740` (park both local CS HIGH up front).
+  **The flashed firmware is the pre-fix build (code as of `24675fc`; HEAD was the
+  docs-only `e4122d3` at flash time) and does NOT have this fix** — until it is
+  reflashed, do not set a local radio (R1/R2) to None.
 - **The garbled serial-monitor lines are NOT UART/link collisions.** The
   inter-board LINK overflow class is addressed *by construction* (§5: TX gated on
   `TX_DONE`) and none was observed in bench operation — but it was **NOT
