@@ -190,8 +190,8 @@ needed" — that over-claimed from close-range data and is corrected here.)
 ### Bench session close-out — 2026-06-07 (open items + a found/fixed bug)
 Continued bench testing, then paused for verification before any further code
 change (owner directive: verify the design is capable before modifying code).
-- **R4 (LR1121) TX is proven** (R2 received a `src=bridge, ch=0x31` packet only
-  R4 emits). **R3 TX is NOT yet isolated** — R3 is co-channel with R1, so R3's
+- **R4 (LR1121) TX demonstrated — one clear instance** (R2 received a `src=bridge,
+  ch=0x31` packet, a channel only R4 emits; close range). **R3 TX is NOT isolated** — R3 is co-channel with R1, so R3's
   transmit is masked by R1; needs a config where R3 is the sole MeshCore TX
   (route a source → R3 only) or R3 on a distinct channel. **(action item)**
 - **Weak/distant LR1121 RX still untested** (all confirmed RX was strong).
@@ -202,7 +202,9 @@ change (owner directive: verify the design is capable before modifying code).
   **The flashed device is the earlier `e4122d3` build and does NOT have this
   fix** — until it is reflashed, do not set a local radio (R1/R2) to None.
 - **The garbled serial-monitor lines are NOT UART/link collisions.** The
-  inter-board LINK overflow is fixed (§5, bench-confirmed). The garble is the USB
+  inter-board LINK overflow class is addressed *by construction* (§5: TX gated on
+  `TX_DONE`) and none was observed in bench operation — but it was **NOT
+  stress-tested**, so "fixed" is a design claim, not a measured one. The garble is the USB
   *debug console*: concurrent `Serial.printf` from tasks on two cores interleaving
   (the mangled lines are R1's — a local radio that never uses the link). Fix =
   a console log mutex. **(action item — cosmetic, logging only.)**
