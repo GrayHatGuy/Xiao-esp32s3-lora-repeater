@@ -163,34 +163,29 @@ The Phase-2 pivot premise ("the T-Lora-Dual Factory firmware has working RX+TX")
 must be re-validated against *our* 7.7.0 co-proc build, which is not the Factory
 sketch.
 
-### Bench result — 2026-06-07 (the §9 risk did NOT materialise on the T-Lora-Dual)
-First on-air bring-up of this branch on real hardware (XIAO host + T-Lora-Dual
-co-proc, all radios sub-GHz: R1≈R3 MeshCore 910.525/BW62.5/SF7, R2≈R4 Meshtastic
-906.875/BW250/SF11):
-- **R3 and R4 (LR1121) RX COMPLETE** — `[R3 RX] 37 B @ −11 dBm` decoding
-  "here is meshtastic"; `[R4 RX] 67 B @ −26 dBm` decoding a bridged MT text. The
-  RadioLib-7.7.0 LR11x0 RX deficit seen on the Core1121/Wio **does not appear on
-  this T-Lora-Dual** with our Factory-HAL co-proc build.
-- **R4 (LR1121) TX confirmed** — R2 received a `src=bridge, ch=0x31` ("public2")
-  packet, a channel only the bridge's R4 emits → R4 actually transmitted. No
-  `MSG_TX` `done-timeout`s post-fix → the co-proc answers `MSG_TX_DONE`.
-- Full quad bridge functional: MC↔MT both directions, text + telemetry
-  (env/position) + NodeInfo (NodeDB populated), content-hash dedup dropping all
-  echoes (incl. co-channel twins), CLEAN far-side bodies. The host SX1262 RX-
-  priority pipeline is validated end-to-end.
-- **Root cause of the initial silence was a wiring error**, not the deficit: the
-  link pair was straight-through (co-proc TX→XIAO D6=host-TX) instead of crossed.
-  Swapping to co-proc TX→XIAO D7 (host RX) / co-proc RX→XIAO D6 (host TX) fixed it.
+### Bench result — 2026-06-07 (PARTIAL; §9 is NOT closed)
+First on-air bring-up of this branch (XIAO host + T-Lora-Dual co-proc, all radios
+sub-GHz: R1≈R3 MeshCore 910.525/BW62.5/SF7, R2≈R4 Meshtastic 906.875/BW250/SF11).
+Topology: R1/R2 = SX1262 on the XIAO; R3/R4 = LR1121 on the T-Lora-Dual over UART —
+separate boards, co-located antennas. Initial R3/R4 silence was a link-wiring error
+(pair straight-through instead of crossed), since fixed.
+- **Host SX1262 (R1/R2): RX + TX validated end-to-end** — MC↔MT both directions,
+  text + telemetry (env/position) + NodeInfo, content-hash dedup dropping echoes
+  (incl. co-channel twins), CLEAN far-side bodies.
+- **R4 (LR1121): RX + TX demonstrated over the air — at CLOSE RANGE only.** R4
+  received R2's over-the-air transmissions (−22…−49 dBm); R2 received R4's
+  over-the-air `ch=0x31`/"public2" packet (a channel only R4 emits).
+- **R3 (LR1121): RX demonstrated ONCE over the air** (heard R1 at −11 dBm, close
+  range). **R3 TX NOT isolated** — co-channel with R1, so its transmit can't be
+  attributed; not evidence R3 failed, just untested in isolation.
 
-**Conclusion:** the Phase-2 pivot to the T-Lora-Dual is vindicated; the
-Core1121/Wio RX deficit is board-specific, not RadioLib-7.7.0-wide. The Semtech
-`lr11xx_driver` port (`COPROC-LR1121-DRIVER-PORT.md`) is **not needed for the
-T-Lora-Dual** and reverts to a contingency.
-
-**Still open (before fully closing §9):** all confirmed receptions were STRONG
-(−11/−26 dBm) and largely of the bridge's own co-located emissions. The Core1121
-deficit was signal-dependent, so **weak/distant LR1121 RX on R3/R4 (direct
-external traffic) is not yet characterised** — that is the remaining test.
+**§9 is NOT closed.** EVERY LR1121 reception was strong/close-range; weak/distant
+RX — the actual Core1121 deficit question — was **never exercised**. So the
+RadioLib-7.7.0 LR11x0 RX-sensitivity deficit is **UNTESTED at distance, not
+"did not materialise."** The Semtech `lr11xx_driver` port
+(`COPROC-LR1121-DRIVER-PORT.md`) stays a **real contingency**. (An earlier draft of
+this block claimed "§9 did not materialise / Phase-2 pivot vindicated / port not
+needed" — that over-claimed from close-range data and is corrected here.)
 
 ### Bench session close-out — 2026-06-07 (open items + a found/fixed bug)
 Continued bench testing, then paused for verification before any further code
