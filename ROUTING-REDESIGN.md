@@ -191,3 +191,23 @@ T-Lora-Dual** and reverts to a contingency.
 (−11/−26 dBm) and largely of the bridge's own co-located emissions. The Core1121
 deficit was signal-dependent, so **weak/distant LR1121 RX on R3/R4 (direct
 external traffic) is not yet characterised** — that is the remaining test.
+
+### Bench session close-out — 2026-06-07 (open items + a found/fixed bug)
+Continued bench testing, then paused for verification before any further code
+change (owner directive: verify the design is capable before modifying code).
+- **R4 (LR1121) TX is proven** (R2 received a `src=bridge, ch=0x31` packet only
+  R4 emits). **R3 TX is NOT yet isolated** — R3 is co-channel with R1, so R3's
+  transmit is masked by R1; needs a config where R3 is the sole MeshCore TX
+  (route a source → R3 only) or R3 on a distinct channel. **(action item)**
+- **Weak/distant LR1121 RX still untested** (all confirmed RX was strong).
+  **(action item — closes §9)**
+- **Found + fixed a real bug:** disabling a local SX1262 in the portal left its
+  SPI chip-select floating and broke the *other* local radio's detection
+  (CHIP_NOT_FOUND, FATAL). Fixed in `2255d1d` (park both local CS HIGH up front).
+  **The flashed device is the earlier `e4122d3` build and does NOT have this
+  fix** — until it is reflashed, do not set a local radio (R1/R2) to None.
+- **The garbled serial-monitor lines are NOT UART/link collisions.** The
+  inter-board LINK overflow is fixed (§5, bench-confirmed). The garble is the USB
+  *debug console*: concurrent `Serial.printf` from tasks on two cores interleaving
+  (the mangled lines are R1's — a local radio that never uses the link). Fix =
+  a console log mutex. **(action item — cosmetic, logging only.)**
