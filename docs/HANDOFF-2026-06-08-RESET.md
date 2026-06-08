@@ -96,6 +96,14 @@ UNVERIFIED. It only ever compared the proven Semtech lr11xx_driver vs CLAUDE-WRI
 bug, not RadioLib — which would make Path A/B/C and the propagation docs moot. Bench logs are also partly
 corrupt (FM7: the bridge logf races across the two cores and clips/interleaves output).
 
+SCOPE — ASSUME NOTHING CLAUDE WROTE IS KNOWN-GOOD: not just Core1121.cpp's RX path. ALL RadioLib 7.7.0
+code Claude generated across all 3 projects (Xiao bridge/Core1121, Seeed Wio-LR1121 on lr1121-phase1
+WioLR1121.cpp, T_LORA_DUAL coproc-tlora-dual) is unvalidated vs known-good vendor code — begin()
+sequences, RF-switch tables, TCXO/calibrate, IRQ/DIO map, freq/offset, shared-SPI/mutex, the logf
+logger, BridgeConfig, TX — all suspect. Compiling proves nothing. The ONLY known-good references are
+the vendor OEM code: Semtech lr11xx_driver (proven RX) and the LilyGO Factory. Validate Claude code
+against those; never use Claude code as the baseline to indict a library.
+
 PROVEN: the chip RXes >=1 real packet under the Semtech driver (env core1121_oem_rx); RadioLib + Semtech
 co-link in one binary; the bridge builds+links clean on RadioLib 7.4.0; the LR11x0 RX path differs
 substantially 7.4.0<->7.7.0 (begin-rework + new LR_common SPI layer).

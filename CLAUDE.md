@@ -212,6 +212,17 @@ the bridge code.** This unverified conclusion was propagated into `docs/PATH-B-P
 `docs/LR1121-7.7.0-PROPAGATION.md`, which the two sibling projects were told to follow. Full writeup:
 [`docs/HANDOFF-2026-06-08-RESET.md`](docs/HANDOFF-2026-06-08-RESET.md).
 
+**⛔ SCOPE — ASSUME NOTHING CLAUDE WROTE IS KNOWN-GOOD.** This is NOT limited to `Core1121.cpp`'s RX
+path. **ALL RadioLib 7.7.0 code Claude generated, across all three projects** — the Xiao bridge /
+`Core1121` (this branch), the Seeed **Wio-LR1121** (`lr1121-phase1`, `WioLR1121.cpp`), and the
+**T_LORA_DUAL** co-proc (`coproc-tlora-dual`) — is **unvalidated against known-good vendor code** and
+must be treated as suspect: begin() sequences, RF-switch tables, TCXO/`calibrate()`, IRQ/DIO mapping,
+frequency/offset handling, dual-radio shared-SPI/mutex, the `logf` logger, `BridgeConfig`, TX path —
+all of it. It compiling, or a prior session asserting it correct, proves nothing. The **only**
+known-good references are the **vendor/OEM code**: Semtech's `lr11xx_driver` (proven to RX on this
+chip) and the **LilyGO Factory** firmware. Validate every Claude-written behaviour against those before
+trusting it; do not use Claude code as a baseline to indict a library.
+
 **THE KNOWN-GOOD CONTROL WE NEVER USED.** The **LilyGO T-Lora-Dual Factory firmware** drives the LR1121
 and is proven on real hardware (`…\Projects\T-Lora-Dual-master\…\examples\Factory\Factory.ino`). Its RX
 bring-up — `radio.begin/setFrequency/setBandwidth/setSpreadingFactor/setCodingRate/setSyncWord/
