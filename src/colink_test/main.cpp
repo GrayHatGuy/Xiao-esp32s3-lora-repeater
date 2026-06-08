@@ -85,6 +85,13 @@ void setup()
     spiMutex = xSemaphoreCreateMutex();
     configASSERT(spiMutex != nullptr);
 
+    // CRITICAL for a shared SPI bus: park R1's (SX1262) chip-select HIGH so it stays
+    // OFF the bus until its own begin(). Otherwise its un-driven CS leaves the SX1262
+    // selected and it fights the LR1121 on MISO during R2's reads (→ R2 reads garbage).
+    // The bridge does this in each radio's ctor (WioSX1262.cpp:21-24, Core1121 too).
+    pinMode(R1_NSS, OUTPUT);
+    digitalWrite(R1_NSS, HIGH);
+
     // --- R2 (Semtech lr11xx_driver) bring-up — separate TU, mutex-guarded ---
     const bool r2ok = r2_begin(spiMutex);
 
