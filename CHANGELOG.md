@@ -2,12 +2,19 @@
 
 ## v10.1 — 2026-06-07 — RX-priority routing redesign — UNRELEASED (branch `T_LORA_QUAD_ROUTE`)
 
-Status: **both firmwares build green; on-air behaviour intentionally UNPROVEN**
-(implemented code-only per owner directive — no bench validation). Full design +
-as-built map in [`ROUTING-REDESIGN.md`](ROUTING-REDESIGN.md). Implements tracked
-task #1 (RX-priority route-queue + CAD + hash-dedup) and task #2 (full-mesh
-airtime throttle). Branch off `T_LORA_QUAD` @ `3b06f3c`; merge is a later owner
-decision.
+Status: **both firmwares build green; BENCH-VALIDATED on hardware 2026-06-07**
+(strong signal). Implements tracked task #1 (RX-priority route-queue + CAD +
+hash-dedup) and task #2 (full-mesh airtime throttle). Full design + as-built map +
+bench result in [`ROUTING-REDESIGN.md`](ROUTING-REDESIGN.md) (§9). Branch off
+`T_LORA_QUAD` @ `3b06f3c`; merge is a later owner decision.
+
+**Bench result (XIAO + T-Lora-Dual, all sub-GHz):** all four radios RX; MC↔MT
+both directions with text + telemetry (env/position) + NodeInfo; content-hash
+dedup drops every echo with clean far-side bodies. Crucially the **LR1121 RX/TX
+complete through RadioLib 7.7.0 on the T-Lora-Dual** (R3 RX −11 dBm, R4 RX
+−26 dBm, R4 TX confirmed) — the Core1121/Wio LR11x0 RX deficit is board-specific
+and did **not** materialise here. Remaining: weak/distant LR1121 RX still to be
+characterised (all confirmed RX was strong signal).
 
 The bridge moves from "decode-and-blocking-transmit inline on RX" to an
 **RX-priority pipeline**: RX is read and re-armed immediately, decoded once, and

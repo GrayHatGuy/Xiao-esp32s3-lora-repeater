@@ -1,7 +1,15 @@
 # COPROC-LR1121-DRIVER-PORT.md — plan: co-proc R3/R4 on Semtech `lr11xx_driver`
 
-**Status:** PLAN ONLY (no code). **Author:** GrayHatGuy · **Branch:** `T_LORA_QUAD_ROUTE` · 2026-06-07
+**Status:** PLAN ONLY (no code) — now a **CONTINGENCY, likely not needed.**
+**Author:** GrayHatGuy · **Branch:** `T_LORA_QUAD_ROUTE` · 2026-06-07
 **Gated on a control test — do not implement until it points here (see §1).**
+
+> **Update 2026-06-07 (bench):** on-air bring-up showed the T-Lora-Dual LR1121s
+> **complete RX and TX through RadioLib 7.7.0** (R3 RX @ −11 dBm, R4 RX @ −26 dBm,
+> R4 TX confirmed). So the Core1121/Wio RX deficit is **board-specific**, not
+> RadioLib-7.7.0-wide, and this port is **not required for the T-Lora-Dual**. It
+> stays as a contingency only if weak/distant LR1121 RX later proves deficient on
+> this board. See ROUTING-REDESIGN.md §9 "Bench result".
 
 ## 0. Why
 

@@ -162,3 +162,32 @@ SX1262s. That port is scoped in [`COPROC-LR1121-DRIVER-PORT.md`](COPROC-LR1121-D
 The Phase-2 pivot premise ("the T-Lora-Dual Factory firmware has working RX+TX")
 must be re-validated against *our* 7.7.0 co-proc build, which is not the Factory
 sketch.
+
+### Bench result — 2026-06-07 (the §9 risk did NOT materialise on the T-Lora-Dual)
+First on-air bring-up of this branch on real hardware (XIAO host + T-Lora-Dual
+co-proc, all radios sub-GHz: R1≈R3 MeshCore 910.525/BW62.5/SF7, R2≈R4 Meshtastic
+906.875/BW250/SF11):
+- **R3 and R4 (LR1121) RX COMPLETE** — `[R3 RX] 37 B @ −11 dBm` decoding
+  "here is meshtastic"; `[R4 RX] 67 B @ −26 dBm` decoding a bridged MT text. The
+  RadioLib-7.7.0 LR11x0 RX deficit seen on the Core1121/Wio **does not appear on
+  this T-Lora-Dual** with our Factory-HAL co-proc build.
+- **R4 (LR1121) TX confirmed** — R2 received a `src=bridge, ch=0x31` ("public2")
+  packet, a channel only the bridge's R4 emits → R4 actually transmitted. No
+  `MSG_TX` `done-timeout`s post-fix → the co-proc answers `MSG_TX_DONE`.
+- Full quad bridge functional: MC↔MT both directions, text + telemetry
+  (env/position) + NodeInfo (NodeDB populated), content-hash dedup dropping all
+  echoes (incl. co-channel twins), CLEAN far-side bodies. The host SX1262 RX-
+  priority pipeline is validated end-to-end.
+- **Root cause of the initial silence was a wiring error**, not the deficit: the
+  link pair was straight-through (co-proc TX→XIAO D6=host-TX) instead of crossed.
+  Swapping to co-proc TX→XIAO D7 (host RX) / co-proc RX→XIAO D6 (host TX) fixed it.
+
+**Conclusion:** the Phase-2 pivot to the T-Lora-Dual is vindicated; the
+Core1121/Wio RX deficit is board-specific, not RadioLib-7.7.0-wide. The Semtech
+`lr11xx_driver` port (`COPROC-LR1121-DRIVER-PORT.md`) is **not needed for the
+T-Lora-Dual** and reverts to a contingency.
+
+**Still open (before fully closing §9):** all confirmed receptions were STRONG
+(−11/−26 dBm) and largely of the bridge's own co-located emissions. The Core1121
+deficit was signal-dependent, so **weak/distant LR1121 RX on R3/R4 (direct
+external traffic) is not yet characterised** — that is the remaining test.
