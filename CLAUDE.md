@@ -17,11 +17,48 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 
 | Item | Value |
 |---|---|
-| **Production line** | `main` @ v8.1 — Phase 0 dual-SX1262, ship-ready, contest deliverable |
+| **Production line** | `main` @ **v8.2** (`cecf9b7`, tag `v8.2`) — "LBT/CAD routing": RX-priority routing + source-identity preservation, **bench-verified + published (GitHub Latest) 2026-06-13**. v8.1 = prior dual-SX1262 baseline. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
 | **Default build flag** | `LR1121_RX_AUDIT_RUN=0` in `platformio.ini` (clean state) |
+
+## ⭐ v8.2 — "LBT/CAD routing" (SHIPPED 2026-06-13)
+
+RX-priority routing (Listen-Before-Talk / CAD) + source-identity preservation, backported from
+`T_LORA_QUAD_ROUTE` onto the 2-radio dual-SX1262 `main`. **Bench-verified on hardware and published.**
+
+- **Release:** "v8.2 - LBT/CAD/hash dedup routing" — GitHub **Latest**, tag `v8.2` → `cecf9b7`.
+  Assets: `xiao-dual-sx1262-v8.2-vanilla-factory.bin` (full image @ `0x0`; fresh/erased device →
+  captive portal pre-filled with **R1=Meshtastic / R2=MeshCore**) + `xiao-dual-sx1262-v8.2-app.bin`
+  (app @ `0x10000`).
+- **What it does:** non-blocking CAD-gated TX + per-destination PSRAM `RouteQueue` + airtime throttle
+  (a TX never blocks the other radio's RX); content-hash dedup keyed on **body + src + MT packet_id**
+  (replaces the `[MT]/[MC]/[rns]` text markers → clean far-side bodies); **source-identity**: MC→MT
+  virtual MT nodes (`FNV-1a("MC|name")`) + synthetic NodeInfo, MT→MC `Name@MT:` body prefix,
+  same-channel transparent raw repeat; structured `evt=` serial logging; RadioLib pinned **7.7.0**.
+  `BridgeConfig` schema **v4 unchanged** (no NVS migration). **LR1121 / co-processor code OUT of scope.**
+- **Bench (2026-06-13):** §9 Phase A tests **1–9 + §15.1 all PASS on air**. Test 10 (queue max-age
+  expiry under sustained jam) accepted on code-review (needs a continuous-carrier jam to exercise).
+- **Docs:** `V8.2-SPEC.md` (design, decisions §10, serial-log schema §13, LoRaWAN analysis §14, §15.1
+  fix), `CHANGELOG.md` v8.2, `README.md` "Routing & protocol support". Cross-session memory:
+  `project-xiao-v82-router-backport`.
+- **⚠️ History was REWRITTEN (owner-authorized one-time force-push):** v8.2 commit messages contained
+  bare `@MT`/`@MC` examples that GitHub auto-linked to unrelated users (github.com/mc, /mt). Scrubbed
+  via `git filter-branch` (commit msgs) + code-spans (rendered docs) + `gh release edit` (release body).
+  **Old commit hashes are DEAD; `origin/main` @ `cecf9b7`, tag `v8.2` → `cecf9b7`.** Any *other* clone
+  needs `git fetch && git reset --hard origin/main`. **Lesson: never put a bare `@`-word in
+  GitHub-rendered text** (release notes, README/CHANGELOG/spec, or commit messages) — wrap protocol
+  tags in `code spans` and avoid `@`+letters in commit messages.
+- **Deferred / next (priority order; see README roadmap):**
+  1. **Reticulum bidirectional routing** — today RNS→MT/MC is a base64 text tunnel only; needs an RNS
+     packet encoder + fragment reassembly for `MT/MC → RNS`.
+  2. **LoRaWAN capture/metadata tap** (sync `0x34`) — content bridging is architecturally precluded
+     (per-device keys, no group cleartext; V8.2-SPEC §14); realistic scope = one-way RX metadata.
+  3. **Sub-GHz ↔ 2.4 GHz cross-band** = the Phase 1 work below (still Seeed-blocked).
+  - MeshCore identical-text dedup (no on-air per-message id) — accepted limitation.
+  - §15.2 cosmetic: the legacy `MeshDecoderDebug::print` hex-dump isn't under the log mutex, so it can
+    interleave across cores; the structured `evt=` lines are unaffected.
 
 ## Phase status
 
