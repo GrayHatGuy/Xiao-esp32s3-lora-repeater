@@ -546,9 +546,64 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     }
 }
 
-// Decode a received packet ONCE, run the loop/dup guard, and fan the clean body
-// out to every (other) enabled destination's queue. No transmit happens here —
-// the destinations' schedulers do that — so the source radio returns to RX.
+// Two radios carry the SAME channel when they share protocol, channel hash, and
+// key material — so a packet's ciphertext from one is valid verbatim on the
+// other. That is the precondition for a transparent raw repeat (V8.2-SPEC §5.1).
+static bool sameChannel(const RadioChannel &a, const RadioChannel &b)
+{
+    if (a.protocol != b.protocol)     return false;
+    if (a.channelHash != b.channelHash) return false;
+    if (a.keyLen != b.keyLen)         return false;
+    return memcmp(a.key, b.key, a.keyLen) == 0;
+}
+
+// Transparent raw repeat (V8.2-SPEC §5.1): the destination radio is on the SAME
+// channel as the source (different frequency), so we re-transmit the ORIGINAL
+// bytes — the far side sees the ORIGINAL sender natively, in full fidelity
+// (text, position, telemetry), not a bridge re-encode. For Meshtastic we only
+// touch the mutable relay fields: decrement hop_limit (drop at 0) and set
+// relay_node to our own low byte; src/packet_id/ciphertext are untouched, so
+// native (src,packet_id) dedup keeps working. For MeshCore the bytes go out
+// unchanged (path-append left to a later version — Q5).
+//
+// Loop-safe with NO extra dedup record: the ingest guard already recorded
+// hash(body, srcId) in the SHARED DedupCache, and a raw repeat preserves both
+// body and srcId, so the echo — heard on either radio — matches and is dropped.
+static void rawRepeatForDest(const RadioChannel &dstChan, int destIdx,
+                             const char *srcTag, uint32_t srcId,
+                             const uint8_t *buf, size_t len)
+{
+    if (len == 0 || len > LORA_MAX_PACKET) return;
+    uint8_t pkt[LORA_MAX_PACKET];
+    memcpy(pkt, buf, len);
+
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        if (len < 16) return;
+        if (srcId == BridgeConfig::mtNodeId()) return;   // never repeat our own
+        uint8_t hops = pkt[12] & 0x07;                   // flags[2:0] = hop_limit
+        if (hops == 0) {
+            Serial.printf("[%8lu ms][%s->%s repeat] hop_limit=0 — not repeated\n",
+                          millis(), srcTag, kTag[destIdx]);
+            return;
+        }
+        pkt[12] = (uint8_t)((pkt[12] & ~0x07) | (hops - 1));   // decrement hops
+        pkt[15] = (uint8_t)(BridgeConfig::mtNodeId() & 0xFF);  // relay_node = us
+    }
+    // MeshCore: bytes unchanged.
+
+    if (g_routeQ[destIdx].push(pkt, len)) {
+        Serial.printf("[%8lu ms][%s->%s repeat] %u B raw (src 0x%08lX preserved)\n",
+                      millis(), srcTag, kTag[destIdx], (unsigned)len,
+                      (unsigned long)srcId);
+    } else {
+        Serial.printf("[%8lu ms][%s->%s repeat] queue push failed\n",
+                      millis(), srcTag, kTag[destIdx]);
+    }
+}
+
+// Decode a received packet ONCE, run the loop/dup guard, and fan it out to every
+// (other) enabled destination's queue. No transmit happens here — the
+// destinations' schedulers do that — so the source radio returns to RX.
 static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
 {
     const RadioChannel &srcChan = g_chan[srcIdx];
@@ -674,13 +729,20 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         return;
     }
 
-    // Fan the body out to every (other) enabled destination's queue. The
-    // identity layer (V8.2-SPEC §5) lives inside enqueueTextForDest, which is
-    // why it takes the source channel + MT src id.
+    // Fan out to every (other) enabled destination. Per destination:
+    //   - SAME channel (same protocol+hash+key, different frequency) -> a
+    //     transparent RAW repeat that preserves the original sender natively
+    //     (V8.2-SPEC §5.1). Covers the text/position/telemetry decoded above;
+    //     NodeInfo is consumed for NodeDB earlier and not raw-repeated in v8.2.
+    //   - otherwise -> the identity-aware cross-protocol / re-encode path
+    //     (virtual node, name prefix, or bridge identity) in enqueueTextForDest.
     for (int j = 0; j < NR; j++) {
         if (j == srcIdx) continue;
         if (!g_radioEnabled[j] || !g_radio[j]) continue;
-        enqueueTextForDest(srcChan, srcId, g_chan[j], j, srcTag, body);
+        if (BRIDGE_IDENTITY_PRESERVE && sameChannel(srcChan, g_chan[j]))
+            rawRepeatForDest(g_chan[j], j, srcTag, srcId, buf, len);
+        else
+            enqueueTextForDest(srcChan, srcId, g_chan[j], j, srcTag, body);
     }
 }
 

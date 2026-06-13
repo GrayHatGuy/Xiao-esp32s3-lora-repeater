@@ -591,15 +591,24 @@ static void handleSave() {
         return;
     }
 
-    // Same-protocol relay must be between two DIFFERENT channels.
+    // Same-protocol SELF-bridge guard (freq-aware — V8.2-SPEC §2 A4 / §5.1).
+    // Reject only when the two radios share channel name+key AND frequency —
+    // i.e. literally the same RF channel bridged to itself. Same channel on a
+    // DIFFERENT frequency is a valid cross-frequency relay: the identity layer
+    // raw-repeats it preserving the original sender, and loop safety comes from
+    // the content-hash dedup (DedupCache), not from the channels differing.
     if (p1 != BridgeConfig::PROTO_NONE && p1 == p2 &&
         (p1 == BridgeConfig::PROTO_MT || p1 == BridgeConfig::PROTO_MC)) {
-        if (strcmp(BridgeConfig::radio1ChannelName(),
+        float df = BridgeConfig::radioFrequency(0) - BridgeConfig::radioFrequency(1);
+        if (df < 0) df = -df;
+        bool sameFreq = df < 0.001f;
+        if (sameFreq &&
+            strcmp(BridgeConfig::radio1ChannelName(),
                    BridgeConfig::radio2ChannelName()) == 0 &&
             strcmp(BridgeConfig::radio1ChannelKey(),
                    BridgeConfig::radio2ChannelKey()) == 0) {
-            fail("Both radios run the same protocol \xe2\x80\x94 their two "
-                 "channels must differ (name or key).");
+            fail("Both radios run the same protocol, channel AND frequency "
+                 "\xe2\x80\x94 that bridges a channel to itself.");
             return;
         }
     }
