@@ -29,7 +29,7 @@ keeps its config). Full design + bench plan in `V8.2-SPEC.md`.
   original sender instead of the bridge:
   - **MC→MT**: the MeshCore sender name (`"<name>: …"`) becomes a deterministic
     virtual Meshtastic node (`FNV-1a("MC|"+name)`) with a synthetic NodeInfo, so
-    a phone shows the message *from "Alice @MC"*.
+    a phone shows the message from `Alice @MC`.
   - **MT→MC**: the body is prefixed with the Meshtastic sender's name
     (`Alice@MT: …`, NodeDB short-name or `!hexid`).
   - **Same protocol, same channel, different frequency**: a transparent **raw
