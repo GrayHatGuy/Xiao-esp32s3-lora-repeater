@@ -2,8 +2,8 @@
 
 ## v8.2 — RX-priority routing + source-identity preservation
 
-**Status: implemented on branch `v8.2-router-backport`; bench verification
-pending before the `v8.2` tag.** Backports the RX-priority routing redesign from
+**Status: bench-verified on hardware 2026-06-13 (branch `v8.2-router-backport`);
+ready to tag.** Backports the RX-priority routing redesign from
 the unreleased `T_LORA_QUAD_ROUTE` line onto the shipping 2-radio dual-SX1262
 bridge, and adds a source-identity-preservation layer. No LR1121/co-processor
 code; `BridgeConfig` stays schema v4 (no NVS migration — an upgraded v8.1 device
@@ -20,9 +20,11 @@ keeps its config). Full design + bench plan in `V8.2-SPEC.md`.
   `RouteQueue`.
 - **Content-hash loop prevention (clean far-side bodies).** The `[MT]/[MC]/[rns]`
   text markers are removed. Loops/duplicates are dropped by a TTL-windowed
-  FNV-1a hash of the decoded body + sender id, recorded on receive and on every
-  emission — which also drops a packet heard on both radios and never
-  false-drops a user message starting with `[MT`.
+  FNV-1a hash of the decoded body + sender id **+ Meshtastic packet_id**,
+  recorded on receive and on every emission — which also drops a packet heard on
+  both radios and never false-drops a user message starting with `[MT`. Folding
+  the packet_id means a node's genuinely-distinct messages with identical text
+  bridge each time (new id → new hash) while echoes/replays (same id) still drop.
 - **Source-identity preservation.** A bridged repeat carries/reconstructs the
   original sender instead of the bridge:
   - **MC→MT**: the MeshCore sender name (`"<name>: …"`) becomes a deterministic
