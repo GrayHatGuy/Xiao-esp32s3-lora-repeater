@@ -1,5 +1,55 @@
 # Changelog
 
+## v8.2 — RX-priority routing + source-identity preservation
+
+**Status: implemented on branch `v8.2-router-backport`; bench verification
+pending before the `v8.2` tag.** Backports the RX-priority routing redesign from
+the unreleased `T_LORA_QUAD_ROUTE` line onto the shipping 2-radio dual-SX1262
+bridge, and adds a source-identity-preservation layer. No LR1121/co-processor
+code; `BridgeConfig` stays schema v4 (no NVS migration — an upgraded v8.1 device
+keeps its config). Full design + bench plan in `V8.2-SPEC.md`.
+
+- **RX-priority pipeline (no more TX-blocks-RX).** Each radio defaults to
+  receive; a received packet is decoded once, de-duplicated, re-encoded for the
+  destination and pushed onto a per-destination, age-bounded, PSRAM-backed
+  `RouteQueue`. The destination radio's task pops it, does **CAD**
+  (listen-before-talk), and sends it with a **non-blocking** transmit, CSMA
+  backoff and a duty-cycle **airtime throttle**. A long SF11 transmit no longer
+  makes the bridge deaf. New: `LoraRadio` interface, `WioSX1262`
+  `scanChannel`/`startTransmit`/`txDone`/`finishTransmit`, `DedupCache`,
+  `RouteQueue`.
+- **Content-hash loop prevention (clean far-side bodies).** The `[MT]/[MC]/[rns]`
+  text markers are removed. Loops/duplicates are dropped by a TTL-windowed
+  FNV-1a hash of the decoded body + sender id, recorded on receive and on every
+  emission — which also drops a packet heard on both radios and never
+  false-drops a user message starting with `[MT`.
+- **Source-identity preservation.** A bridged repeat carries/reconstructs the
+  original sender instead of the bridge:
+  - **MC→MT**: the MeshCore sender name (`"<name>: …"`) becomes a deterministic
+    virtual Meshtastic node (`FNV-1a("MC|"+name)`) with a synthetic NodeInfo, so
+    a phone shows the message *from "Alice @MC"*.
+  - **MT→MC**: the body is prefixed with the Meshtastic sender's name
+    (`Alice@MT: …`, NodeDB short-name or `!hexid`).
+  - **Same protocol, same channel, different frequency**: a transparent **raw
+    repeat** — original bytes unchanged (Meshtastic: hop_limit decremented,
+    `relay_node` set), so the far side sees the original sender natively.
+  - Flags: `BRIDGE_IDENTITY_PRESERVE` (1), `BRIDGE_TAG_ORIGIN_PROTO` (1,
+    `@MT`/`@MC` tags), `BRIDGE_MC_NONAME_VIRTUAL` (0).
+  - Deferred: MT→MT re-encrypt across *different* channels (trans-crypt);
+    NodeInfo is consumed for NodeDB, not raw-repeated; LoRaWAN (sync `0x34`) is a
+    separate future version (capture-only — see `V8.2-SPEC.md` §14).
+- **`NodeDB`** is now mutex-guarded with a copy-based `lookupShortName`, since
+  more than one task reads it.
+- **Structured serial logging.** One greppable `ts=… evt=… radio=… key=val` line
+  per pipeline event, emitted atomically across both cores via a dedicated log
+  mutex.
+- **`RadioLib` pinned `7.7.0`** (the version the TX/CAD path was developed and
+  bench-validated against; the LR11x0 RX deficit on 7.7.0 does not affect the
+  SX126x path).
+- **Captive portal**: the same-protocol self-bridge guard is now freq-aware — it
+  rejects a routed pair only when protocol, channel name+key **and** frequency
+  all match, so a same-channel cross-frequency relay is configurable.
+
 ## v8.1 — 2026-05-21 — Compile-time build-flag validation
 
 A small follow-up to v8.0 — build-time safety for source builds, plus docs.
