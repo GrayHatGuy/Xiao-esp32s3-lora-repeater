@@ -377,13 +377,14 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
                  seq, (unsigned)(idx + 1), (unsigned)totalFrags,
                  (int)b64Len, (const char *)b64chunk);
 
-        uint8_t outPkt[256];
-        size_t  outLen  = 0;
-        bool    encoded = false;
+        uint8_t  outPkt[256];
+        size_t   outLen  = 0;
+        bool     encoded = false;
+        uint32_t emitPid = 0;   // MT pid we stamp (0 for MC); folded per §15.1
         if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
             encoded = MeshEncoderDebug::encodeMeshtasticText(
                           dstChan, BridgeConfig::mtNodeId(),
-                          marked, outPkt, sizeof(outPkt), outLen);
+                          marked, outPkt, sizeof(outPkt), outLen, &emitPid);
         } else {
             encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
                           dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
@@ -395,11 +396,11 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
             return;
         }
 
-        // Remember this emission (clean fragment body) so its echo is dropped
-        // as a loop, then queue it. Inter-fragment pacing is now provided by
-        // the destination's airtime throttle, not an inline delay.
+        // Remember this emission (fragment body + stamped src + MT pid) so its
+        // echo is dropped as a loop, then queue it. Inter-fragment pacing is
+        // provided by the destination's airtime throttle, not an inline delay.
         DedupCache::record(
-            DedupCache::hash((const uint8_t *)marked, strlen(marked), dstSrcId));
+            DedupCache::hash((const uint8_t *)marked, strlen(marked), dstSrcId, emitPid));
         if (g_routeQ[destIdx].push(outPkt, outLen)) {
             blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=%s frag=%u/%u seq=%02x "
                   "len=%u qdepth=%u msg=\"%s\"\n",
@@ -507,6 +508,7 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     bool          encoded  = false;
     const char   *dstName  = "?";
     uint32_t      dstSrcId = 0;               // src stamped into the re-encode
+    uint32_t      emitPid  = 0;               // MT pid we stamp (0 for MC); §15.1
 
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         dstName  = "MT";
@@ -537,7 +539,8 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
         }
 
         encoded = MeshEncoderDebug::encodeMeshtasticText(
-                      dstChan, dstSrcId, outBody, outPkt, sizeof(outPkt), outLen);
+                      dstChan, dstSrcId, outBody, outPkt, sizeof(outPkt), outLen,
+                      &emitPid);
 
     } else if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
         dstName  = "MC";
@@ -575,17 +578,19 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
         return;
     }
 
-    // Remember our own emission (the body we actually sent + stamped src) so the
-    // echo is dropped as a loop, then queue it for the destination's scheduler.
-    DedupCache::record(
-        DedupCache::hash((const uint8_t *)outBody, strlen(outBody), dstSrcId));
+    // Remember our own emission (body + stamped src + the MT pid we just stamped)
+    // so the echo is dropped as a loop, then queue it for the dest's scheduler.
+    // emitPid is 0 for MeshCore (no per-message id), so MC matching is unchanged.
+    uint32_t hout = DedupCache::hash((const uint8_t *)outBody, strlen(outBody),
+                                     dstSrcId, emitPid);
+    DedupCache::record(hout);
     char vbuf[10];
     if (g_routeQ[destIdx].push(outPkt, outLen)) {
         blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=%s len=%u virtualid=%s "
               "hout=0x%08lx qdepth=%u qdropped=%lu msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, kTag[destIdx], dstName,
               (unsigned)outLen, fmtNodeId(dstSrcId, vbuf),
-              (unsigned long)DedupCache::hash((const uint8_t *)outBody, strlen(outBody), dstSrcId),
+              (unsigned long)hout,
               (unsigned)g_routeQ[destIdx].count(),
               (unsigned long)g_routeQ[destIdx].dropped(), outBody);
     } else {
@@ -707,6 +712,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     // we lift the GRP_TXT body directly. We also capture the Meshtastic src so
     // identical text from different senders isn't false-dropped by the guard.
     uint32_t srcId = 0;
+    uint32_t pid   = 0;   // MT packet_id, folded into the dedup hash (§15.1)
     char body[256];
     bool decoded = false;
 
@@ -714,6 +720,9 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         if (len >= 8)
             srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                   | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+        if (len >= 12)
+            pid   = (uint32_t)buf[8]  | ((uint32_t)buf[9]  << 8)
+                  | ((uint32_t)buf[10] << 16) | ((uint32_t)buf[11] << 24);
         if (!decoded && BridgeConfig::positionEnabled()) {
             MeshDecoderDebug::MeshtasticPositionInfo pos;
             if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, srcChan, pos)) {
@@ -774,7 +783,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     // means a mesh-flood replay, the same packet heard on a second radio, or an
     // echo of one of our own emissions — drop it. See DedupCache.h.
     char idbuf[10];
-    uint32_t hin = DedupCache::hash((const uint8_t *)body, strlen(body), srcId);
+    uint32_t hin = DedupCache::hash((const uint8_t *)body, strlen(body), srcId, pid);
     if (DedupCache::seenAndRecord(hin)) {
         blogf("ts=%lu evt=DROP radio=%s proto=%s drop=loop-dup nodeid=%s hin=0x%08lx msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, protoTag(srcChan.protocol),

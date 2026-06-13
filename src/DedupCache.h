@@ -59,9 +59,13 @@ namespace DedupCache {
 // start. Safe to call more than once.
 void begin();
 
-// FNV-1a 32-bit over the body bytes followed by srcId (little-endian). Pass
-// srcId = 0 for protocols without a stable per-sender id.
-uint32_t hash(const uint8_t *body, size_t len, uint32_t srcId);
+// FNV-1a 32-bit over the body bytes, then srcId, then pid (both little-endian).
+// Pass srcId = 0 for protocols without a stable per-sender id, and pid = 0
+// where there is no per-message id (MeshCore GRP_TXT, Reticulum). Folding the
+// Meshtastic packet_id (V8.2-SPEC §15.1) lets genuinely-distinct MT messages
+// with identical body+sender through (new pid → new hash) while echoes/replays,
+// which preserve (src, packet_id), still match and drop.
+uint32_t hash(const uint8_t *body, size_t len, uint32_t srcId, uint32_t pid = 0);
 
 // If `h` is already in the live window, refresh its timestamp and return true
 // (caller should treat the packet as a loop/duplicate and drop it). Otherwise

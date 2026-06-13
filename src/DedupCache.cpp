@@ -24,7 +24,7 @@ void begin() {
     for (size_t i = 0; i < BRIDGE_DEDUP_TABLE_SIZE; i++) s_table[i].used = false;
 }
 
-uint32_t hash(const uint8_t *body, size_t len, uint32_t srcId) {
+uint32_t hash(const uint8_t *body, size_t len, uint32_t srcId, uint32_t pid) {
     // FNV-1a 32-bit.
     uint32_t h = 2166136261u;
     for (size_t i = 0; i < len; i++) {
@@ -33,6 +33,10 @@ uint32_t hash(const uint8_t *body, size_t len, uint32_t srcId) {
     }
     for (int b = 0; b < 4; b++) {           // fold srcId, little-endian
         h ^= (uint8_t)(srcId >> (8 * b));
+        h *= 16777619u;
+    }
+    for (int b = 0; b < 4; b++) {           // fold pid (MT packet_id), LE
+        h ^= (uint8_t)(pid >> (8 * b));
         h *= 16777619u;
     }
     return h;

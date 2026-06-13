@@ -112,11 +112,16 @@ inline bool encodeMeshCoreGrpTxt(const RadioChannel &ch,
 // body : null-terminated UTF-8 string. Bodies > ~200 bytes return false.
 // outBuf / outBufCap : caller-provided buffer for the assembled packet.
 // outLen : set to the byte count actually written on success.
+// outPid : optional — set to the random packet id stamped into the header, so
+//          the caller can fold it into the dedup hash (V8.2-SPEC §15.1).
+//          Meshtastic relays/replays preserve (src, packet_id), so keying dedup
+//          on the pid lets genuine distinct messages with identical text
+//          through while echoes of our own emission still match and drop.
 // Returns true on success.
 inline bool encodeMeshtasticText(const RadioChannel &ch,
                                   uint32_t srcNodeId, const char *body,
                                   uint8_t *outBuf, size_t outBufCap,
-                                  size_t  &outLen) {
+                                  size_t  &outLen, uint32_t *outPid = nullptr) {
     using namespace MeshDecoderDebug;
     if (!body || !outBuf) return false;
     size_t bodyLen = strlen(body);
@@ -147,6 +152,7 @@ inline bool encodeMeshtasticText(const RadioChannel &ch,
     // "no id assigned").
     uint32_t pid = esp_random();
     if (pid == 0) pid = 1;
+    if (outPid) *outPid = pid;   // expose for dedup keying (V8.2-SPEC §15.1)
 
     const uint32_t dest = 0xFFFFFFFFu;                  // broadcast
     const uint32_t src  = srcNodeId;
