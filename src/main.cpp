@@ -911,6 +911,19 @@ void radioTask(void *pvParameters)
         if (!g_txPendingValid[i]) {
             if (g_routeQ[i].pop(g_txPending[i])) g_txPendingValid[i] = true;
         }
+        // Expire a LATCHED packet that aged past max-age while CAD kept it
+        // waiting on a jammed channel. RouteQueue::pop() only prunes at pop time,
+        // so a packet popped just under the limit could otherwise be sent stale —
+        // "stale mesh text is not worth airtime" (RouteQueue.h policy). Unsigned
+        // age compare, matching pop(); NOT the signed deadline idiom used for the
+        // backoff/throttle windows below.
+        if (g_txPendingValid[i] && BRIDGE_ROUTE_MAX_AGE_MS &&
+            (uint32_t)(millis() - g_txPending[i].enqueueMs) > (uint32_t)BRIDGE_ROUTE_MAX_AGE_MS) {
+            blogf("ts=%lu evt=DROP radio=%s drop=latch-stale age=%lu\n",
+                  (unsigned long)millis(), tag,
+                  (unsigned long)(millis() - g_txPending[i].enqueueMs));
+            g_txPendingValid[i] = false;
+        }
         // Keep RX strictly first: skip TX while a packet is waiting to be read,
         // while inside a CSMA backoff window, or while the airtime throttle is
         // holding this radio off the air.
