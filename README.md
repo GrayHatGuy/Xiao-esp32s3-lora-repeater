@@ -97,6 +97,29 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
 8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
+## Routing & protocol support (current functionality)
+
+The bridge dispatches by **LoRa sync word**: each radio is assigned a protocol in
+the portal, and a received packet is decoded once, run through the content-hash
+loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a
+CAD-gated non-blocking transmit (the v8.2 RX-priority pipeline). Source identity
+is preserved/reconstructed across the bridge — see [`V8.2-SPEC.md`](V8.2-SPEC.md).
+
+| Protocol | Sync | RX (decode) | Bridge / TX | Identity across the bridge |
+|----------|------|-------------|-------------|----------------------------|
+| **Meshtastic (MT)** | `0x2B` | AES-CTR + protobuf walk: `TEXT_MESSAGE_APP`, `POSITION_APP`, `TELEMETRY_APP` → text line; `NODEINFO_APP` → NodeDB (not bridged) | Re-encodes for the destination. **Same channel, different frequency → transparent raw repeat** (original bytes, `hop_limit` decremented) | **MT→MC:** body prefixed `Name@MT:` (NodeDB short-name, else `!hexid`). **MT→MT raw repeat:** original sender preserved natively |
+| **MeshCore (MC)** | `0x12` | AES-128-ECB `GRP_TXT` + 2-byte HMAC verify | Re-encodes `GRP_TXT` for the destination channel; same-channel/diff-freq → raw repeat | **MC→MT:** the `"Name: …"` sender becomes a deterministic virtual MT node `FNV-1a("MC|name")` with a synthetic NodeInfo (`Name @MC`); the name is moved into the MT header and stripped from the body |
+| **Reticulum (RNS)** | `0x42` | **RX-only stub** — frame treated as opaque bytes (the bridge holds no RNS keys; it is *not* decrypted) | **RNS→MT/MC:** base64-tunneled as `[rns <seq> <x>/<y>] …` text fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). **MT/MC→RNS: not implemented** (log-and-drop). See the [Reticulum roadmap](#reticulum--rnode-routing) | n/a — frames opaque; RNS→MT fragments carry the bridge's own MT id |
+| **Custom** | any (portal-entered) | user-chosen sync word; **no built-in decoder** | RF-agnostic dispatch by sync word; a Custom radio with no matching decoder receives + logs but has no protocol-specific re-encode | n/a |
+| **None** | — | radio disabled (single-radio / monitor mode) | — | — |
+
+**Loop prevention** is a TTL content-hash dedup over the decoded body + sender id
++ Meshtastic packet_id, recorded on RX *and* on every emission — so echoes and
+relayed duplicates drop while genuinely-distinct messages (incl. identical text
+with a new packet_id) bridge. All RF settings and channel keys are per-radio in
+the captive portal; compile-time defaults and the `BRIDGE_*` tunables live in
+[`platformio.ini`](platformio.ini).
+
 ## Roadmap
 
 ### Other future work
@@ -110,6 +133,13 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 - [x] ~~**v2: per-radio channels — same-protocol relay.**~~ — **done** (v7.0). Each radio slot carries its own channel via the new `RadioChannel` struct (`MeshCoreConfig` / `MeshtasticConfig` are now stateless `resolve()` helpers, not singletons). The bridge relays cross-protocol MT↔MC *and* same-protocol MC↔MC / MT↔MT. Each radio's protocol/RF stays a `platformio.ini` build-flag decision; each radio's channel name + key is portal-editable. `BridgeConfig` schema bumped v2→v3 (auto-migrates). The portal's two channel sections reject identical channels when both radios share a protocol.
 - [x] ~~**v8: vanilla firmware — full portal config.**~~ — **done** (v8.0); specced in [`V8-SPEC.md`](V8-SPEC.md). A single distributable `.bin` configured *entirely* through the captive portal — no build flags required. Per-radio protocol picker (Meshtastic / MeshCore / Reticulum / Custom / None), global region selector (US, EU_868, EU_433, ANZ, CN, JP, IN, KR, RU + Custom/Other), Tier 2 Meshtastic channel-slot frequency computation (`RegionPreset.h`) with an editable override, null defaults (a no-flag image first-boots straight into the portal), and MAC-derived identity/SSID. `BridgeConfig` schema v3→v4. `platformio.ini` `LORA_RADIO*` flags are now optional first-boot pre-seeding only.
 - [x] ~~**Compile-time validation of build-flag config.**~~ — **done** (v8.1) in [`src/LoraConfigCheck.h`](src/LoraConfigCheck.h). `#error` / `static_assert` guards reject an invalid `LORA_RADIO*` set at build time (sync words, SF/CR/BW/region sanity, TX power range). Complements the v8 portal-side runtime validation — build-time checks defaults, portal checks portal-entered values.
+
+- [x] ~~**v8.2: RX-priority routing redesign + source-identity preservation.**~~ — **done** (v8.2), bench-verified 2026-06-13; specced in [`V8.2-SPEC.md`](V8.2-SPEC.md). Non-blocking CAD-gated TX + per-destination PSRAM route queues + airtime throttle (a transmit no longer blocks the other radio's RX); content-hash dedup keyed on body + sender id + Meshtastic packet_id (replaces the `[MT]/[MC]/[rns]` text markers → clean far-side bodies); source-identity preservation (MC→MT virtual nodes + synthetic NodeInfo, MT→MC name prefixes, same-channel transparent raw repeat); structured `evt=` serial logging; RadioLib pinned 7.7.0.
+
+**Next, in priority order — protocol routing comes _ahead of_ the Sub-GHz↔2.4 GHz cross-band phase below:**
+
+- [ ] **Reticulum (RNS) routing — lift the RX-only stub to bidirectional.** Today RNS→MT/MC works as a base64 text tunnel; the missing half is a real RNS packet encoder + fragment reassembly so `MT/MC → RNS` and RNS↔RNS work. Full current state + the work list in [Reticulum / RNode routing](#reticulum--rnode-routing) below.
+- [ ] **LoRaWAN routing (sync `0x34`).** LoRaWAN is *not* a group-text mesh — every payload is per-device-encrypted with no shared/broadcast key, so MC/MT-style **content** bridging is architecturally precluded (full analysis in [`V8.2-SPEC.md`](V8.2-SPEC.md) §14). The realistic feature is a one-way **capture/summarize tap** on `0x34`: decode the cleartext header and forward `DevAddr / FCnt / FPort / RSSI` as a metadata text line into MT/MC (analogous to the RNS tunnel); TX stays a permanent log-and-drop. The dispatch seam (enum + sync constant + decode/encode hooks) is fully mapped in the spec.
 
 - [ ] **Sub-GHz ↔ 2.4 GHz LoRa cross-band bridging — Phase 1 ON HOLD pending Seeed clarification.** The current build talks the SX1262's native sub-GHz ranges (902-928 MHz US ISM, 868 MHz EU, etc.). A long-horizon goal is to bridge those to 2.4 GHz LoRa networks (e.g. Meshtastic's 2.4 GHz preset) on the worldwide-licence-free **2.4 GHz ISM band** — the headline feature that makes this milestone worth doing.
 
@@ -132,20 +162,26 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 
   Good news on the firmware side: the protocol decoders and `bridgePacket()` dispatcher in this repo are RF-agnostic — they branch on the LoRa sync word, not the carrier frequency. Once a `WioSX1280` / `WioLR1121` / `WioLR2021` wrapper lands alongside `WioSX1262` (same `LoraConfig` struct, same `available()` / `read()` / `transmit()` surface), the existing bridge pipeline drops straight in with RF parameter changes in `platformio.ini`.
 
-### Reticulum / RNode — lowest priority
+### Reticulum / RNode routing
 
-Deprioritised to the bottom of the roadmap. The `0x42` Reticulum sync word is already wired into the bridge dispatcher as a third protocol, but only the receive half is implemented today. **No RNS controls will be added to the captive portal** — RNS stays a build-flag / firmware concern only.
+Prioritized **ahead of** the Sub-GHz↔2.4 GHz cross-band phase above, but it stays
+a firmware concern — **no RNS controls will be added to the captive portal.** The
+`0x42` sync word is wired into the dispatcher as a third protocol; today only the
+receive half is implemented (current state in [Routing & protocol
+support](#routing--protocol-support-current-functionality)):
 
 | Direction | Status |
 |-----------|--------|
-| `RX:RNS → TX:MT or MC` | ✅ stub. Raw RNS bytes are base64-encoded and re-transmitted as one or more `[rns <seq> <x>/<y>] <base64>` text packets on the destination radio. CRC-16 low-byte sequence ID, per-protocol fragment pacing, 8-fragment cap. |
-| `RX:MT or MC → TX:RNS` | ❌ log-only. The decoded body is printed with a `No TX 2 RNS: [MT/MC] …` prefix; nothing is transmitted on the RNS radio. |
-| `RX:RNS → human-readable decode` | ❌ base64 dump only — RNS packet framing isn't parsed yet. |
-| `MT/MC fragment reassembly → RNS TX` | ❌ stub function present (`reassembleReticulumFragment()` in `MeshDecoderDebug.h`), no logic yet — lands with the RNS encoder. |
+| `RX:RNS → TX:MT or MC` | ✅ base64 text tunnel — raw bytes re-transmitted as `[rns <seq> <x>/<y>] <base64>` fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). |
+| `RX:MT or MC → TX:RNS` | ❌ log-and-drop — no RNS encoder yet (`encodeReticulum()` returns false). |
+| `RX:RNS → human-readable decode` | ❌ opaque base64 only — RNS frame framing isn't parsed. |
+| `MT/MC fragment reassembly → RNS TX` | ❌ `reassembleReticulumFragment()` stub present, no logic. |
 
-Outstanding work to lift the stub:
-
-- **RNS packet decoder.** Parse the RNS LoRa frame: header byte (IFAC flag, hops, header type, propagation/context bits), destination/transport address hashes, context byte, ciphertext. Produce a structured decode line analogous to the Meshtastic/MeshCore ones in `MeshDecoderDebug.h`.
-- **RNS packet encoder.** Build a valid outgoing RNS frame in `MeshEncoderDebug.h`: write the header byte, attach the right destination hash, set the context byte for the payload type, and slot the body bytes into the ciphertext region. Wiring it into `bridgePacket()` is then a one-line dispatcher change.
-- **Fragment reassembly.** Fill in `reassembleReticulumFragment()` in `MeshDecoderDebug.h`: parse `[rns <seq> <x>/<y>] <base64>` out of the incoming MT/MC body, accumulate slots keyed on `<seq>`, base64-decode each chunk, time out stale entries after ~30 s, and emit the reassembled raw RNS frame once `count == total`. Needed before `MT/MC → RNS` can actually transmit.
-- **Optional IFAC support.** If the encoder ever needs to talk on a network with Identify-Fail Authentication enabled, the IFAC HMAC-SHA256 trailer and salt handling come along with it.
+**To make it bidirectional** (the work behind the three ❌ rows): an **RNS packet
+decoder** (parse header byte / IFAC flag / hops / address hashes / context /
+ciphertext → structured line in `MeshDecoderDebug.h`), an **RNS packet encoder**
+(build a valid frame in `MeshEncoderDebug.h` — a one-line dispatcher wire-in
+once it exists), and **fragment reassembly** (fill in `reassembleReticulumFragment()`:
+accumulate `[rns <seq> <x>/<y>]` slots keyed on `<seq>`, base64-decode, ~30 s
+timeout, emit when complete). Optional **IFAC** HMAC-SHA256 trailer/salt handling
+comes along only if talking to an authentication-enabled network.
