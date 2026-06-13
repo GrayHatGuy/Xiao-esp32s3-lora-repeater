@@ -4,6 +4,8 @@
 
 #include <Preferences.h>
 #include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace NodeDB {
 
@@ -11,6 +13,11 @@ namespace NodeDB {
 // queried by lookupShortName().
 static Entry  s_table[MAX_NODES];
 static size_t s_count = 0;
+
+// Serializes all access to s_table/s_count/s_scratch. Created in begin().
+static SemaphoreHandle_t s_mutex = nullptr;
+static inline void lock()   { if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY); }
+static inline void unlock() { if (s_mutex) xSemaphoreGive(s_mutex); }
 
 // NVS namespace + key for the serialised entries blob.
 static const char *NVS_NAMESPACE = "nodedb";
@@ -26,12 +33,13 @@ struct PersistedEntry {
 
 // Scratch buffer used by both begin() (read) and saveToNvs() (write).
 // File-scope (BSS) on purpose: a local PersistedEntry[64] is ~3.3 KB and
-// would blow the 4-8 KB radio-task stack when saveToNvs runs nested under
-// bridgePacket -> extractMeshtasticNodeInfo (which itself holds a 240 B pt[]
-// plus an AES context). NodeDB is single-threaded — only radio1Task calls
-// upsert/lookup — so a shared static buffer is safe.
+// would blow the radio-task stack when saveToNvs runs nested under
+// ingestAndFanout -> extractMeshtasticNodeInfo (which itself holds a 240 B pt[]
+// plus an AES context). Access is serialized by s_mutex (saveToNvs is only
+// ever called from upsert(), which holds the lock).
 static PersistedEntry s_scratch[MAX_NODES];
 
+// Caller must hold s_mutex.
 static void saveToNvs() {
     for (size_t i = 0; i < s_count; i++) {
         s_scratch[i].nodeId = s_table[i].nodeId;
@@ -56,6 +64,9 @@ static void saveToNvs() {
 }
 
 void begin() {
+    if (!s_mutex) s_mutex = xSemaphoreCreateMutex();
+    // begin() runs once in setup() before the radio tasks spawn, so the load
+    // below needs no lock; the mutex exists for the concurrent task phase.
     s_count = 0;
     Preferences prefs;
     // RW open so NVS auto-creates the namespace on a fresh device. A
@@ -99,7 +110,10 @@ bool upsert(uint32_t nodeId, const char *shortName, const char *longName) {
     if (!shortName) shortName = "";
     if (!longName)  longName  = "";
 
+    lock();
+
     // Existing entry — update in place
+    bool done = false;
     for (size_t i = 0; i < s_count; i++) {
         if (s_table[i].nodeId == nodeId) {
             strncpy(s_table[i].shortName, shortName, MAX_SHORT_NAME);
@@ -108,44 +122,59 @@ bool upsert(uint32_t nodeId, const char *shortName, const char *longName) {
             s_table[i].longName[MAX_LONG_NAME] = 0;
             s_table[i].lastSeenMs = millis();
             saveToNvs();
-            return true;
+            done = true;
+            break;
         }
     }
 
-    // New entry — append or evict LRU
-    size_t slot;
-    if (s_count < MAX_NODES) {
-        slot = s_count++;
-    } else {
-        slot = 0;
-        for (size_t i = 1; i < s_count; i++) {
-            if (s_table[i].lastSeenMs < s_table[slot].lastSeenMs) slot = i;
+    if (!done) {
+        // New entry — append or evict LRU
+        size_t slot;
+        if (s_count < MAX_NODES) {
+            slot = s_count++;
+        } else {
+            slot = 0;
+            for (size_t i = 1; i < s_count; i++) {
+                if (s_table[i].lastSeenMs < s_table[slot].lastSeenMs) slot = i;
+            }
+            Serial.printf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
+                          (unsigned long)s_table[slot].nodeId,
+                          (unsigned long)nodeId);
         }
-        Serial.printf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
-                      (unsigned long)s_table[slot].nodeId,
-                      (unsigned long)nodeId);
+        s_table[slot].nodeId = nodeId;
+        strncpy(s_table[slot].shortName, shortName, MAX_SHORT_NAME);
+        s_table[slot].shortName[MAX_SHORT_NAME] = 0;
+        strncpy(s_table[slot].longName,  longName,  MAX_LONG_NAME);
+        s_table[slot].longName[MAX_LONG_NAME] = 0;
+        s_table[slot].lastSeenMs = millis();
+        saveToNvs();
     }
-    s_table[slot].nodeId = nodeId;
-    strncpy(s_table[slot].shortName, shortName, MAX_SHORT_NAME);
-    s_table[slot].shortName[MAX_SHORT_NAME] = 0;
-    strncpy(s_table[slot].longName,  longName,  MAX_LONG_NAME);
-    s_table[slot].longName[MAX_LONG_NAME] = 0;
-    s_table[slot].lastSeenMs = millis();
-    saveToNvs();
+
+    unlock();
     return true;
 }
 
-const char *lookupShortName(uint32_t nodeId) {
+bool lookupShortName(uint32_t nodeId, char *out, size_t outCap) {
+    if (out && outCap) out[0] = 0;
+    bool found = false;
+    lock();
     for (size_t i = 0; i < s_count; i++) {
         if (s_table[i].nodeId == nodeId) {
             s_table[i].lastSeenMs = millis();
-            return s_table[i].shortName;
+            if (out && outCap) {
+                strncpy(out, s_table[i].shortName, outCap - 1);
+                out[outCap - 1] = 0;
+            }
+            found = true;
+            break;
         }
     }
-    return nullptr;
+    unlock();
+    return found;
 }
 
 void debugDump() {
+    lock();
     Serial.printf("[NodeDB] %u/%u entries:\n",
                   (unsigned)s_count, (unsigned)MAX_NODES);
     for (size_t i = 0; i < s_count; i++) {
@@ -154,6 +183,7 @@ void debugDump() {
                       s_table[i].shortName, s_table[i].longName,
                       (unsigned long)s_table[i].lastSeenMs);
     }
+    unlock();
 }
 
 }  // namespace NodeDB

@@ -342,8 +342,9 @@ static void buildTextSrcMarker(uint8_t srcSync,
         if (len >= 8) {
             uint32_t srcId = (uint32_t)buf[4]  | ((uint32_t)buf[5]  << 8)
                            | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
-            const char *shortName = NodeDB::lookupShortName(srcId);
-            if (shortName && shortName[0]) {
+            char shortName[NodeDB::MAX_SHORT_NAME + 1];
+            if (NodeDB::lookupShortName(srcId, shortName, sizeof(shortName)) &&
+                shortName[0]) {
                 snprintf(out, outCap, "[MT !%08lx %s]",
                          (unsigned long)srcId, shortName);
             } else {
