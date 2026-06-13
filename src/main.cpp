@@ -36,6 +36,7 @@
 #include "NodeDB.h"
 #include "DedupCache.h"        // content-hash loop/dup guard (replaces marker)
 #include "RouteQueue.h"        // per-destination outbound queue
+#include "VirtualNodeMap.h"    // MC->MT source-identity (virtual MT nodes)
 #include "RegionPreset.h"
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
 #include <esp_mac.h>
@@ -188,6 +189,31 @@ static RouteQueue::Entry   g_txPending[NR];
 #endif
 #ifndef BRIDGE_TX_MIN_GAP_MS
   #define BRIDGE_TX_MIN_GAP_MS    0
+#endif
+
+// --- Source-identity preservation (V8.2-SPEC.md §5) ------------------------
+// Master switch: 1 = a bridged repeat preserves/reconstructs the original
+// sender's identity (MC->MT virtual node, MT->MC name prefix); 0 = the clean-
+// body / bridge-identity behaviour (the redesign default). The flags below are
+// 0/1 literals used in plain `if`s so both code paths always compile and the
+// behaviour is a build-flag flip, never a #ifdef'd-out function.
+#ifndef BRIDGE_IDENTITY_PRESERVE
+  #define BRIDGE_IDENTITY_PRESERVE 1
+#endif
+// 1 = tag the origin protocol so it is explicit after the repeat: "Alice@MT:"
+// on MC, "Alice @MC" in the synthetic MT NodeInfo. 0 = bare name (looks native).
+#ifndef BRIDGE_TAG_ORIGIN_PROTO
+  #define BRIDGE_TAG_ORIGIN_PROTO 1
+#endif
+// MeshCore sender with no parseable "<name>: " prefix (Q3): 0 = fall back to
+// the bridge's own identity (today's behaviour); 1 = a per-channel catch-all
+// virtual node ("MC-<chan>").
+#ifndef BRIDGE_MC_NONAME_VIRTUAL
+  #define BRIDGE_MC_NONAME_VIRTUAL 0
+#endif
+// Longest MeshCore sender name we will parse out of a body prefix.
+#ifndef BRIDGE_MC_NAME_MAX
+  #define BRIDGE_MC_NAME_MAX 32
 #endif
 
 // Resolve one radio's channel into `out` from its protocol (sync word) and
@@ -345,11 +371,82 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
     }
 }
 
+// Parse a leading "<name>: " from a MeshCore group-text body (the MeshCore
+// convention — the sender name rides inside the body since GRP_TXT has no
+// per-sender id field). On success copies the name into nameOut and returns a
+// pointer to the message text after ": "; returns nullptr if there is no
+// plausible name prefix. Best-effort: the convention is not guaranteed on the
+// wire, so a missing/oversized/non-printable prefix simply falls back to
+// no-attribution. (Assumption flagged for bench — V8.2-SPEC §5.3.)
+static const char *parseMcSenderName(const char *body, char *nameOut, size_t cap)
+{
+    if (!body || !nameOut || cap < 2) return nullptr;
+    nameOut[0] = 0;
+    size_t maxScan = (cap - 1 < (size_t)BRIDGE_MC_NAME_MAX)
+                         ? (cap - 1) : (size_t)BRIDGE_MC_NAME_MAX;
+    for (size_t i = 0; i < maxScan; i++) {
+        char c = body[i];
+        if (c == 0) break;
+        if (c == ':' && body[i + 1] == ' ') {
+            if (i == 0) return nullptr;             // empty name
+            memcpy(nameOut, body, i);
+            nameOut[i] = 0;
+            return body + i + 2;                    // message text after ": "
+        }
+        if (i == 0 && c == ' ')   return nullptr;   // leading space — not a name
+        if (c < 0x20 || c > 0x7E) return nullptr;   // non-printable — not a name
+    }
+    return nullptr;
+}
+
+// Build + enqueue a synthetic Meshtastic NodeInfo for a virtual node on the MT
+// destination, so an MT client recognises a bridged MeshCore sender as its own
+// distinct node ("Alice @MC") rather than attributing the text to the bridge
+// (V8.2-SPEC §5.3). Not dedup-recorded: a NodeInfo echo is absorbed by the
+// NodeInfo-upsert path in ingestAndFanout, not re-bridged, so it can't loop.
+static void enqueueVirtualNodeInfo(const RadioChannel &dstChan, int destIdx,
+                                   uint32_t vid, const char *name)
+{
+    char idStr[12];
+    snprintf(idStr, sizeof(idStr), "!%08lx", (unsigned long)vid);
+
+    char longName[NodeDB::MAX_LONG_NAME + 1];
+    if (BRIDGE_TAG_ORIGIN_PROTO)
+        snprintf(longName, sizeof(longName), "%.32s @MC", name);
+    else
+        snprintf(longName, sizeof(longName), "%.39s", name);
+
+    char shortName[NodeDB::MAX_SHORT_NAME + 1];
+    snprintf(shortName, sizeof(shortName), "%.4s", name);
+
+    uint8_t pkt[256];
+    size_t  pktLen = 0;
+    if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
+            dstChan, vid, idStr, longName, shortName, pkt, sizeof(pkt), pktLen)) {
+        if (g_routeQ[destIdx].push(pkt, pktLen))
+            Serial.printf("[%8lu ms][->%s NodeInfo] virtual %s long=\"%s\"\n",
+                          millis(), kTag[destIdx], idStr, longName);
+    } else {
+        Serial.printf("[%8lu ms][->%s NodeInfo] virtual encode failed (%s)\n",
+                      millis(), kTag[destIdx], idStr);
+    }
+}
+
 // Encode `body` for one destination protocol and ENQUEUE it on that
-// destination's RouteQueue (its scheduler CAD-gates + sends). Also records the
+// destination's RouteQueue (its scheduler CAD-gates + sends). Records the
 // emission's content hash so its echo is recognised as a loop — the job the
-// prepended marker used to do, now done by DedupCache with a CLEAN far-side body.
-static void enqueueTextForDest(const RadioChannel &dstChan, int destIdx,
+// prepended marker used to do, now done by DedupCache with a CLEAN far-side
+// body. The source-identity layer (V8.2-SPEC §5) hooks in here for the two
+// cross-protocol directions:
+//   MC -> MT: mint a deterministic virtual MT node from the MC sender name,
+//             advertise its NodeInfo, stamp it as the packet src, strip the
+//             name from the body (identity moves into the MT header).
+//   MT -> MC: prefix the body with the MT sender name ("Alice@MT: ...") since
+//             MeshCore has no header identity field.
+// Same-protocol relays keep the bridge identity here (the raw-repeat /
+// trans-crypt paths that preserve the exact origin land in a later commit).
+static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
+                               const RadioChannel &dstChan, int destIdx,
                                const char *srcTag, const char *body)
 {
     // Destination is Reticulum — log and drop. No RNS encoder yet.
@@ -359,43 +456,90 @@ static void enqueueTextForDest(const RadioChannel &dstChan, int destIdx,
         return;
     }
 
-    uint8_t     outPkt[256];
-    size_t      outLen   = 0;
-    bool        encoded  = false;
-    const char *dstName  = "?";
-    uint32_t    dstSrcId = 0;   // the src we stamp into the re-encoded packet
-    switch (dstChan.protocol) {
-        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC:
-            encoded  = MeshEncoderDebug::encodeMeshtasticText(
-                           dstChan, BridgeConfig::mtNodeId(),
-                           body, outPkt, sizeof(outPkt), outLen);
-            dstName  = "MT";
-            dstSrcId = BridgeConfig::mtNodeId();
-            break;
-        case MeshDecoderDebug::SYNC_WORD_MESHCORE:
-            encoded  = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                           dstChan, body, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
-            dstName  = "MC";
-            dstSrcId = 0;   // MeshCore GRP_TXT has no stable per-sender id
-            break;
-        default:
-            Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
-                          millis(), srcTag, dstChan.protocol);
-            return;
+    const uint8_t srcProto = srcChan.protocol;
+    char          xbody[256];                 // scratch for an attributed body
+    const char   *outBody  = body;            // what we actually encode
+    uint8_t       outPkt[256];
+    size_t        outLen   = 0;
+    bool          encoded  = false;
+    const char   *dstName  = "?";
+    uint32_t      dstSrcId = 0;               // src stamped into the re-encode
+
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+        dstName  = "MT";
+        dstSrcId = BridgeConfig::mtNodeId();  // default: the bridge's identity
+
+        if (BRIDGE_IDENTITY_PRESERVE &&
+            srcProto == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+            // MC -> MT: reconstruct the sender as a virtual MT node.
+            char        name[NodeDB::MAX_LONG_NAME + 1];
+            const char *rest = parseMcSenderName(body, name, sizeof(name));
+            if (rest) {
+                uint32_t vid = VirtualNodeMap::idForLabel(name, BridgeConfig::mtNodeId());
+                if (VirtualNodeMap::nodeInfoDue(vid))
+                    enqueueVirtualNodeInfo(dstChan, destIdx, vid, name);
+                dstSrcId = vid;
+                outBody  = rest;              // name moved into the MT header
+            } else if (BRIDGE_MC_NONAME_VIRTUAL) {
+                // No parseable name -> one catch-all virtual node per channel.
+                char label[40];
+                snprintf(label, sizeof(label), "MC-%s",
+                         srcChan.name[0] ? srcChan.name : "chan");
+                uint32_t vid = VirtualNodeMap::idForLabel(label, BridgeConfig::mtNodeId());
+                if (VirtualNodeMap::nodeInfoDue(vid))
+                    enqueueVirtualNodeInfo(dstChan, destIdx, vid, label);
+                dstSrcId = vid;               // body unchanged (no name to strip)
+            }
+            // else fall back to the bridge identity + full body (today's path)
+        }
+
+        encoded = MeshEncoderDebug::encodeMeshtasticText(
+                      dstChan, dstSrcId, outBody, outPkt, sizeof(outPkt), outLen);
+
+    } else if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        dstName  = "MC";
+        dstSrcId = 0;   // MeshCore GRP_TXT has no stable per-sender id
+
+        if (BRIDGE_IDENTITY_PRESERVE &&
+            srcProto == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
+            // MT -> MC: prefix the MT sender name (the only identity channel MC
+            // offers). NodeDB short_name if known, else the recoverable !hexid.
+            char sname[NodeDB::MAX_SHORT_NAME + 1];
+            char who[24];
+            if (NodeDB::lookupShortName(srcId, sname, sizeof(sname)) && sname[0])
+                snprintf(who, sizeof(who), "%s", sname);
+            else
+                snprintf(who, sizeof(who), "!%08lx", (unsigned long)srcId);
+            if (BRIDGE_TAG_ORIGIN_PROTO)
+                snprintf(xbody, sizeof(xbody), "%s@MT: %s", who, body);
+            else
+                snprintf(xbody, sizeof(xbody), "%s: %s", who, body);
+            outBody = xbody;
+        }
+
+        encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
+                      dstChan, outBody, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+
+    } else {
+        Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
+                      millis(), srcTag, dstChan.protocol);
+        return;
     }
+
     if (!encoded) {
         Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
                       millis(), srcTag, dstName);
         return;
     }
 
-    // Remember our own emission (clean body + stamped src) so the echo is
-    // dropped as a loop, then queue it for the destination's TX scheduler.
+    // Remember our own emission (the body we actually sent + stamped src) so the
+    // echo is dropped as a loop, then queue it for the destination's scheduler.
     DedupCache::record(
-        DedupCache::hash((const uint8_t *)body, strlen(body), dstSrcId));
+        DedupCache::hash((const uint8_t *)outBody, strlen(outBody), dstSrcId));
     if (g_routeQ[destIdx].push(outPkt, outLen)) {
-        Serial.printf("[%8lu ms][%s->%s queued] %u B: \"%s\"\n",
-                      millis(), srcTag, dstName, (unsigned)outLen, body);
+        Serial.printf("[%8lu ms][%s->%s queued] %u B src=0x%08lX: \"%s\"\n",
+                      millis(), srcTag, dstName, (unsigned)outLen,
+                      (unsigned long)dstSrcId, outBody);
     } else {
         Serial.printf("[%8lu ms][%s->%s bridge] queue push failed\n",
                       millis(), srcTag, dstName);
@@ -530,11 +674,13 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         return;
     }
 
-    // Fan the CLEAN body out to every (other) enabled destination's queue.
+    // Fan the body out to every (other) enabled destination's queue. The
+    // identity layer (V8.2-SPEC §5) lives inside enqueueTextForDest, which is
+    // why it takes the source channel + MT src id.
     for (int j = 0; j < NR; j++) {
         if (j == srcIdx) continue;
         if (!g_radioEnabled[j] || !g_radio[j]) continue;
-        enqueueTextForDest(g_chan[j], j, srcTag, body);
+        enqueueTextForDest(srcChan, srcId, g_chan[j], j, srcTag, body);
     }
 }
 
@@ -779,6 +925,7 @@ void setup()
     // backoff from the hardware RNG so co-located bridges don't back off in
     // lock-step.
     DedupCache::begin();
+    VirtualNodeMap::begin();   // MC->MT source-identity (V8.2-SPEC §5.3)
     randomSeed(esp_random());
     for (int i = 0; i < NR; i++) {
         if (g_radioEnabled[i])
