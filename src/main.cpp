@@ -26,6 +26,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include "WioSX1262.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
@@ -216,6 +217,52 @@ static RouteQueue::Entry   g_txPending[NR];
   #define BRIDGE_MC_NAME_MAX 32
 #endif
 
+// ============================================================
+//  Structured serial logging (V8.2-SPEC.md §13)
+//  ----------------------------------------------------------------
+//  A single greppable "ts=<ms> evt=<TAG> radio=<R1|R2> ..." key=val line per
+//  pipeline event, emitted ATOMICALLY under a dedicated mutex so the two
+//  core-pinned radio tasks can't interleave mid-line on the USB console (which
+//  would shred the machine-parseable format). Kept separate from spiMutex so
+//  logging never couples to the SPI critical sections. The heavy hex/protobuf
+//  decoder dump (MeshDecoderDebug::print) stays its own multi-line block,
+//  anchored by the preceding evt=RX line.
+// ============================================================
+static SemaphoreHandle_t logMutex = nullptr;
+
+static void blogf(const char *fmt, ...)
+{
+    char line[300];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (logMutex) xSemaphoreTake(logMutex, portMAX_DELAY);
+    Serial.print(line);
+    if (logMutex) xSemaphoreGive(logMutex);
+}
+
+// Short protocol tag for the proto= field.
+static const char *protoTag(uint8_t sync)
+{
+    switch (sync) {
+        case MeshDecoderDebug::SYNC_WORD_MESHTASTIC: return "MT";
+        case MeshDecoderDebug::SYNC_WORD_MESHCORE:   return "MC";
+        case MeshDecoderDebug::SYNC_WORD_RETICULUM:  return "RNS";
+        default:                                     return "?";
+    }
+}
+
+// Format a node id for a nodeid=/virtualid= field: "!<8hex>" when set, "-" when
+// 0 (MeshCore / RNS have no per-sender id, so a bare 0 would mislead). `buf`
+// must hold >= 10 bytes; returns buf for use as a %s argument.
+static const char *fmtNodeId(uint32_t id, char *buf)
+{
+    if (id) snprintf(buf, 10, "!%08lx", (unsigned long)id);
+    else    { buf[0] = '-'; buf[1] = 0; }
+    return buf;
+}
+
 // Resolve one radio's channel into `out` from its protocol (sync word) and
 // its BridgeConfig channel name/key strings.
 static void resolveRadioChannel(uint8_t syncWord, const char *chName,
@@ -290,28 +337,23 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
         rawPerFrag = BRIDGE_RNS_RAW_PER_FRAG_MC;
         dstName    = "MC";
     } else {
-        Serial.printf("[%8lu ms][%s->RNS-src bridge] unknown dst protocol 0x%02X\n",
-                      millis(), srcTag, dstChan.protocol);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=bad-proto what=rns\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
         return;
     }
 
     // Fragment count + bound check
     size_t totalFrags = (len + rawPerFrag - 1) / rawPerFrag;
     if (totalFrags > BRIDGE_RNS_MAX_FRAGS) {
-        Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B needs %u frags "
-                      "(max %u) — drop\n",
-                      millis(), srcTag, dstName, (unsigned)len,
-                      (unsigned)totalFrags, (unsigned)BRIDGE_RNS_MAX_FRAGS);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=frag-overflow len=%u frags=%u max=%u\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)len,
+              (unsigned)totalFrags, (unsigned)BRIDGE_RNS_MAX_FRAGS);
         return;
     }
 
     // Low byte of CRC-16/CCITT over the raw RNS frame is the sequence ID
     // shared by all fragments of this frame.
     uint8_t seq = (uint8_t)(MeshDecoderDebug::crc16_ccitt(buf, len) & 0xFF);
-
-    Serial.printf("[%8lu ms][%s->%s bridge] RNS %u B -> %u frag(s), seq=%02X\n",
-                  millis(), srcTag, dstName, (unsigned)len,
-                  (unsigned)totalFrags, seq);
 
     for (size_t idx = 0; idx < totalFrags; idx++) {
         size_t rawStart = idx * rawPerFrag;
@@ -323,9 +365,9 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
         int b64rc = mbedtls_base64_encode(b64chunk, sizeof(b64chunk), &b64Len,
                                            buf + rawStart, rawLen);
         if (b64rc != 0) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u base64 fail %d\n",
-                          millis(), srcTag, dstName,
-                          (unsigned)(idx + 1), (unsigned)totalFrags, b64rc);
+            blogf("ts=%lu evt=DROP radio=%s dst=%s drop=b64-fail frag=%u/%u rc=%d\n",
+                  (unsigned long)millis(), srcTag, kTag[destIdx],
+                  (unsigned)(idx + 1), (unsigned)totalFrags, b64rc);
             return;
         }
 
@@ -347,9 +389,9 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
                           dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
         }
         if (!encoded) {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u encode failed\n",
-                          millis(), srcTag, dstName,
-                          (unsigned)(idx + 1), (unsigned)totalFrags);
+            blogf("ts=%lu evt=DROP radio=%s dst=%s drop=encode-fail frag=%u/%u\n",
+                  (unsigned long)millis(), srcTag, kTag[destIdx],
+                  (unsigned)(idx + 1), (unsigned)totalFrags);
             return;
         }
 
@@ -359,14 +401,15 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
         DedupCache::record(
             DedupCache::hash((const uint8_t *)marked, strlen(marked), dstSrcId));
         if (g_routeQ[destIdx].push(outPkt, outLen)) {
-            Serial.printf("[%8lu ms][%s->%s queued] frag %u/%u (%u B): \"%s\"\n",
-                          millis(), srcTag, dstName,
-                          (unsigned)(idx + 1), (unsigned)totalFrags,
-                          (unsigned)outLen, marked);
+            blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=%s frag=%u/%u seq=%02x "
+                  "len=%u qdepth=%u msg=\"%s\"\n",
+                  (unsigned long)millis(), srcTag, kTag[destIdx], dstName,
+                  (unsigned)(idx + 1), (unsigned)totalFrags, seq,
+                  (unsigned)outLen, (unsigned)g_routeQ[destIdx].count(), marked);
         } else {
-            Serial.printf("[%8lu ms][%s->%s bridge] frag %u/%u queue push failed\n",
-                          millis(), srcTag, dstName,
-                          (unsigned)(idx + 1), (unsigned)totalFrags);
+            blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full frag=%u/%u\n",
+                  (unsigned long)millis(), srcTag, kTag[destIdx],
+                  (unsigned)(idx + 1), (unsigned)totalFrags);
         }
     }
 }
@@ -424,11 +467,11 @@ static void enqueueVirtualNodeInfo(const RadioChannel &dstChan, int destIdx,
     if (MeshEncoderDebug::encodeMeshtasticNodeInfo(
             dstChan, vid, idStr, longName, shortName, pkt, sizeof(pkt), pktLen)) {
         if (g_routeQ[destIdx].push(pkt, pktLen))
-            Serial.printf("[%8lu ms][->%s NodeInfo] virtual %s long=\"%s\"\n",
-                          millis(), kTag[destIdx], idStr, longName);
+            blogf("ts=%lu evt=NODEINFO radio=%s op=virtual selfid=%s long=\"%s\"\n",
+                  (unsigned long)millis(), kTag[destIdx], idStr, longName);
     } else {
-        Serial.printf("[%8lu ms][->%s NodeInfo] virtual encode failed (%s)\n",
-                      millis(), kTag[destIdx], idStr);
+        blogf("ts=%lu evt=DROP radio=%s drop=encode-fail what=virt-nodeinfo selfid=%s\n",
+              (unsigned long)millis(), kTag[destIdx], idStr);
     }
 }
 
@@ -451,8 +494,8 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
 {
     // Destination is Reticulum — log and drop. No RNS encoder yet.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
-        Serial.printf("[%8lu ms][%s->RNS bridge] No TX 2 RNS: %s\n",
-                      millis(), srcTag, body);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=no-rns-encoder msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], body);
         return;
     }
 
@@ -521,14 +564,14 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
                       dstChan, outBody, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
 
     } else {
-        Serial.printf("[%8lu ms][%s bridge] unknown dst protocol 0x%02X — drop\n",
-                      millis(), srcTag, dstChan.protocol);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=bad-proto\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
         return;
     }
 
     if (!encoded) {
-        Serial.printf("[%8lu ms][%s->%s bridge] encode failed (body too long?)\n",
-                      millis(), srcTag, dstName);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=encode-fail\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
         return;
     }
 
@@ -536,13 +579,18 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     // echo is dropped as a loop, then queue it for the destination's scheduler.
     DedupCache::record(
         DedupCache::hash((const uint8_t *)outBody, strlen(outBody), dstSrcId));
+    char vbuf[10];
     if (g_routeQ[destIdx].push(outPkt, outLen)) {
-        Serial.printf("[%8lu ms][%s->%s queued] %u B src=0x%08lX: \"%s\"\n",
-                      millis(), srcTag, dstName, (unsigned)outLen,
-                      (unsigned long)dstSrcId, outBody);
+        blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=%s len=%u virtualid=%s "
+              "hout=0x%08lx qdepth=%u qdropped=%lu msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], dstName,
+              (unsigned)outLen, fmtNodeId(dstSrcId, vbuf),
+              (unsigned long)DedupCache::hash((const uint8_t *)outBody, strlen(outBody), dstSrcId),
+              (unsigned)g_routeQ[destIdx].count(),
+              (unsigned long)g_routeQ[destIdx].dropped(), outBody);
     } else {
-        Serial.printf("[%8lu ms][%s->%s bridge] queue push failed\n",
-                      millis(), srcTag, dstName);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
     }
 }
 
@@ -582,8 +630,8 @@ static void rawRepeatForDest(const RadioChannel &dstChan, int destIdx,
         if (srcId == BridgeConfig::mtNodeId()) return;   // never repeat our own
         uint8_t hops = pkt[12] & 0x07;                   // flags[2:0] = hop_limit
         if (hops == 0) {
-            Serial.printf("[%8lu ms][%s->%s repeat] hop_limit=0 — not repeated\n",
-                          millis(), srcTag, kTag[destIdx]);
+            blogf("ts=%lu evt=DROP radio=%s dst=%s drop=hop0\n",
+                  (unsigned long)millis(), srcTag, kTag[destIdx]);
             return;
         }
         pkt[12] = (uint8_t)((pkt[12] & ~0x07) | (hops - 1));   // decrement hops
@@ -591,13 +639,16 @@ static void rawRepeatForDest(const RadioChannel &dstChan, int destIdx,
     }
     // MeshCore: bytes unchanged.
 
+    char vbuf[10];
     if (g_routeQ[destIdx].push(pkt, len)) {
-        Serial.printf("[%8lu ms][%s->%s repeat] %u B raw (src 0x%08lX preserved)\n",
-                      millis(), srcTag, kTag[destIdx], (unsigned)len,
-                      (unsigned long)srcId);
+        blogf("ts=%lu evt=QUEUE radio=%s dst=%s mode=raw len=%u virtualid=%s "
+              "qdepth=%u qdropped=%lu\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)len,
+              fmtNodeId(srcId, vbuf), (unsigned)g_routeQ[destIdx].count(),
+              (unsigned long)g_routeQ[destIdx].dropped());
     } else {
-        Serial.printf("[%8lu ms][%s->%s repeat] queue push failed\n",
-                      millis(), srcTag, kTag[destIdx]);
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full mode=raw\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
     }
 }
 
@@ -612,8 +663,8 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     // RNS source: dedup the raw frame, then fragment to each routed destination.
     if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
         if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
-            Serial.printf("[%8lu ms][%s bridge] loop-drop (RNS dup)\n",
-                          millis(), srcTag);
+            blogf("ts=%lu evt=DROP radio=%s proto=RNS drop=rns-dup\n",
+                  (unsigned long)millis(), srcTag);
             return;
         }
         for (int j = 0; j < NR; j++) {
@@ -638,14 +689,14 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
             // Skip our own NodeInfo bouncing back via a relay (would needlessly
             // rewrite our own ID to NVS on every echo).
             if (niNodeId == BridgeConfig::mtNodeId()) {
-                Serial.printf("[%8lu ms][%s NodeDB] self-echo NodeInfo dropped (!%08lX)\n",
-                              millis(), srcTag, (unsigned long)niNodeId);
+                blogf("ts=%lu evt=DROP radio=%s proto=MT drop=self-echo ni_id=!%08lx\n",
+                      (unsigned long)millis(), srcTag, (unsigned long)niNodeId);
                 return;
             }
             NodeDB::upsert(niNodeId, niShort, niLong);
-            Serial.printf("[%8lu ms][%s NodeDB] upsert !%08lX short=\"%s\" long=\"%s\"\n",
-                          millis(), srcTag,
-                          (unsigned long)niNodeId, niShort, niLong);
+            blogf("ts=%lu evt=NODEDB radio=%s op=upsert ni_id=!%08lx ni_short=\"%s\" ni_long=\"%s\"\n",
+                  (unsigned long)millis(), srcTag,
+                  (unsigned long)niNodeId, niShort, niLong);
             return;     // not a text packet — don't bridge
         }
     }
@@ -722,12 +773,17 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     // Loop/dup guard on the CLEAN body (replaces the old marker check). A hit
     // means a mesh-flood replay, the same packet heard on a second radio, or an
     // echo of one of our own emissions — drop it. See DedupCache.h.
-    if (DedupCache::seenAndRecord(
-            DedupCache::hash((const uint8_t *)body, strlen(body), srcId))) {
-        Serial.printf("[%8lu ms][%s bridge] loop-drop (dup): \"%s\"\n",
-                      millis(), srcTag, body);
+    char idbuf[10];
+    uint32_t hin = DedupCache::hash((const uint8_t *)body, strlen(body), srcId);
+    if (DedupCache::seenAndRecord(hin)) {
+        blogf("ts=%lu evt=DROP radio=%s proto=%s drop=loop-dup nodeid=%s hin=0x%08lx msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, protoTag(srcChan.protocol),
+              fmtNodeId(srcId, idbuf), (unsigned long)hin, body);
         return;
     }
+    blogf("ts=%lu evt=DEDUP_PASS radio=%s proto=%s nodeid=%s hin=0x%08lx msg=\"%s\"\n",
+          (unsigned long)millis(), srcTag, protoTag(srcChan.protocol),
+          fmtNodeId(srcId, idbuf), (unsigned long)hin, body);
 
     // Fan out to every (other) enabled destination. Per destination:
     //   - SAME channel (same protocol+hash+key, different frequency) -> a
@@ -805,9 +861,9 @@ void radioTask(void *pvParameters)
             if (done || timedOut) {
                 self->finishTransmit();          // cleanup + return to RX
                 g_txBusy[i] = false;
-                if (timedOut && !done)
-                    Serial.printf("[%8lu ms][%s TX] done-timeout — recovered\n",
-                                  millis(), tag);
+                blogf("ts=%lu evt=TX_DONE radio=%s result=%s\n",
+                      (unsigned long)millis(), tag,
+                      (timedOut && !done) ? "timeout-recovered" : "done");
             }
             vTaskDelay(pdMS_TO_TICKS(BRIDGE_POLL_MS));
             continue;   // radio is mid-TX (deaf) — nothing else to do
@@ -820,12 +876,14 @@ void radioTask(void *pvParameters)
             int16_t state = self->read(buf, len, &rssi, &snr);
             if (state == RADIOLIB_ERR_NONE && len > 0) {
                 self->startReceive();            // back to listening BEFORE decode
-                Serial.printf("[%8lu ms][%s RX] %u bytes  RSSI %.1f dBm  SNR %.1f dB\n",
-                              millis(), tag, (unsigned)len, rssi, snr);
+                blogf("ts=%lu evt=RX radio=%s proto=%s len=%u rssi=%.1f snr=%.1f\n",
+                      (unsigned long)millis(), tag, protoTag(g_chan[i].protocol),
+                      (unsigned)len, rssi, snr);
                 MeshDecoderDebug::print(buf, len, g_chan[i], tag);
                 ingestAndFanout(i, buf, len);
             } else if (state != RADIOLIB_ERR_NONE) {
-                Serial.printf("[%8lu ms][%s RX] ERROR %d\n", millis(), tag, state);
+                blogf("ts=%lu evt=DROP radio=%s drop=rx-error rc=%d\n",
+                      (unsigned long)millis(), tag, state);
                 self->startReceive();
             }
         }
@@ -839,11 +897,12 @@ void radioTask(void *pvParameters)
                     BridgeConfig::mtNodeIdStr(), BridgeConfig::mtLongName(),
                     BridgeConfig::mtShortName(), niPkt, sizeof(niPkt), niLen)) {
                 if (g_routeQ[i].push(niPkt, niLen))
-                    Serial.printf("[%8lu ms][%s NodeInfo] queued %u B id=%s\n",
-                                  millis(), tag, (unsigned)niLen,
-                                  BridgeConfig::mtNodeIdStr());
+                    blogf("ts=%lu evt=NODEINFO radio=%s op=mint selfid=%s len=%u\n",
+                          (unsigned long)millis(), tag,
+                          BridgeConfig::mtNodeIdStr(), (unsigned)niLen);
             } else {
-                Serial.printf("[%8lu ms][%s NodeInfo] encode failed\n", millis(), tag);
+                blogf("ts=%lu evt=DROP radio=%s drop=encode-fail what=nodeinfo\n",
+                      (unsigned long)millis(), tag);
             }
             nextNodeInfoMs = millis() + 300000;   // every 5 min
         }
@@ -861,10 +920,12 @@ void radioTask(void *pvParameters)
             int16_t cad = self->scanChannel();
             if (cad == RADIOLIB_LORA_DETECTED) {
                 // Busy: random CSMA backoff, stay in RX, keep the pending job.
-                g_txBackoffUntil[i] = millis() +
-                    (uint32_t)random(BRIDGE_CAD_BACKOFF_MIN_MS,
-                                     BRIDGE_CAD_BACKOFF_MAX_MS + 1);
+                uint32_t bo = (uint32_t)random(BRIDGE_CAD_BACKOFF_MIN_MS,
+                                               BRIDGE_CAD_BACKOFF_MAX_MS + 1);
+                g_txBackoffUntil[i] = millis() + bo;
                 self->startReceive();
+                blogf("ts=%lu evt=CAD radio=%s cad=busy backoff=%lu\n",
+                      (unsigned long)millis(), tag, (unsigned long)bo);
             } else {
                 size_t  txLen = g_txPending[i].len;
                 int16_t txs = self->startTransmit(g_txPending[i].data, txLen);
@@ -872,6 +933,8 @@ void radioTask(void *pvParameters)
                     g_txBusy[i]         = true;
                     g_txStartMs[i]      = millis();
                     g_txPendingValid[i] = false;
+                    blogf("ts=%lu evt=TX_START radio=%s cad=clear len=%u rc=0\n",
+                          (unsigned long)millis(), tag, (unsigned)txLen);
                     // Airtime throttle: hold this radio off the air until its
                     // own duty cycle is back under the ceiling.
                     uint32_t air = estimateAirtimeMs(
@@ -886,9 +949,12 @@ void radioTask(void *pvParameters)
                     if (gap < air + BRIDGE_TX_MIN_GAP_MS)
                         gap = air + BRIDGE_TX_MIN_GAP_MS;
                     g_nextTxAllowedMs[i] = g_txStartMs[i] + gap;
+                    blogf("ts=%lu evt=THROTTLE radio=%s air=%lu gap=%lu nexttx=%lu\n",
+                          (unsigned long)millis(), tag, (unsigned long)air,
+                          (unsigned long)gap, (unsigned long)g_nextTxAllowedMs[i]);
                 } else {
-                    Serial.printf("[%8lu ms][%s TX] startTransmit failed %d — dropped\n",
-                                  millis(), tag, txs);
+                    blogf("ts=%lu evt=DROP radio=%s drop=tx-startfail rc=%d\n",
+                          (unsigned long)millis(), tag, txs);
                     g_txPendingValid[i] = false;
                     self->startReceive();
                 }
@@ -907,6 +973,10 @@ void setup()
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
+
+    // Serialises whole log lines across the two core-pinned radio tasks (§13).
+    // Created first so every later blogf() is atomic.
+    logMutex = xSemaphoreCreateMutex();
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
