@@ -351,6 +351,19 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
   #define BRIDGE_RNS_INPROTO_REPEAT    1
 #endif
 
+// LoRaWAN (sync 0x34) keyless feature toggles (V8.3-SPEC §5/§6/§7). v8.3 reads
+// only the cleartext PHY header — no key material, no FRMPayload decrypt, no
+// inject into LoRaWAN. Override via -D build flags.
+#ifndef BRIDGE_LW_CAPTURE
+  #define BRIDGE_LW_CAPTURE          1   // log evt=RX proto=LW header metadata
+#endif
+#ifndef BRIDGE_LW_SUMMARY_TO_MESH
+  #define BRIDGE_LW_SUMMARY_TO_MESH  1   // also emit a metadata summary to MT/MC (LW-Q2)
+#endif
+#ifndef BRIDGE_LW_RELAY
+  #define BRIDGE_LW_RELAY            1   // transparent raw repeat to other 0x34 radios
+#endif
+
 // Per-fragment raw-byte budgets, derived from:
 //   max on-air packet sizes: MC = 184 B, MT = 200 B (conservative).
 //   prefix overhead "[rns AA X/Y] " = 13 chars.
@@ -542,6 +555,15 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     // Destination is Reticulum — log and drop. No RNS encoder yet.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
         blogf("ts=%lu evt=DROP radio=%s dst=%s drop=no-rns-encoder msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], body);
+        return;
+    }
+
+    // Destination is LoRaWAN — log and drop. Keyless v8.3 cannot inject content
+    // into LoRaWAN (needs each device's keys + monotonic FCnt + MIC); MT/MC -> LW
+    // encode is deferred to v8.4+ (V8.3-SPEC §10).
+    if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=no-lw-encoder msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, kTag[destIdx], body);
         return;
     }
@@ -739,6 +761,69 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
             else
                 enqueueReticulumForDest(g_chan[j], j, srcTag, buf, len);
         }
+        return;
+    }
+
+    // LoRaWAN source (sync 0x34, keyless): capture the cleartext header, optionally
+    // summarize it to the MT/MC meshes, and transparently relay the raw frame to any
+    // other LoRaWAN radio. No payload decrypt (no keys); MT/MC -> LoRaWAN has no
+    // keyless inject (see enqueueTextForDest's 0x34 dest drop). Loop-safe: the
+    // raw-frame dedup recorded here drops a relayed echo, and enqueueTextForDest
+    // records each summary emission so its echo is dropped too. V8.3-SPEC §5/§6/§7.
+    if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
+        if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
+            blogf("ts=%lu evt=DROP radio=%s proto=LW drop=lw-dup\n",
+                  (unsigned long)millis(), srcTag);
+            return;
+        }
+        MeshDecoderDebug::LoRaWANMeta lw;
+        bool parsed = MeshDecoderDebug::extractLoRaWANMeta(buf, len, lw);
+#if BRIDGE_LW_CAPTURE
+        if (parsed)
+            blogf("ts=%lu evt=RX radio=%s proto=LW mtype=%s devaddr=0x%08lx "
+                  "fcnt=%u fport=%d len=%u\n",
+                  (unsigned long)millis(), srcTag,
+                  MeshDecoderDebug::loraWanMtypeName(lw.mtype),
+                  (unsigned long)lw.devAddr, (unsigned)lw.fcnt,
+                  lw.hasFport ? (int)lw.fport : -1, (unsigned)len);
+        else
+            blogf("ts=%lu evt=RX radio=%s proto=LW parse=fail len=%u\n",
+                  (unsigned long)millis(), srcTag, (unsigned)len);
+#endif
+#if BRIDGE_LW_SUMMARY_TO_MESH
+        if (parsed) {
+            char sum[160];
+            if (lw.isJoinReq)
+                snprintf(sum, sizeof(sum), "LoRaWAN JoinReq DevEUI %08lx%08lx",
+                         (unsigned long)(lw.devEui >> 32),
+                         (unsigned long)(lw.devEui & 0xFFFFFFFFul));
+            else if (lw.isData)
+                snprintf(sum, sizeof(sum),
+                         "LoRaWAN %s DevAddr 0x%08lx FCnt %u FPort %d len %u",
+                         MeshDecoderDebug::loraWanMtypeName(lw.mtype),
+                         (unsigned long)lw.devAddr, (unsigned)lw.fcnt,
+                         lw.hasFport ? (int)lw.fport : -1, (unsigned)len);
+            else
+                snprintf(sum, sizeof(sum), "LoRaWAN %s len %u",
+                         MeshDecoderDebug::loraWanMtypeName(lw.mtype), (unsigned)len);
+            for (int j = 0; j < NR; j++) {
+                if (j == srcIdx) continue;
+                if (!g_radioEnabled[j] || !g_radio[j]) continue;
+                uint8_t dp = g_chan[j].protocol;
+                if (dp == MeshDecoderDebug::SYNC_WORD_MESHTASTIC ||
+                    dp == MeshDecoderDebug::SYNC_WORD_MESHCORE)
+                    enqueueTextForDest(srcChan, /*srcId=*/0, g_chan[j], j, srcTag, sum);
+            }
+        }
+#endif
+#if BRIDGE_LW_RELAY
+        for (int j = 0; j < NR; j++) {
+            if (j == srcIdx) continue;
+            if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (g_chan[j].protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN)
+                rawRepeatForDest(g_chan[j], j, srcTag, /*srcId=*/0, buf, len);
+        }
+#endif
         return;
     }
 
