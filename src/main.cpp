@@ -341,6 +341,15 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
   #define BRIDGE_RNS_MAX_FRAGS         8
 #endif
 
+// In-protocol RNS -> RNS transparent raw repeat (1 = on). When both radios run
+// Reticulum, an inbound RNS frame is re-transmitted byte-for-byte on the other
+// radio (range-extension / sub-band bridge) instead of being dropped; RNS
+// Transport on the end nodes handles hop limits and network-level dedup. Set 0
+// to restore the pre-v8.3 behaviour where RNS only ever tunnels to MT/MC.
+#ifndef BRIDGE_RNS_INPROTO_REPEAT
+  #define BRIDGE_RNS_INPROTO_REPEAT    1
+#endif
+
 // Per-fragment raw-byte budgets, derived from:
 //   max on-air packet sizes: MC = 184 B, MT = 200 B (conservative).
 //   prefix overhead "[rns AA X/Y] " = 13 chars.
@@ -704,7 +713,9 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     const RadioChannel &srcChan = g_chan[srcIdx];
     const char         *srcTag  = kTag[srcIdx];
 
-    // RNS source: dedup the raw frame, then fragment to each routed destination.
+    // RNS source: dedup the raw frame, then route to each destination — a
+    // transparent raw repeat for an in-protocol RNS destination, or the base64
+    // fragment tunnel for an MT/MC destination.
     if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM) {
         if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
             blogf("ts=%lu evt=DROP radio=%s proto=RNS drop=rns-dup\n",
@@ -714,7 +725,18 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         for (int j = 0; j < NR; j++) {
             if (j == srcIdx) continue;
             if (!g_radioEnabled[j] || !g_radio[j]) continue;
-            enqueueReticulumForDest(g_chan[j], j, srcTag, buf, len);
+            // In-protocol RNS -> RNS is a transparent raw repeat (V8.2-SPEC §5.1
+            // same-channel model, extended to Reticulum): re-transmit the
+            // PHYPayload byte-for-byte so the far side sees the original frame
+            // natively and RNS Transport handles hops/dedup at the network
+            // layer. Loop-safe with no extra record — the raw-frame dedup above
+            // already catches our own echo on the way back in. The cross-protocol
+            // RNS -> MT/MC path stays the base64 fragment tunnel.
+            if (BRIDGE_RNS_INPROTO_REPEAT &&
+                g_chan[j].protocol == MeshDecoderDebug::SYNC_WORD_RETICULUM)
+                rawRepeatForDest(g_chan[j], j, srcTag, /*srcId=*/0, buf, len);
+            else
+                enqueueReticulumForDest(g_chan[j], j, srcTag, buf, len);
         }
         return;
     }
