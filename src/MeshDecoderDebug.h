@@ -935,6 +935,110 @@ inline bool reassembleReticulumFragment(const char * /*body*/,
 }
 
 
+// --- LoRaWAN (sync 0x34) cleartext PHY header decoder -----------------------
+// LoRaWAN application payloads are AES-encrypted per device; WITHOUT the device's
+// session keys only the cleartext MAC header is readable. This parses that header
+// for the v8.3 capture tap. No FRMPayload decrypt (no keys), no MIC check.
+//   PHYPayload = MHDR(1) | MACPayload | MIC(4)
+//   MHDR: MType = bits[7:5], Major = bits[1:0]
+//   Data (MType 2..5): FHDR | [FPort] | [FRMPayload]
+//     FHDR = DevAddr(4 LE) | FCtrl(1) | FCnt(2 LE) | FOpts(0..15)   FOptsLen=FCtrl&0x0F
+//   JoinRequest (MType 0): JoinEUI(8 LE) | DevEUI(8 LE) | DevNonce(2 LE)
+// Verified against LoRaWAN L2 1.0.x/1.1 (V8.3-SPEC §5).
+static const char *loraWanMtypeName(uint8_t mtype) {
+    switch (mtype) {
+        case 0: return "JoinRequest";
+        case 1: return "JoinAccept";
+        case 2: return "UnconfDataUp";
+        case 3: return "UnconfDataDown";
+        case 4: return "ConfDataUp";
+        case 5: return "ConfDataDown";
+        case 6: return "RejoinRequest";
+        case 7: return "Proprietary";
+        default: return "?";
+    }
+}
+
+struct LoRaWANMeta {
+    uint8_t  mtype;
+    bool     isData;        // MType in {2,3,4,5}
+    bool     isJoinReq;     // MType == 0
+    uint32_t devAddr;       // data frames (host order; decoded from 4 LE bytes)
+    uint8_t  fctrl;
+    uint16_t fcnt;          // low 16 bits of the frame counter (LE)
+    bool     hasFport;
+    uint8_t  fport;
+    uint16_t frmPayloadLen; // encrypted payload length (not decoded)
+    uint64_t joinEui;       // join request (LE)
+    uint64_t devEui;        // join request (LE)
+};
+
+// Parse the cleartext header. Returns false only when the frame is too short to
+// hold the claimed structure; mtype is always set when len >= 1.
+inline bool extractLoRaWANMeta(const uint8_t *buf, size_t len, LoRaWANMeta &out) {
+    out = {};
+    if (len < 1) return false;
+    out.mtype     = (buf[0] >> 5) & 0x07;
+    out.isData    = (out.mtype >= 2 && out.mtype <= 5);
+    out.isJoinReq = (out.mtype == 0);
+
+    if (out.isData) {
+        // MHDR(1)+DevAddr(4)+FCtrl(1)+FCnt(2)+MIC(4) = 12 bytes minimum.
+        if (len < 12) return false;
+        out.devAddr = (uint32_t)buf[1] | ((uint32_t)buf[2] << 8)
+                    | ((uint32_t)buf[3] << 16) | ((uint32_t)buf[4] << 24);
+        out.fctrl = buf[5];
+        out.fcnt  = (uint16_t)buf[6] | ((uint16_t)buf[7] << 8);
+        uint8_t foptsLen = out.fctrl & 0x0F;
+        size_t  fhdrEnd  = 8 + (size_t)foptsLen;   // first byte after FHDR
+        if (fhdrEnd + 4 > len) return false;        // FOpts overruns into the MIC
+        size_t afterFhdr = len - 4 - fhdrEnd;       // [FPort] + [FRMPayload] bytes
+        if (afterFhdr >= 1) {
+            out.hasFport      = true;
+            out.fport         = buf[fhdrEnd];
+            out.frmPayloadLen = (uint16_t)(afterFhdr - 1);
+        }
+        return true;
+    }
+    if (out.isJoinReq) {
+        // MHDR(1)+JoinEUI(8)+DevEUI(8)+DevNonce(2)+MIC(4) = 23 bytes.
+        if (len < 23) return false;
+        for (int i = 0; i < 8; i++) out.joinEui |= (uint64_t)buf[1 + i] << (8 * i);
+        for (int i = 0; i < 8; i++) out.devEui  |= (uint64_t)buf[9 + i] << (8 * i);
+        return true;
+    }
+    // JoinAccept / Rejoin / Proprietary: opaque without keys; report only mtype.
+    return (len >= 5);   // MHDR + MIC at minimum
+}
+
+inline void printLoRaWAN(const uint8_t *buf, size_t len,
+                         const RadioChannel & /*ch*/, const char *tag) {
+    LoRaWANMeta m;
+    if (!extractLoRaWANMeta(buf, len, m)) {
+        Serial.printf("[%8lu ms][%s decoded] LoRaWAN (sync 0x34) unparseable len=%u\n",
+                      millis(), tag, (unsigned)len);
+        return;
+    }
+    if (m.isJoinReq) {
+        Serial.printf("[%8lu ms][%s decoded] LoRaWAN %s JoinEUI=%08lx%08lx "
+                      "DevEUI=%08lx%08lx len=%u\n",
+                      millis(), tag, loraWanMtypeName(m.mtype),
+                      (unsigned long)(m.joinEui >> 32), (unsigned long)(m.joinEui & 0xFFFFFFFFul),
+                      (unsigned long)(m.devEui  >> 32), (unsigned long)(m.devEui  & 0xFFFFFFFFul),
+                      (unsigned)len);
+    } else if (m.isData) {
+        Serial.printf("[%8lu ms][%s decoded] LoRaWAN %s DevAddr=0x%08lx FCtrl=0x%02X "
+                      "FCnt=%u FPort=%d FRMlen=%u len=%u\n",
+                      millis(), tag, loraWanMtypeName(m.mtype),
+                      (unsigned long)m.devAddr, m.fctrl, (unsigned)m.fcnt,
+                      m.hasFport ? (int)m.fport : -1, (unsigned)m.frmPayloadLen, (unsigned)len);
+    } else {
+        Serial.printf("[%8lu ms][%s decoded] LoRaWAN %s (encrypted/opaque) len=%u\n",
+                      millis(), tag, loraWanMtypeName(m.mtype), (unsigned)len);
+    }
+}
+
+
 // --- Public entry point: dispatch by the radio's protocol -------------------
 inline void print(const uint8_t *buf, size_t len,
                    const RadioChannel &ch, const char *tag) {
@@ -944,6 +1048,8 @@ inline void print(const uint8_t *buf, size_t len,
         printMeshtastic(buf, len, ch, tag);
     } else if (ch.protocol == SYNC_WORD_RETICULUM) {
         printReticulum(buf, len, tag);
+    } else if (ch.protocol == SYNC_WORD_LORAWAN) {
+        printLoRaWAN(buf, len, ch, tag);
     }
     // Other protocols: silently ignore — we don't know that protocol.
 }
