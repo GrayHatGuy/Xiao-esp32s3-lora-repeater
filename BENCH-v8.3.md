@@ -530,3 +530,38 @@ converting COM6 into the generator.
   identity to MAC-derived (COM13 stays `!1de9dc80`) and clears the NodeDB. Revert
   a board to a normal bridge with `pio run -e xiao_esp32s3 -t erase --upload-port
   COMx` + upload.
+
+---
+
+## G. Bench results — 2026-06-14 (real hardware: 3 bridges COM6/13/14 + 2 MT + 2 MC)
+
+**Verdict: ALL `must` tests PASS → v8.3 is release-ready.** Branch `v8.3-dev` @ `fa3e8bf`.
+
+| Test | Pri | Result | Evidence (verbatim `evt=` lines) |
+|---|---|---|---|
+| SETUP-01..03, R0 | must | ✅ | boot banner `(v8.2)`, `[Radio1-B2B]/[Radio2-Edge] ready —`, `[RouteQueue:*] depth=64`, `Bridge active.` |
+| LW-RX (gate) | must | ✅ | `evt=RX radio=R1 proto=LW len=15` + structured capture |
+| LW-DATA/JOIN/FAIL/SUMMARY | must | ✅ | `mtype=UnconfDataUp/ConfDataUp(fport=-1)/JoinRequest/parse=fail`; summary `dstproto=MT virtualid=!b16b00b5` |
+| LW-MT→LW | must | ✅ | `drop=no-lw-encoder` |
+| LW-LOOP / LW-RELAY (+multibridge) | should | ✅ | `drop=lw-dup`; `mode=raw` → COM14 byte-identical |
+| C1 MT-POSITION clock-learn | must | ✅ | `evt=CLOCK src=MT unix=1781467783` |
+| **C2 / D1 — RNS↔RNS raw repeat** | must | ✅ | `evt=QUEUE radio=R1 dst=R2 mode=raw len=15 virtualid=-` → R2 `TX_DONE` → `drop=rns-dup`; **byte-identical**: COM14 3rd-RX `[R2 decoded] Reticulum/RNode raw 15 B (b64=20): QIofASYAAQACqrsRIjNE` == source |
+| **D2 — RNS→MC tunnel** | should | ✅ | `evt=QUEUE radio=R1 dst=R2 dstproto=MC frag=1/1 seq=18 len=53 msg="[rns 18 1/1] QIofASYAAQACqrsRIjNE"` → R2 `TX_DONE`; repeated to MeshCore |
+| **D3 — MC→RNS drop** | should | ✅ | `evt=RX radio=R2 proto=MC` → `evt=DROP radio=R2 dst=R1 drop=no-rns-encoder msg="9506C57C: MC sent"`; no R1 TX (+ bonus `evt=CLOCK src=MC`) |
+| R1/R2/R3/R4 + R6/R7 | must/should | ✅ | MT→MC `@MT` prefix; MC→MT `op=virtual long="… @MC"`; `drop=loop-dup`; `bat 5.00V` + `drop=self-echo`; `CAD cad=busy backoff∈20..120`; `THROTTLE gap=2×air` |
+| **R9 — do-no-harm** | must | ✅ | sustained mixed MT/MC load → **zero** `proto=LW` / `no-lw-encoder` / `lw-dup` |
+
+**OPEN — `should`/optional, NONE gating the tag:**
+- **R5** same-channel MT raw-repeat — real MT node available; needs both DUT radios on the IDENTICAL MT
+  channel/PSK (captive portal, or a new `bench_mt_samechan` env). Self-guard is satisfied by a real node's
+  own src id (≠ bridge `0xB16B00B5`).
+- **R8** RX-priority headline (long TX on one radio, burst RX on the other).
+- **Pass D** flag toggles LW-CAP0/SUM0/RELAY0 — all five `bench_lw_*`/`bench_rns*` envs compile green.
+- **LW-FLOOD** bidirectional multi-bridge — one-way relay PASS; the symmetric echo-drop needs COM14 a
+  `bench_lw_relayA`-mirror (R1=903.9 / R2=904.6), since `bench_lw_dutB` has only one LoRaWAN radio.
+
+> **Correction to §C/§D notes:** the RNS raw-repeat QUEUE renders `virtualid=-` (srcId 0 → `-`, `fmtNodeId`
+> main.cpp:262-263). The RNS→MC tunnel QUEUE carries `dstproto=MC frag=%u/%u seq=%02x … msg="[rns %02X …]"`
+> (main.cpp:464-468). Byte-identity of an RNS repeat is provable from a 3rd RX bridge's `[Rn decoded]
+> Reticulum/RNode … (b64=…)` base64 line (MeshDecoderDebug.h:885-890) — the documented "needs a 3rd RX
+> radio" gap is closed by COM14.
