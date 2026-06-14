@@ -44,6 +44,9 @@
 #define PIN_BUSY    40
 #define PIN_ANT_SW  38           // external antenna switch: HIGH = TX path
 #define PIN_BOOT    0            // BOOT button (active low)
+// Radio 2 shares this SPI bus. Its chip-select MUST be parked HIGH before we
+// probe Radio 1, or Radio 2 drives MISO and Radio 1 reads as not-found (rc=-2).
+#define PIN_R2_NSS  5            // Radio 2 chip-select (edge header) — park HIGH
 
 // Same Module wiring + SPI settings the bridge uses (WioSX1262.cpp).
 SX1262 radio = new Module(PIN_NSS, PIN_DIO1, PIN_RST, PIN_BUSY, SPI,
@@ -83,6 +86,10 @@ void setup() {
   delay(300);
   pinMode(PIN_ANT_SW, OUTPUT); digitalWrite(PIN_ANT_SW, LOW);
   pinMode(PIN_BOOT, INPUT_PULLUP);
+  // Park Radio 2's CS HIGH so it stays off the shared SPI bus while we probe
+  // Radio 1 (mirrors the bridge's WioSX1262 constructor; without it, begin()
+  // returns rc=-2 RADIOLIB_ERR_CHIP_NOT_FOUND).
+  pinMode(PIN_R2_NSS, OUTPUT); digitalWrite(PIN_R2_NSS, HIGH);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_NSS);
 
   Serial.println("\n=== lw-frame-gen — LoRaWAN 0x34 test-frame generator ===");
