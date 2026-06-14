@@ -567,18 +567,23 @@ inline bool extractMeshtasticNodeInfo(const uint8_t *buf, size_t len,
 
 
 // --- Meshtastic POSITION_APP (portnum 3) decoder ----------------------------
-// Pulls latitude_i (field 1, sfixed32), longitude_i (field 2, sfixed32) and
-// altitude (field 3, int32 varint) out of the Position submessage. The
-// "_i" coordinates are stored as integer degrees * 1e7; callers divide by
-// 1e7 when formatting. Returns false unless portnum == 3 AND at least one
-// of lat/lon/alt was present.
+// Pulls latitude_i (field 1, sfixed32), longitude_i (field 2, sfixed32),
+// altitude (field 3, int32 varint) and a Unix timestamp (field 4 `time` /
+// field 7 `timestamp`, both fixed32, seconds since 1970) out of the Position
+// submessage. The "_i" coordinates are stored as integer degrees * 1e7;
+// callers divide by 1e7 when formatting. Returns false unless portnum == 3
+// AND at least one of lat/lon/alt was present (a coords-less position is not
+// bridged); `timeUnix`/`hasTime` are still populated when present so the
+// caller can learn wall-clock from a position that also carries coordinates.
 struct MeshtasticPositionInfo {
-    bool    hasLat;
-    bool    hasLon;
-    bool    hasAlt;
-    int32_t latI;       // latitude  * 1e7   (e.g. 407234567 -> 40.7234567 N)
-    int32_t lonI;       // longitude * 1e7
-    int32_t altM;       // altitude in metres
+    bool     hasLat;
+    bool     hasLon;
+    bool     hasAlt;
+    bool     hasTime;    // Position.time (f4) or .timestamp (f7) was present
+    int32_t  latI;       // latitude  * 1e7   (e.g. 407234567 -> 40.7234567 N)
+    int32_t  lonI;       // longitude * 1e7
+    int32_t  altM;       // altitude in metres
+    uint32_t timeUnix;   // Unix seconds; f4 `time` preferred over f7 `timestamp`
 };
 
 inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
@@ -661,11 +666,20 @@ inline bool extractMeshtasticPosition(const uint8_t *buf, size_t len,
         } else if (field == 3 && wt == 0) {     // altitude, int32 varint
             uint64_t v; if (!pbVarint(payload, payloadLen, p, v)) return false;
             out.altM = (int32_t)v; out.hasAlt = true;
+        } else if (field == 4 && wt == 5) {     // time, fixed32 (Unix seconds)
+            uint32_t v; if (!pbReadFixed32(payload, payloadLen, p, v)) return false;
+            out.timeUnix = v; out.hasTime = true;          // f4 is authoritative
+        } else if (field == 7 && wt == 5 && !out.hasTime) { // timestamp (GPS fix)
+            uint32_t v; if (!pbReadFixed32(payload, payloadLen, p, v)) return false;
+            out.timeUnix = v; out.hasTime = true;          // f7 fallback only
         } else {
             if (!pbSkip(payload, payloadLen, p, wt)) return false;
         }
     }
 
+    // hasTime is intentionally NOT part of the return gate: a position with no
+    // coordinates is not worth bridging as a "pos" line, but the caller still
+    // reads timeUnix off a coord-bearing position to calibrate the wall-clock.
     return out.hasLat || out.hasLon || out.hasAlt;
 }
 

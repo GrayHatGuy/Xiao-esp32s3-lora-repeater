@@ -265,34 +265,38 @@ static const char *fmtNodeId(uint32_t id, char *buf)
 
 // ---- Bridge wall-clock estimate (for outbound MeshCore timestamps) ---------
 // The bridge has no RTC/NTP (WiFi only comes up for the portal), so it learns
-// the current Unix time from inbound MeshCore packets — which carry a ts field —
-// and stamps that (+ elapsed millis) onto outbound MC packets. Otherwise MC
-// clients render the bridged message as 1969 (ts=0). volatile: written by the
-// MC radio task, read by the other radio's task; display-only, so a rare torn
-// read merely mis-stamps one message's time.
-static volatile uint32_t g_mcClockUnix   = 0;   // last plausible MC Unix ts seen
-static volatile uint32_t g_mcClockMillis = 0;   // millis() when it was captured
+// the current Unix time opportunistically from any inbound protocol that carries
+// a plausible timestamp — MeshCore GRP_TXT ts and Meshtastic POSITION_APP
+// (Position.time field 4 / .timestamp field 7) — and stamps that (+ elapsed
+// millis) onto outbound MC packets. Otherwise MC clients render the bridged
+// message as 1969 (ts=0). volatile: written by either radio task, read by the
+// other; display-only, so a rare torn read merely mis-stamps one message's time.
+static volatile uint32_t g_clockUnix   = 0;   // last plausible Unix ts learned
+static volatile uint32_t g_clockMillis = 0;   // millis() when it was captured
 
-// Learn the wall-clock from a decoded MeshCore ts. Ignores implausible values
-// (0 / pre-2017) so a clockless MC sender can't poison the estimate. Logs once,
-// when the clock is first calibrated (the useful event); silent refresh after.
-static inline void learnClockFromMc(uint32_t mcTs) {
-    if (mcTs <= 1500000000u) return;
-    bool first = (g_mcClockUnix == 0);
-    g_mcClockUnix   = mcTs;
-    g_mcClockMillis = millis();
+// Learn the wall-clock from a decoded packet timestamp. Ignores implausible
+// values (0 / pre-2017) so a clockless sender can't poison the estimate. Logs
+// once, when the clock is first calibrated (the useful event); silent after.
+// `src` is the protocol tag for the one-time CLOCK log (MC / MT).
+static inline void learnClock(uint32_t ts, const char *src) {
+    if (ts <= 1500000000u) return;
+    bool first = (g_clockUnix == 0);
+    g_clockUnix   = ts;
+    g_clockMillis = millis();
     if (first)
-        blogf("ts=%lu evt=CLOCK src=MC unix=%lu (calibrated — MC TX now timestamped)\n",
-              (unsigned long)millis(), (unsigned long)mcTs);
+        blogf("ts=%lu evt=CLOCK src=%s unix=%lu (calibrated — MC TX now timestamped)\n",
+              (unsigned long)millis(), src, (unsigned long)ts);
 }
+static inline void learnClockFromMc(uint32_t mcTs) { learnClock(mcTs, "MC"); }
+static inline void learnClockFromMt(uint32_t mtTs) { learnClock(mtTs, "MT"); }
 
-// Best estimate of the current Unix time, or 0 if none learned yet (then a
-// freshly-booted bridge that hasn't heard MC traffic still stamps 0 until it
-// calibrates from the first timestamped MC packet).
+// Best estimate of the current Unix time, or 0 if none learned yet (a freshly
+// booted bridge that hasn't yet heard a timestamped MC packet or an MT position
+// still stamps 0 until the first calibration).
 static uint32_t bridgeNowUnix() {
-    uint32_t base = g_mcClockUnix;
+    uint32_t base = g_clockUnix;
     if (!base) return 0;
-    return base + (millis() - g_mcClockMillis) / 1000u;
+    return base + (millis() - g_clockMillis) / 1000u;
 }
 
 // Resolve one radio's channel into `out` from its protocol (sync word) and
@@ -761,6 +765,10 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         if (!decoded && BridgeConfig::positionEnabled()) {
             MeshDecoderDebug::MeshtasticPositionInfo pos;
             if (MeshDecoderDebug::extractMeshtasticPosition(buf, len, srcChan, pos)) {
+                // Opportunistically calibrate the bridge wall-clock from the
+                // POSITION time field — closes the cold-boot window where MT->MC
+                // stamps 1969 until the first timestamped MeshCore packet arrives.
+                if (pos.hasTime) learnClockFromMt(pos.timeUnix);
                 int n = snprintf(body, sizeof(body), "pos");
                 if (pos.hasLat && pos.hasLon) {
                     n += snprintf(body + n, sizeof(body) - n, " %.4f,%.4f",
