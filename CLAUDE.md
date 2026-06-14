@@ -68,6 +68,25 @@ option = learn from Meshtastic `POSITION_APP` time field.
   - §15.2 cosmetic: the legacy `MeshDecoderDebug::print` hex-dump isn't under the log mutex, so it can
     interleave across cores; the structured `evt=` lines are unaffected.
 
+## ⏳ v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs (IN PROGRESS)
+
+Branch `v8.3-dev` off `main` @ `9723309`. **Not pushed; `main` untouched. Owner bench gates the tag.**
+Design of record: `V8.3-SPEC.md` (DRAFT for the LoRaWAN parts; open questions LW-Q1..Q5).
+
+- **DONE (build-green, awaiting bench):**
+  - `9499804` **POSITION clock-learn** — the v8.2.1 follow-up. MT `POSITION_APP` `Position.time`
+    (f4) / `.timestamp` (f7) now calibrates the bridge wall-clock, closing the cold-boot 1969 window.
+    Clock helpers generalized (`g_mcClock*` → `g_clock*`, `learnClock(ts,src)`).
+  - `e337afd` **RNS → RNS transparent repeat** — audit fix: in-protocol Reticulum was silently
+    dropped (`enqueueReticulumForDest` early-returned for an RNS dest). Now routed through
+    `rawRepeatForDest` like the v8.2 MC/MT same-channel raw repeat; gated `BRIDGE_RNS_INPROTO_REPEAT=1`.
+- **SPEC-ONLY (awaiting owner approval, no code):** LoRaWAN (sync `0x34`) **keyless** — metadata
+  capture tap + transparent LW↔LW raw relay (Tasmota-style) + dedup-bounded flood "mesh". Reuses the
+  v8.2 `DedupCache`/`RouteQueue`/CAD/`rawRepeatForDest` machinery (same shape as RNS→RNS). No keys,
+  no `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis.
+- **DEFERRED → v8.4+ (task list in V8.3-SPEC §10):** ABP/OTAA key-based **decode** (my fleet → MT/MC)
+  and **encode** (MT/MC → LoRaWAN); Reticulum `MT/MC → RNS` encoder + reassembly.
+
 ## Phase status
 
 - **Phase 0 (v8.1)** — ✅ Shipped. Dual-SX1262 multi-protocol bridge. The contest deliverable.
