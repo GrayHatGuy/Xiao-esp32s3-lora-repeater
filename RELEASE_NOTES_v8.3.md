@@ -1,12 +1,6 @@
 # v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs
 
-> ⚠️ **DRAFT — do not publish until v8.3 is tagged.** Before release:
-> 1. Complete or knowingly accept the open bench items (Reticulum D1–D3; optional Pass D) — see `BENCH-v8.3.md` and the session handoff.
-> 2. ff-merge `v8.3-dev` → `main`, create the annotated tag `v8.3`, push `main`+tag.
-> 3. Build the merged `.bin`s (esptool merge_bin, qio/80m/8MB) from the bench-verified firmware.
-> 4. Replace the `…/tree/v8.3-dev` / placeholder links below with the `v8.3` tag.
-
-Builds on [v8.2.1 (MeshCore timestamp fix)](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.2.1). Adds a keyless **LoRaWAN (LoRa sync `0x34`)** protocol plus two carry-over fixes. Bench-validated on hardware 2026-06-14 (LoRaWAN feature + both clock-learn paths; Reticulum RNS↔RNS code-verified, on-air bench in the 8.3.x patch).
+Builds on [v8.2.1 (MeshCore timestamp fix)](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.2.1). Adds a keyless **LoRaWAN (LoRa sync `0x34`)** protocol plus two carry-over fixes. **Bench-validated on hardware 2026-06-14:** the full LoRaWAN feature set, both clock-learn paths, and the complete Reticulum block — RNS↔RNS raw repeat (byte-identical), RNS→MeshCore tunnel, and MC/MT→RNS log-and-drop — all verified on air, plus the v8.2 routing regression set (do-no-harm confirmed: MT/MC traffic never enters the LoRaWAN path).
 
 ## New — LoRaWAN (sync `0x34`), keyless
 Select **LoRaWAN** for either radio in the captive portal. The bridge operates only on the **cleartext PHY frame** — no keys, no payload decryption:
