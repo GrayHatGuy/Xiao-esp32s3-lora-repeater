@@ -30,7 +30,7 @@ tagged or released.**
     like the Tasmota model.
   - `MT/MC → LoRaWAN` is a deliberate log-and-drop (`no-lw-encoder`): keyless
     firmware cannot inject content into LoRaWAN.
-  - **Deferred to v8.4+:** ABP/OTAA key-based decode of one's own devices
+  - **Deferred to v8.3+:** ABP/OTAA key-based decode of one's own devices
     (→ MT/MC) and `MT/MC → LoRaWAN` encode.
 
 ## v8.2.1 — MeshCore timestamp fix
