@@ -1,5 +1,27 @@
 # Changelog
 
+## v8.2.1 — MeshCore timestamp fix
+
+**Patch — bench-verified 2026-06-13.** `MT→MC` (and `RNS→MC`) bridged messages
+hardcoded the MeshCore `GRP_TXT` Unix timestamp to 0, so MeshCore clients showed
+them as 1969-12-31. (`MC→MT` was unaffected — Meshtastic clients timestamp on
+receipt.)
+
+The bridge has no RTC/NTP, so it now **learns wall-clock time from inbound
+MeshCore packets** (which carry a Unix `ts`) and stamps that estimate (+ elapsed
+uptime) onto outbound MeshCore packets. Verified on air: an inbound MC packet
+(`ts=1781399207`) calibrated the clock and the next `MT→MC` bridge stamped the
+real current time (`mcts=1781399220`) instead of 0.
+
+- `extractMeshCoreBody()` gains an optional `tsOut`; `learnClockFromMc()` +
+  `bridgeNowUnix()` added in `main.cpp`; the stamped value is surfaced as
+  `mcts=` on the `QUEUE` log line, with a one-time `evt=CLOCK` when first
+  calibrated.
+- **Known:** until the bridge hears its first timestamped MC packet after boot
+  it still stamps 0 (then self-calibrates within seconds on a live mesh) —
+  inherent without an RTC. A future option is to also learn time from Meshtastic
+  `POSITION_APP` (which carries a Unix `time` field).
+
 ## v8.2 — RX-priority routing + source-identity preservation
 
 **Status: bench-verified on hardware 2026-06-13 (branch `v8.2-router-backport`);
