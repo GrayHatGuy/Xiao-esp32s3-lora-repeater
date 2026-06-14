@@ -42,6 +42,7 @@ enum Protocol : uint8_t {
     PROTO_MC     = 2,   // MeshCore     (sync 0x12)
     PROTO_RNS    = 3,   // Reticulum    (sync 0x42)
     PROTO_CUSTOM = 4,   // user-entered RF; decoder derived from sync word
+    PROTO_LORAWAN = 5,  // LoRaWAN      (sync 0x34) — keyless capture/relay/mesh (v8.3)
 };
 
 // Global device region — governs the sub-GHz band. A 2.4 GHz radio is

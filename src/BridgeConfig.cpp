@@ -169,6 +169,7 @@ static uint8_t protocolFromSync(uint8_t sync) {
     if (sync == 0x2B) return PROTO_MT;
     if (sync == 0x12) return PROTO_MC;
     if (sync == 0x42) return PROTO_RNS;
+    if (sync == 0x34) return PROTO_LORAWAN;
     return PROTO_CUSTOM;
 }
 

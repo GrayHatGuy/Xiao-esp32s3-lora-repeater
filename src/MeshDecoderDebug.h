@@ -32,6 +32,7 @@ namespace MeshDecoderDebug {
 static constexpr uint8_t SYNC_WORD_MESHCORE   = 0x12;
 static constexpr uint8_t SYNC_WORD_MESHTASTIC = 0x2B;
 static constexpr uint8_t SYNC_WORD_RETICULUM  = 0x42;   // RNode / Reticulum Network Suite
+static constexpr uint8_t SYNC_WORD_LORAWAN    = 0x34;   // LoRaWAN public sync (SX126x prog. value 0x3444)
 
 // Channel state is per-radio (v2): every decoder takes a `const RadioChannel&`
 // — resolved at boot for each radio slot — and reads ch.key / ch.keyLen /

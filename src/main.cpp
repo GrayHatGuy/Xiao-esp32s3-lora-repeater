@@ -249,6 +249,7 @@ static const char *protoTag(uint8_t sync)
         case MeshDecoderDebug::SYNC_WORD_MESHTASTIC: return "MT";
         case MeshDecoderDebug::SYNC_WORD_MESHCORE:   return "MC";
         case MeshDecoderDebug::SYNC_WORD_RETICULUM:  return "RNS";
+        case MeshDecoderDebug::SYNC_WORD_LORAWAN:    return "LW";
         default:                                     return "?";
     }
 }
