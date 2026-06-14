@@ -476,3 +476,42 @@ ts=<t3> evt=TX_DONE radio=<X> result=done
 - **R5/R10** require reconfiguring both radios (same-MT-channel / RNS); not part of the default profile.
 - **CLAUDE.md lists COM6** as the standard monitor port; this protocol uses **COM13** per the task spec. Adjust the `--port` if the DUT enumerates elsewhere.
 - **MeshCore has no on-air per-message id**, so identical MC text within the TTL is dedup-collapsed (accepted v8.2 limitation) — vary the body in R3/R4 if testing distinct MC sends.
+
+---
+
+## F. Appendix — this bench: 3 bridges (COM6/13/14) + 2 MT + 2 MC, RNS deferred
+
+A bridge **cannot originate** a `0x34` frame (`MT/MC→LW` is dropped; the relay
+only re-transmits a *received* frame), so a dedicated **LoRaWAN frame generator**
+is required — flash [`tools/lw-frame-gen/`](tools/lw-frame-gen/) onto one bridge
+(reflash bridge firmware afterward). RNS (`C2`) is deferred (no Reticulum gear);
+when ready, the same generator on **sync `0x42`** covers it — RNS is not
+decrypted, so any ≥1-byte `0x42` payload works, no Reticulum stack needed.
+
+**Roles**
+
+| Device | Role | Config |
+|---|---|---|
+| **COM6** | LoRaWAN frame generator | flash `tools/lw-frame-gen/` (1=U 2=U2 3=D 4=J 5=C) |
+| **COM13** | DUT-A (primary, `!1de9dc80`) | every test |
+| **COM14** | DUT-B (secondary) | relay/flood only (Pass C) |
+| 2× MT, 2× MC | mesh stimulus | regression (R1–R9), C1, LW-MT→LW |
+
+**Frequency plan** (US915; clear of MT 906.875 / MC 910.525). All LoRaWAN radios
+BW125 / SF7 / CR5 / sync `0x34` (auto) / no key:
+- **freqA = 904.6 MHz** — generator → DUT-A R1
+- **freqB = 903.9 MHz** — DUT-A R2 relay-out → DUT-B R1
+
+**Passes** (portal reconfig between them; only Pass D reflashes the DUT):
+
+| Pass | DUT config | Tests | Stimulus |
+|---|---|---|---|
+| **A** Regression + clock | DUT-A `P-DEFAULT` (R1=MT, R2=MC→match your MC devices) | R0–R9, C1 | 2 MT + 2 MC. R5 uses both MT on one MT channel/2 freqs; C1 = cold-boot DUT-A, MC silent, one MT broadcasts POSITION w/ time |
+| **B** Capture/summary/drop | DUT-A R1=LoRaWAN@904.6, R2=MT | LW-RX (gate), LW-DATA/JOIN/FAIL/SUMMARY, LW-MT→LW, LW-LOOP | generator @904.6; one MT device for LW-MT→LW |
+| **C** Relay + flood | DUT-A R1=LoRaWAN@904.6 + R2=LoRaWAN@903.9; DUT-B R1=LoRaWAN@903.9 | LW-RELAY (byte-identical on DUT-B), LW-FLOOD | generator @904.6 |
+| **D** Flag toggles | rebuild DUT-A with each `-DBRIDGE_LW_*=0` | LW-CAP0/SUM0/RELAY0 | generator @904.6 |
+
+The generator's `GEN_*` build flags (`tools/lw-frame-gen/platformio.ini`) **must
+match the DUT's LoRaWAN radio exactly**; defaults are freqA / BW125 / SF7 / CR5 /
+20 dBm. Do a quick `SETUP-01..03` boot check on all three bridges before
+converting COM6 into the generator.
