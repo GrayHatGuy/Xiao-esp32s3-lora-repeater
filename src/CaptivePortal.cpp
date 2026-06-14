@@ -144,6 +144,7 @@ static void appendRadio(String &page, int n) {
         { BridgeConfig::PROTO_MT,     "Meshtastic" },
         { BridgeConfig::PROTO_MC,     "MeshCore"   },
         { BridgeConfig::PROTO_RNS,    "Reticulum"  },
+        { BridgeConfig::PROTO_LORAWAN,"LoRaWAN"    },
         { BridgeConfig::PROTO_CUSTOM, "Custom"     },
         { BridgeConfig::PROTO_NONE,   "None (disable radio)" },
     };
@@ -180,7 +181,7 @@ static void appendRadio(String &page, int n) {
     // Channel name (MT/MC/RNS/Custom).
     page += F("<div class=\"r");
     page += n;
-    page += F("fld mt mc rns custom\"><label>Channel name</label>"
+    page += F("fld mt mc rns custom lw\"><label>Channel name</label>"
               "<input type=\"text\" id=\"r");
     page += n;
     page += F("name\" name=\"r");
@@ -204,7 +205,7 @@ static void appendRadio(String &page, int n) {
     snprintf(buf, sizeof(buf), "%.3f", freq);
     page += F("<div class=\"r");
     page += n;
-    page += F("fld mt mc rns custom\"><label>Frequency (MHz)</label>"
+    page += F("fld mt mc rns custom lw\"><label>Frequency (MHz)</label>"
               "<input type=\"text\" id=\"r");
     page += n;
     page += F("freq\" name=\"r");
@@ -218,7 +219,7 @@ static void appendRadio(String &page, int n) {
     // TX power (all active protocols).
     page += F("<div class=\"r");
     page += n;
-    page += F("fld mt mc rns custom\"><label>TX power (dBm)</label>"
+    page += F("fld mt mc rns custom lw\"><label>TX power (dBm)</label>"
               "<input type=\"text\" name=\"r");
     page += n;
     page += F("Tx\" value=\"");
@@ -241,7 +242,7 @@ static void appendRadio(String &page, int n) {
     // MeshCore network you are bridging or nothing decodes.
     page += F("<div class=\"r");
     page += n;
-    page += F("fld custom mc\">");
+    page += F("fld custom mc lw\">");
     page += F("<div class=\"hint\">MeshCore: set these to match your local "
               "MeshCore community's exact LoRa settings.</div>");
 
@@ -326,7 +327,7 @@ static void appendScript(String &page) {
         "PC[n-1]=fs;"
         "fh.textContent=lbl+': '+fs+(ff.value!==fs?' \\u2014 overridden':'');}"
       "function upd(n){var p=gv('r'+n+'proto');"
-        "var tok={'1':'mt','2':'mc','3':'rns','4':'custom','0':'none'}[p];"
+        "var tok={'1':'mt','2':'mc','3':'rns','4':'custom','5':'lw','0':'none'}[p];"
         "var fl=document.querySelectorAll('.r'+n+'fld');"
         "for(var i=0;i<fl.length;i++){"
           "var sh=(p!=='0')&&fl[i].classList.contains(tok);"
@@ -338,6 +339,8 @@ static void appendScript(String &page) {
           "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}"
         "else if(p==='2'){fh.textContent="
           "'MeshCore: enter the exact frequency your community uses.';}"
+        "else if(p==='5'){fh.textContent="
+          "'LoRaWAN: enter the exact channel frequency + SF your devices use.';}"
         "else{fh.textContent='';}}"
       "function updAll(){upd(1);upd(2);}"
       "window.addEventListener('load',updAll);"
@@ -439,6 +442,7 @@ static uint8_t syncForProtocol(uint8_t proto) {
     if (proto == BridgeConfig::PROTO_MT)  return 0x2B;
     if (proto == BridgeConfig::PROTO_MC)  return 0x12;
     if (proto == BridgeConfig::PROTO_RNS) return 0x42;
+    if (proto == BridgeConfig::PROTO_LORAWAN) return 0x34;
     return 0x00;
 }
 
@@ -474,7 +478,8 @@ static const char *applyRadio(int n, uint8_t region) {
 
     // BW/SF/CR are read from the form for Custom AND MeshCore (MeshCore has
     // no universal presets — community-specific RF).
-    if (proto == BridgeConfig::PROTO_CUSTOM || proto == BridgeConfig::PROTO_MC) {
+    if (proto == BridgeConfig::PROTO_CUSTOM || proto == BridgeConfig::PROTO_MC ||
+        proto == BridgeConfig::PROTO_LORAWAN) {
         bw = s_http.arg(String("r") + n + "Bw").toFloat();
         sf = (uint8_t)s_http.arg(String("r") + n + "Sf").toInt();
         cr = (uint8_t)s_http.arg(String("r") + n + "Cr").toInt();
@@ -510,6 +515,11 @@ static const char *applyRadio(int n, uint8_t region) {
             return "MeshCore channel name cannot be empty.";
         if (!isHexString(chKey, 32))
             return "MeshCore channel key must be exactly 32 hex characters.";
+    } else if (proto == BridgeConfig::PROTO_LORAWAN) {
+        // Keyless: sync fixed at the LoRaWAN public value; BW/SF/CR were read
+        // above; no channel key. Channel name is an optional display label.
+        sync  = 0x34;
+        chKey = "";
     } else {                                  // Reticulum
         sync = 0x42;
         bw = 250.0f; sf = 11; cr = 5;
