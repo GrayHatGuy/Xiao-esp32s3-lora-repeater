@@ -95,6 +95,10 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 5. **Clean + build.** `pio run -t clean && pio run` — the clean is important whenever a header changes.
 6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
 7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
+
+   <p align="center"><img src="images/captive-portal.png" alt="Captive-portal configuration form served at LoRa-Bridge-XX @ 192.168.4.1" width="360"></p>
+   <p align="center"><em>The captive-portal config form (region, per-radio protocol/RF/channel, identity, toggles).</em></p>
+
 8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
 ## Routing & protocol support (current functionality)
