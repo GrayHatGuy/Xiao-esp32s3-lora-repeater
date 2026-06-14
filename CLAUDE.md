@@ -71,8 +71,8 @@ option = learn from Meshtastic `POSITION_APP` time field.
 ## ✅ v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs (SHIPPED 2026-06-14)
 
 **SHIPPED 2026-06-14.** ff-merged `v8.3-dev` → `main` @ `6c92cf4`; annotated tag **`v8.3`** pushed to origin
-(clean fast-forward, no force-push). GitHub release **drafted** (notes + `vanilla-factory` + `app` bins) —
-**pending owner publish** (`v8.2.1` stays GitHub Latest until then). All `must` bench tests passed on hardware
+(clean fast-forward, no force-push). GitHub release **PUBLISHED as Latest** 2026-06-14 (notes + `vanilla-factory`
++ `app` bins): https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3 . All `must` bench tests passed on hardware
 (LoRaWAN, both clock-learn paths, full Reticulum block, v8.2 routing regression incl. R9 do-no-harm). Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED, LW-Q1..Q5 resolved). Bench protocol:
 `BENCH-v8.3.md`. All commits build green (`pio run -e xiao_esp32s3`, Flash ~24.6%). Bench rig: 3× Xiao
 bridges on **COM6/COM13/COM14** + 2 MT + 2 MC; LoRaWAN/RNS stimulus = `tools/lw-frame-gen/` flashed on a
