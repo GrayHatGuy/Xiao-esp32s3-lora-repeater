@@ -68,32 +68,46 @@ option = learn from Meshtastic `POSITION_APP` time field.
   - §15.2 cosmetic: the legacy `MeshDecoderDebug::print` hex-dump isn't under the log mutex, so it can
     interleave across cores; the structured `evt=` lines are unaffected.
 
-## ⏳ v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs (IN PROGRESS)
+## ⏳ v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs (IMPLEMENTED; bench ~done, awaiting tag)
 
-Branch `v8.3-dev` off `main` @ `9723309`. **Not pushed; `main` untouched. Owner bench gates the tag.**
-Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED; LW-Q1..Q5 resolved 2026-06-13). All
-commits build green (`pio run -e xiao_esp32s3`, Flash ~24.6%). **The v8.3 work lives on `v8.3-dev`;
-the folder may be checked out on `main` — `git checkout v8.3-dev` to see it.**
+Branch `v8.3-dev` off `main` @ `9723309` — **19 commits ahead, NOT pushed, `main` untouched, no `v8.3`
+tag yet.** Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED, LW-Q1..Q5 resolved). Bench protocol:
+`BENCH-v8.3.md`. All commits build green (`pio run -e xiao_esp32s3`, Flash ~24.6%). Bench rig: 3× Xiao
+bridges on **COM6/COM13/COM14** + 2 MT + 2 MC; LoRaWAN/RNS stimulus = `tools/lw-frame-gen/` flashed on a
+spare bridge (COM6). **The v8.3 folder may be checked out on `main` or a `bench_*` env —
+`git checkout v8.3-dev` to see the source.**
 
-- **IMPLEMENTED (build-green, awaiting bench):**
-  - `9499804` **POSITION clock-learn** — the v8.2.1 follow-up. MT `POSITION_APP` `Position.time`
-    (f4) / `.timestamp` (f7) now calibrates the bridge wall-clock, closing the cold-boot 1969 window.
-    Clock helpers generalized (`g_mcClock*` → `g_clock*`, `learnClock(ts,src)`).
-  - `e337afd` **RNS → RNS transparent repeat** — audit fix: in-protocol Reticulum was silently
-    dropped (`enqueueReticulumForDest` early-returned for an RNS dest). Now routed through
-    `rawRepeatForDest` like the v8.2 MC/MT same-channel raw repeat; gated `BRIDGE_RNS_INPROTO_REPEAT=1`.
-  - **LoRaWAN (sync `0x34`) keyless** (`39f432e` address space → `63c6cac` decoder → `e2fb434`
-    RX pipeline → `dfe7da4` portal): a new `LoRaWAN` per-radio protocol. Metadata **capture tap**
-    (cleartext MAC header → `evt=RX proto=LW`), **summary to MT/MC** (`BRIDGE_LW_SUMMARY_TO_MESH=1`),
-    **transparent LW↔LW raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`, via `rawRepeatForDest`
-    — same shape as RNS→RNS). `MT/MC → LoRaWAN` = log-and-drop `no-lw-encoder`. No keys, no
-    `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis. Single-channel per radio (Tasmota-style).
-- **Adversarial review (build-green):** 5-dimension multi-agent review (26 agents) of the
-  `main..v8.3-dev` diff raised 21 findings → **2 confirmed (both cosmetic nits, fixed), 19 refuted**;
-  LoRaWAN parser bounds-math, loop-safety/dedup, the `g_mcClock*`→`g_clock*` rename, and the portal
-  validator were all independently verified clean. No functional bugs.
-- **DEFERRED → v8.3+ (task list in V8.3-SPEC §10):** ABP/OTAA key-based **decode** (my fleet → MT/MC)
-  and **encode** (MT/MC → LoRaWAN); Reticulum `MT/MC → RNS` encoder + reassembly.
+### Implemented (all build-green)
+- `9499804` **POSITION clock-learn** (v8.2.1 follow-up): MT `POSITION_APP` `Position.time` (f4)/`.timestamp`
+  (f7) calibrates the wall-clock. `g_mcClock*`→`g_clock*`, `learnClock(ts,src)`.
+- `e337afd` **RNS→RNS transparent repeat** (audit fix): in-protocol RNS was silently dropped; now uses
+  `rawRepeatForDest`, gated `BRIDGE_RNS_INPROTO_REPEAT=1`.
+- **LoRaWAN (sync `0x34`) keyless** (`39f432e`→`63c6cac`→`e2fb434`→`dfe7da4`): new `LoRaWAN` per-radio
+  protocol — capture tap (`evt=RX proto=LW`), summary→MT/MC (`BRIDGE_LW_SUMMARY_TO_MESH=1`), transparent
+  LW↔LW raw relay / dedup-bounded flood (`BRIDGE_LW_RELAY`), `MT/MC→LW` = `no-lw-encoder` drop. No keys, no
+  `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis. Single-channel per radio (Tasmota-style).
+- `5f03e55` review nits fixed (26-agent adversarial review: 21 raised → 2 cosmetic, 19 refuted; no functional bugs).
+- **Bench tooling:** `tools/lw-frame-gen/` generator (LoRaWAN `0x34` default + `[env:rns]` for `0x42`);
+  bench envs `bench_lw_dutA/dutB/relayA`, `bench_rns`, `bench_rns_relay`, `bench_lw_nocap/nosum/norelay` —
+  all carry `BRIDGE_BENCH_AUTOSAVE` (`41b4dc6`) so an erased bench board boots configured, **no captive portal**.
+
+### Bench results — real hardware, 2026-06-14 (detail in BENCH-v8.3.md)
+- **PASSED on air:** LW-RX (gate; SX126x `0x34`→`0x3444` proven), LW-DATA (Unconf/Conf/FPort±), LW-JOIN,
+  LW-FAIL, LW-SUMMARY (seen on MeshCore app), LW-LOOP+TTL, LW-MT→LW drop, **LW-RELAY + multi-bridge**
+  (COM13→COM14, byte-identical), MC clock-learn, **C1 MT-POSITION clock-learn** (`evt=CLOCK src=MT
+  unix=1781467783`), regression R1/R2/R3/R4 + R6/R7 (CAD/throttle seen incidentally).
+- **OPEN (envs+generator ready, no portal needed):** Pass D flag toggles (optional); Reticulum **D1**
+  RNS↔RNS, **D2** RNS→MC tunnel, **D3** MC→RNS drop (owner-deferred, but gear-free via the `rns` generator);
+  regression **R5** same-channel raw-repeat (needs both radios on the IDENTICAL MT channel/PSK), R8/R9 (owner skipped — unaffected by v8.3).
+
+### Deferred → v8.3+ (likely an 8.3.1 patch; V8.3-SPEC §10)
+ABP/OTAA key-based **decode** (own fleet → MT/MC/custom) and **encode** (MT/MC → LoRaWAN); Reticulum
+`MT/MC → RNS` encoder + reassembly (today MT/MC→RNS is a clean log-and-drop).
+
+### To tag v8.3 (owner-gated outbound)
+Finish/skip the OPEN bench items, then: ff-merge `v8.3-dev`→`main`, annotated tag `v8.3`, push `main`+tag,
+draft GitHub release notes + bins for owner review. **NEVER force-push `main`.** RNS↔RNS + the deferred
+items can ship code-verified with full on-air bench in the 8.3.x patch, per owner's framing.
 
 ## Phase status
 
