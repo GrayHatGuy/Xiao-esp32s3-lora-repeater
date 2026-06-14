@@ -243,8 +243,9 @@ static void appendRadio(String &page, int n) {
     page += F("<div class=\"r");
     page += n;
     page += F("fld custom mc lw\">");
-    page += F("<div class=\"hint\">MeshCore: set these to match your local "
-              "MeshCore community's exact LoRa settings.</div>");
+    page += F("<div class=\"hint\">Set BW/SF/CR to match the exact LoRa settings of "
+              "the network you are bridging (MeshCore: your community's; "
+              "LoRaWAN: your channel's).</div>");
 
     page += F("<label>Bandwidth (kHz)</label><input type=\"text\" name=\"r");
     page += n;

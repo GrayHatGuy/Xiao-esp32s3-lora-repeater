@@ -1030,7 +1030,7 @@ inline void printLoRaWAN(const uint8_t *buf, size_t len,
         Serial.printf("[%8lu ms][%s decoded] LoRaWAN %s DevAddr=0x%08lx FCtrl=0x%02X "
                       "FCnt=%u FPort=%d FRMlen=%u len=%u\n",
                       millis(), tag, loraWanMtypeName(m.mtype),
-                      (unsigned long)m.devAddr, m.fctrl, (unsigned)m.fcnt,
+                      (unsigned long)m.devAddr, (unsigned)m.fctrl, (unsigned)m.fcnt,
                       m.hasFport ? (int)m.fport : -1, (unsigned)m.frmPayloadLen, (unsigned)len);
     } else {
         Serial.printf("[%8lu ms][%s decoded] LoRaWAN %s (encrypted/opaque) len=%u\n",

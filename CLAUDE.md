@@ -88,6 +88,10 @@ the folder may be checked out on `main` — `git checkout v8.3-dev` to see it.**
     **transparent LW↔LW raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`, via `rawRepeatForDest`
     — same shape as RNS→RNS). `MT/MC → LoRaWAN` = log-and-drop `no-lw-encoder`. No keys, no
     `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis. Single-channel per radio (Tasmota-style).
+- **Adversarial review (build-green):** 5-dimension multi-agent review (26 agents) of the
+  `main..v8.3-dev` diff raised 21 findings → **2 confirmed (both cosmetic nits, fixed), 19 refuted**;
+  LoRaWAN parser bounds-math, loop-safety/dedup, the `g_mcClock*`→`g_clock*` rename, and the portal
+  validator were all independently verified clean. No functional bugs.
 - **DEFERRED → v8.4+ (task list in V8.3-SPEC §10):** ABP/OTAA key-based **decode** (my fleet → MT/MC)
   and **encode** (MT/MC → LoRaWAN); Reticulum `MT/MC → RNS` encoder + reassembly.
 
