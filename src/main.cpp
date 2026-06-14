@@ -263,6 +263,38 @@ static const char *fmtNodeId(uint32_t id, char *buf)
     return buf;
 }
 
+// ---- Bridge wall-clock estimate (for outbound MeshCore timestamps) ---------
+// The bridge has no RTC/NTP (WiFi only comes up for the portal), so it learns
+// the current Unix time from inbound MeshCore packets — which carry a ts field —
+// and stamps that (+ elapsed millis) onto outbound MC packets. Otherwise MC
+// clients render the bridged message as 1969 (ts=0). volatile: written by the
+// MC radio task, read by the other radio's task; display-only, so a rare torn
+// read merely mis-stamps one message's time.
+static volatile uint32_t g_mcClockUnix   = 0;   // last plausible MC Unix ts seen
+static volatile uint32_t g_mcClockMillis = 0;   // millis() when it was captured
+
+// Learn the wall-clock from a decoded MeshCore ts. Ignores implausible values
+// (0 / pre-2017) so a clockless MC sender can't poison the estimate. Logs once,
+// when the clock is first calibrated (the useful event); silent refresh after.
+static inline void learnClockFromMc(uint32_t mcTs) {
+    if (mcTs <= 1500000000u) return;
+    bool first = (g_mcClockUnix == 0);
+    g_mcClockUnix   = mcTs;
+    g_mcClockMillis = millis();
+    if (first)
+        blogf("ts=%lu evt=CLOCK src=MC unix=%lu (calibrated — MC TX now timestamped)\n",
+              (unsigned long)millis(), (unsigned long)mcTs);
+}
+
+// Best estimate of the current Unix time, or 0 if none learned yet (then a
+// freshly-booted bridge that hasn't heard MC traffic still stamps 0 until it
+// calibrates from the first timestamped MC packet).
+static uint32_t bridgeNowUnix() {
+    uint32_t base = g_mcClockUnix;
+    if (!base) return 0;
+    return base + (millis() - g_mcClockMillis) / 1000u;
+}
+
 // Resolve one radio's channel into `out` from its protocol (sync word) and
 // its BridgeConfig channel name/key strings.
 static void resolveRadioChannel(uint8_t syncWord, const char *chName,
@@ -387,7 +419,7 @@ static void enqueueReticulumForDest(const RadioChannel &dstChan, int destIdx,
                           marked, outPkt, sizeof(outPkt), outLen, &emitPid);
         } else {
             encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                          dstChan, marked, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+                          dstChan, marked, /*ts=*/bridgeNowUnix(), outPkt, sizeof(outPkt), outLen);
         }
         if (!encoded) {
             blogf("ts=%lu evt=DROP radio=%s dst=%s drop=encode-fail frag=%u/%u\n",
@@ -509,6 +541,7 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     const char   *dstName  = "?";
     uint32_t      dstSrcId = 0;               // src stamped into the re-encode
     uint32_t      emitPid  = 0;               // MT pid we stamp (0 for MC); §15.1
+    uint32_t      mcStampTs = 0;              // Unix ts stamped on MC encodes (ts-fix)
 
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHTASTIC) {
         dstName  = "MT";
@@ -563,8 +596,9 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
             outBody = xbody;
         }
 
+        mcStampTs = bridgeNowUnix();          // learned wall-clock (0 if uncalibrated)
         encoded = MeshEncoderDebug::encodeMeshCoreGrpTxt(
-                      dstChan, outBody, /*ts=*/0, outPkt, sizeof(outPkt), outLen);
+                      dstChan, outBody, /*ts=*/mcStampTs, outPkt, sizeof(outPkt), outLen);
 
     } else {
         blogf("ts=%lu evt=DROP radio=%s dst=%s drop=bad-proto\n",
@@ -587,12 +621,13 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     char vbuf[10];
     if (g_routeQ[destIdx].push(outPkt, outLen)) {
         blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=%s len=%u virtualid=%s "
-              "hout=0x%08lx qdepth=%u qdropped=%lu msg=\"%s\"\n",
+              "hout=0x%08lx qdepth=%u qdropped=%lu mcts=%lu msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, kTag[destIdx], dstName,
               (unsigned)outLen, fmtNodeId(dstSrcId, vbuf),
               (unsigned long)hout,
               (unsigned)g_routeQ[destIdx].count(),
-              (unsigned long)g_routeQ[destIdx].dropped(), outBody);
+              (unsigned long)g_routeQ[destIdx].dropped(),
+              (unsigned long)mcStampTs, outBody);
     } else {
         blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
               (unsigned long)millis(), srcTag, kTag[destIdx]);
@@ -772,8 +807,10 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
                 buf, len, srcChan, body, sizeof(body));
         }
     } else if (srcChan.protocol == MeshDecoderDebug::SYNC_WORD_MESHCORE) {
+        uint32_t mcTs = 0;
         decoded = MeshDecoderDebug::extractMeshCoreBody(
-            buf, len, srcChan, body, sizeof(body));
+            buf, len, srcChan, body, sizeof(body), &mcTs);
+        if (decoded) learnClockFromMc(mcTs);   // learn wall-clock for MC TX ts
     } else {
         return;
     }

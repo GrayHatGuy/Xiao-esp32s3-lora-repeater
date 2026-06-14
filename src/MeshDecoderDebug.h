@@ -316,9 +316,14 @@ inline bool printMeshtastic(const uint8_t *buf, size_t len,
 // and returns true iff a text body was successfully extracted. Non-text
 // portnums, wrong-channel packets, and decrypt failures return false.
 
+// tsOut (optional): set to the GRP_TXT plaintext Unix timestamp ([ts:4 LE] at
+// the head of the decrypted block). The bridge uses it to learn wall-clock time
+// from inbound MeshCore traffic (it has no RTC/NTP) so it can stamp a sane ts on
+// outbound MC packets instead of 0 (which MC clients render as 1969).
 inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
                                 const RadioChannel &ch,
-                                char *bodyOut, size_t bodyOutCap) {
+                                char *bodyOut, size_t bodyOutCap,
+                                uint32_t *tsOut = nullptr) {
     if (!bodyOut || bodyOutCap < 2) return false;
     bodyOut[0] = 0;
     if (len < 6) return false;
@@ -358,6 +363,8 @@ inline bool extractMeshCoreBody(const uint8_t *buf, size_t len,
     mbedtls_aes_free(&aes);
 
     if (ctLen < 6) return false;
+    if (tsOut) *tsOut = (uint32_t)pt[0] | ((uint32_t)pt[1] << 8)
+                      | ((uint32_t)pt[2] << 16) | ((uint32_t)pt[3] << 24);
     size_t bodyMax = ctLen - 5;
     size_t bodyLen = 0;
     while (bodyLen < bodyMax && pt[5 + bodyLen] != 0) bodyLen++;
