@@ -71,19 +71,23 @@ option = learn from Meshtastic `POSITION_APP` time field.
 ## ⏳ v8.3 — LoRaWAN keyless bridge/relay/mesh + carry-overs (IN PROGRESS)
 
 Branch `v8.3-dev` off `main` @ `9723309`. **Not pushed; `main` untouched. Owner bench gates the tag.**
-Design of record: `V8.3-SPEC.md` (DRAFT for the LoRaWAN parts; open questions LW-Q1..Q5).
+Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED; LW-Q1..Q5 resolved 2026-06-13). All
+commits build green (`pio run -e xiao_esp32s3`, Flash ~24.6%). **The v8.3 work lives on `v8.3-dev`;
+the folder may be checked out on `main` — `git checkout v8.3-dev` to see it.**
 
-- **DONE (build-green, awaiting bench):**
+- **IMPLEMENTED (build-green, awaiting bench):**
   - `9499804` **POSITION clock-learn** — the v8.2.1 follow-up. MT `POSITION_APP` `Position.time`
     (f4) / `.timestamp` (f7) now calibrates the bridge wall-clock, closing the cold-boot 1969 window.
     Clock helpers generalized (`g_mcClock*` → `g_clock*`, `learnClock(ts,src)`).
   - `e337afd` **RNS → RNS transparent repeat** — audit fix: in-protocol Reticulum was silently
     dropped (`enqueueReticulumForDest` early-returned for an RNS dest). Now routed through
     `rawRepeatForDest` like the v8.2 MC/MT same-channel raw repeat; gated `BRIDGE_RNS_INPROTO_REPEAT=1`.
-- **SPEC-ONLY (awaiting owner approval, no code):** LoRaWAN (sync `0x34`) **keyless** — metadata
-  capture tap + transparent LW↔LW raw relay (Tasmota-style) + dedup-bounded flood "mesh". Reuses the
-  v8.2 `DedupCache`/`RouteQueue`/CAD/`rawRepeatForDest` machinery (same shape as RNS→RNS). No keys,
-  no `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis.
+  - **LoRaWAN (sync `0x34`) keyless** (`39f432e` address space → `63c6cac` decoder → `e2fb434`
+    RX pipeline → `dfe7da4` portal): a new `LoRaWAN` per-radio protocol. Metadata **capture tap**
+    (cleartext MAC header → `evt=RX proto=LW`), **summary to MT/MC** (`BRIDGE_LW_SUMMARY_TO_MESH=1`),
+    **transparent LW↔LW raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`, via `rawRepeatForDest`
+    — same shape as RNS→RNS). `MT/MC → LoRaWAN` = log-and-drop `no-lw-encoder`. No keys, no
+    `FRMPayload` decrypt, no `FCnt`/`MIC` synthesis. Single-channel per radio (Tasmota-style).
 - **DEFERRED → v8.4+ (task list in V8.3-SPEC §10):** ABP/OTAA key-based **decode** (my fleet → MT/MC)
   and **encode** (MT/MC → LoRaWAN); Reticulum `MT/MC → RNS` encoder + reassembly.
 

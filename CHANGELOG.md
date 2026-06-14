@@ -1,5 +1,38 @@
 # Changelog
 
+## v8.3 — LoRaWAN keyless bridge + Reticulum repeat + POSITION clock
+
+**Status: implemented on `v8.3-dev`, build-green; awaiting owner bench — not yet
+tagged or released.**
+
+- **POSITION clock-learn.** The bridge now also learns wall-clock from a
+  Meshtastic `POSITION_APP` time field (`Position.time` field 4, `.timestamp`
+  field 7 as fallback), closing the cold-boot window where `MT→MC` bridged
+  messages stamped 1969 until the first timestamped MeshCore packet arrived.
+- **Transparent in-protocol Reticulum repeat (`RNS → RNS`).** When both radios
+  run Reticulum, an inbound RNS frame is now re-transmitted byte-for-byte on the
+  other radio (a transparent range-extension repeater) instead of being dropped;
+  RNS Transport handles hop limits and dedup at the network layer. Gated by
+  `BRIDGE_RNS_INPROTO_REPEAT` (default 1). `RNS → MT/MC` tunnelling and the
+  `MT/MC → RNS` drop are unchanged.
+- **LoRaWAN (sync `0x34`) — keyless.** A new `LoRaWAN` per-radio protocol in the
+  captive portal:
+  - **Metadata capture tap** — decodes the cleartext LoRaWAN MAC header (MType,
+    DevAddr, FCtrl, FCnt, FPort, FRMPayload length; JoinEUI/DevEUI for
+    join-requests) and logs `evt=RX proto=LW`. No `FRMPayload` decrypt (no keys).
+  - **Metadata summary to mesh** — emits a one-line summary onto the MT/MC meshes
+    (`BRIDGE_LW_SUMMARY_TO_MESH`, default on).
+  - **Transparent LW↔LW relay / dedup-bounded flood "mesh"** — re-transmits the
+    raw `0x34` frame to other LoRaWAN radios (`BRIDGE_LW_RELAY`), loop-bounded by
+    the shared content-hash dedup. There is no in-band hop counter (mutating the
+    frame would break its MIC); flood is bounded by dedup + the airtime throttle.
+    Single-channel per radio (no LoRaWAN channel hopping) — a localized bridge,
+    like the Tasmota model.
+  - `MT/MC → LoRaWAN` is a deliberate log-and-drop (`no-lw-encoder`): keyless
+    firmware cannot inject content into LoRaWAN.
+  - **Deferred to v8.4+:** ABP/OTAA key-based decode of one's own devices
+    (→ MT/MC) and `MT/MC → LoRaWAN` encode.
+
 ## v8.2.1 — MeshCore timestamp fix
 
 **Patch — bench-verified 2026-06-13.** `MT→MC` (and `RNS→MC`) bridged messages
