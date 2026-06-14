@@ -1162,6 +1162,17 @@ void setup()
     if (!BridgeConfig::isConfigured())
         deriveMacIdentity();
 
+#ifdef BRIDGE_BENCH_AUTOSAVE
+    // Bench-only (NEVER in a release build): persist the build-flag defaults on
+    // first boot so an erased board comes straight up as a configured bridge and
+    // SKIPS the captive portal entirely. The 5 s BOOT/serial window below still
+    // lets you reach the portal on demand.
+    if (!BridgeConfig::isConfigured()) {
+        BridgeConfig::save();
+        Serial.println("[setup] BRIDGE_BENCH_AUTOSAVE: persisted build-flag config — skipping portal");
+    }
+#endif
+
     BridgeConfig::debugDump();
 
     // Captive portal trigger:
