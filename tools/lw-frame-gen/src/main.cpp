@@ -30,6 +30,9 @@
 #ifndef GEN_TXP
   #define GEN_TXP       20
 #endif
+#ifndef GEN_SYNC
+  #define GEN_SYNC      0x34        // 0x34 = LoRaWAN; 0x42 = Reticulum (frames become generic RNS payloads)
+#endif
 #ifndef GEN_AUTO_MS
   #define GEN_AUTO_MS   0          // 0 = manual (serial/button); >0 = auto-cycle
 #endif
@@ -93,12 +96,15 @@ void setup() {
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_NSS);
 
   Serial.println("\n=== lw-frame-gen — LoRaWAN 0x34 test-frame generator ===");
-  Serial.printf("[gen] RF: %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x34  preamble 8  TCXO 1.8V\n",
-                (float)GEN_FREQ_MHZ, (float)GEN_BW_KHZ, (int)GEN_SF, (int)GEN_CR, (int)GEN_TXP);
-  Serial.println("[gen] ^ MUST match the DUT's LoRaWAN radio exactly or it will not demodulate.");
+  Serial.printf("[gen] RF: %.3f MHz  BW %.1f kHz  SF%d  CR4/%d  %d dBm  sync 0x%02X  preamble 8  TCXO 1.8V\n",
+                (float)GEN_FREQ_MHZ, (float)GEN_BW_KHZ, (int)GEN_SF, (int)GEN_CR, (int)GEN_TXP, (unsigned)GEN_SYNC);
+  Serial.println("[gen] ^ MUST match the DUT radio exactly or it will not demodulate.");
+  if ((uint8_t)GEN_SYNC != 0x34)
+    Serial.printf("[gen] NOTE: sync 0x%02X (not LoRaWAN) — the DUT logs proto by sync word "
+                  "(0x42=RNS); the frames are sent as generic raw payloads.\n", (unsigned)GEN_SYNC);
 
   int st = radio.begin((float)GEN_FREQ_MHZ, (float)GEN_BW_KHZ, (uint8_t)GEN_SF,
-                       (uint8_t)GEN_CR, 0x34, (int8_t)GEN_TXP, 8, 1.8f);
+                       (uint8_t)GEN_CR, (uint8_t)GEN_SYNC, (int8_t)GEN_TXP, 8, 1.8f);
   if (st != RADIOLIB_ERR_NONE) {
     Serial.printf("[gen] radio.begin() FAILED rc=%d — halting. Check the Wio-SX1262 on the B2B header.\n", st);
     while (true) delay(1000);
