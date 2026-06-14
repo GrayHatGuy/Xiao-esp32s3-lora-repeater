@@ -515,3 +515,18 @@ The generator's `GEN_*` build flags (`tools/lw-frame-gen/platformio.ini`) **must
 match the DUT's LoRaWAN radio exactly**; defaults are freqA / BW125 / SF7 / CR5 /
 20 dBm. Do a quick `SETUP-01..03` boot check on all three bridges before
 converting COM6 into the generator.
+
+**Configuring a DUT for LoRaWAN — two ways:**
+- **WiFi captive portal** (no reflash): reset, BOOT within 5 s, join the AP,
+  `http://192.168.4.1`, Radio 1 → LoRaWAN + freq/BW/SF/CR, **Save**. Verify the
+  `ready … sync 0x34` line; if it comes back `0x2B`, the save was rejected — watch
+  for a red error banner and confirm you saved on the board you're monitoring
+  (the `op=mint selfid=!…` line is that board's identity).
+- **Deterministic bench envs** (no WiFi; recommended): flash a helper env from
+  `platformio.ini` with NVS erased so its first-boot defaults take effect —
+  `pio run -e bench_lw_dutA -t erase --upload-port COM13` then `… -t upload …`.
+  `bench_lw_dutA` = R1 LoRaWAN 904.6, `bench_lw_dutB` = R1 LoRaWAN 903.9 (→COM14),
+  `bench_lw_relayA` = R1 904.6 + R2 903.9 (→COM13 for Pass C). Erasing NVS resets
+  identity to MAC-derived (COM13 stays `!1de9dc80`) and clears the NodeDB. Revert
+  a board to a normal bridge with `pio run -e xiao_esp32s3 -t erase --upload-port
+  COMx` + upload.
