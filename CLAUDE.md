@@ -9,7 +9,7 @@
 Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, MeshCore, and (stub) Reticulum networks across two radios sharing one SPI bus.
 
 - **Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
-- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\xiao esp32 wio sx1262 dual repeater` (note: contains spaces)
+- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main v8.3` (note: contains spaces)
 - **Owner:** GrayHatGuy — `grayhatguyllc@protonmail.com`
 - **Contest:** Seeed/Meshtastic Build-Off 2026, issue #2 at `Seeed-Projects/meshtastic-build-off-2026`
 
@@ -115,7 +115,7 @@ Runs 1 (pre-standby alone) and 4 (RxBoosted alone) were intentionally skipped �
 **Shell:**
 - Owner runs PowerShell. Bash heredocs (`<<EOF`) do not work in their terminal.
 - For multi-line content (commit messages, release notes): write to a file via `Write` tool, then `git commit -F <file>` or `gh release edit --notes-file <file>`.
-- The internal Bash tool runs on a Git Bash shim. When using it, prefix with `cd "/c/Users/6r4yh/workspace/Platformio/Projects/xiao esp32 wio sx1262 dual repeater" && ...` due to spaces in path.
+- The internal Bash tool runs on a Git Bash shim. When using it, prefix with `cd "/c/Users/6r4yh/workspace/Platformio/Projects/Xiao-esp32s3-lora-repeater - main v8.3" && ...` due to spaces in path.
 
 **Tools and paths:**
 - `pdftotext`: `C:/Program Files/Git/mingw64/bin/pdftotext.exe` — but verify PDF table extractions against a clean screenshot; multi-column cells get OCR-scrambled.
