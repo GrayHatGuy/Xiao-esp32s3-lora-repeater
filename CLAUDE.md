@@ -17,16 +17,24 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 
 | Item | Value |
 |---|---|
-| **Production line** | `main` @ **v8.2** (`cecf9b7`, tag `v8.2`) — "LBT/CAD routing": RX-priority routing + source-identity preservation, **bench-verified + published (GitHub Latest) 2026-06-13**. v8.1 = prior dual-SX1262 baseline. |
+| **Production line** | `main` @ **v8.2.1** (`1ce870d`, tag `v8.2.1`, **GitHub Latest**) — "MeshCore timestamp fix" patch on v8.2 "LBT/CAD routing" (RX-priority routing + source-identity preservation). Bench-verified + published 2026-06-13. v8.1 = prior dual-SX1262 baseline. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
 | **Default build flag** | `LR1121_RX_AUDIT_RUN=0` in `platformio.ini` (clean state) |
 
-## ⭐ v8.2 — "LBT/CAD routing" (SHIPPED 2026-06-13)
+## ⭐ v8.2 / v8.2.1 — "LBT/CAD routing" (SHIPPED 2026-06-13)
 
 RX-priority routing (Listen-Before-Talk / CAD) + source-identity preservation, backported from
 `T_LORA_QUAD_ROUTE` onto the 2-radio dual-SX1262 `main`. **Bench-verified on hardware and published.**
+
+**v8.2.1 patch (tag `v8.2.1`, `1ce870d`, GitHub Latest):** MeshCore timestamp fix. `MT→MC`/`RNS→MC`
+stamped the MC `GRP_TXT` Unix ts as 0 → MC clients showed 1969. The bridge (no RTC/NTP) now LEARNS
+wall-clock from inbound MeshCore packets' ts (`learnClockFromMc`/`bridgeNowUnix` in `main.cpp`;
+`extractMeshCoreBody` gained `tsOut`) and stamps it on MC encodes (surfaced as `mcts=` on QUEUE
+lines + a one-time `evt=CLOCK`). Bench-verified (rx_ts 1781399207 → mcts 1781399220). Known: a
+fresh boot stamps 0 until the first timestamped MC packet calibrates it (inherent, no RTC); future
+option = learn from Meshtastic `POSITION_APP` time field.
 
 - **Release:** "v8.2 - LBT/CAD/hash dedup routing" — GitHub **Latest**, tag `v8.2` → `cecf9b7`.
   Assets: `xiao-dual-sx1262-v8.2-vanilla-factory.bin` (full image @ `0x0`; fresh/erased device →
