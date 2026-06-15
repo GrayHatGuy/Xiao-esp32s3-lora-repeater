@@ -48,11 +48,18 @@ All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependenc
 ## Wiring
 
 This build uses **stacked shields** — there is no hand-wiring. The B2B SX1262
-mounts on top of the Xiao on the 40-pin board-to-board connector; the edge-pin
-SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmware (see `src/main.cpp`).
+(Radio 1) mounts on the Xiao's 40-pin board-to-board connector; the edge-pin
+SX1262 (Radio 2) mounts on the Xiao's perimeter header. The pin mapping is set in
+the firmware (see `src/main.cpp`).
 
-| Signal | Radio 1 (B2B) | Radio 2 (edge) | Notes |
-|--------|---------------|----------------|-------|
+> ⚠️ **The Radio 2 edge module ships in two board revisions (V1.0 / V1.1) with
+> different pinouts — you must build the firmware variant that matches yours.**
+> Check the silkscreen first: see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) below.
+
+The table below is the **V1.0** (default) mapping.
+
+| Signal | Radio 1 (B2B) | Radio 2 (edge, V1.0) | Notes |
+|--------|---------------|----------------------|-------|
 | SCK    | GPIO7 (D8)    | GPIO7 (D8)     | **shared** SPI bus |
 | MOSI   | GPIO9 (D10)   | GPIO9 (D10)    | **shared** |
 | MISO   | GPIO8 (D9)    | GPIO8 (D9)     | **shared** |
@@ -75,9 +82,45 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 - **Connect both u.FL antennas before power-on** — transmitting into a missing
   antenna risks the PA.
 
+### Radio 2 module revision (V1.0 vs V1.1)
+
+**Seeed shipped the "Wio-SX1262 for XIAO" edge module with two different
+pinouts.** The chip-select (NSS) moved between revisions, so flashing the wrong
+variant means **Radio 2 won't be detected** (the bridge keeps running on Radio 1
+alone and tells you which env to flash). Identify your module and build the
+matching env.
+
+Read the white silkscreen on the **Radio 2** module — both the version string and
+the right-hand pin column:
+
+| | **V1.0** | **V1.1** |
+|---|---|---|
+| Silkscreen | `Wio-SX1262 for XIAO V1.0` | `Wio-SX1262 for XIAO V1.1` |
+| Right column (top→bottom) | D0, DIO1, RST, BUSY, **NSS**, RF_SW, D6 | DIO1, BUSY, RST, **NSS**, RF_SW, D5, D6 |
+| **NSS** lands on | **D4 / GPIO5** | **D3 / GPIO4** |
+| Build env | `xiao_esp32s3` (default) | `xiao_esp32s3_v1_1` |
+
+| V1.0 | V1.1 |
+|------|------|
+| ![Wio-SX1262 for XIAO V1.0 silkscreen](images/wio-sx1262-v1.0.jpg) | ![Wio-SX1262 for XIAO V1.1 silkscreen](images/wio-sx1262-v1.1.jpg) |
+
+```bash
+# V1.0 module (default):
+pio run -e xiao_esp32s3      -t upload --upload-port COMx
+# V1.1 module:
+pio run -e xiao_esp32s3_v1_1 -t upload --upload-port COMx
+```
+
+The firmware prints the revision it was built for at boot, so you can confirm from
+the serial log:
+
+```
+[diag] R2 edge module = V1.0  (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)
+```
+
 ## Instructions
 
-> **Fastest path (no toolchain).** Download `xiao-dual-sx1262-v8.3-vanilla-factory.bin` from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest), connect both antennas, and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 xiao-dual-sx1262-v8.3-vanilla-factory.bin`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 7**. The numbered steps below are for building from source.
+> **Fastest path (no toolchain).** **First check your Radio 2 module's silkscreen revision** ([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above) and download the **matching** `vanilla-factory` bin from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest): `…-v1.0-vanilla-factory.bin` for a **V1.0** Radio-2 module, `…-v1.1-vanilla-factory.bin` for **V1.1**. Connect both antennas and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 <bin>`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 7**. The numbered steps below are for building from source.
 
 1. **Stack the hardware.** Mate the B2B shield (radio 1) on top the Xiao, the edge-pin shield (radio 2) on bottom. Connect antennas to **both** radios before powering on. Correct orientation has all antennas on the same side.
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
@@ -97,7 +140,7 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
    '-DBRIDGE_MT_LONG_NAME="LoRa Bridge"'
    '-DBRIDGE_MT_SHORT_NAME="BR"'
    ```
-5. **Clean + build.** `pio run -t clean && pio run` — the clean is important whenever a header changes.
+5. **Pick your Radio 2 variant, then clean + build.** First read the **Radio 2** module silkscreen and choose the matching build env (see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above): a **V1.0** module → `xiao_esp32s3` (default), a **V1.1** module → `xiao_esp32s3_v1_1`. Then `pio run -t clean -e <env> && pio run -e <env>` — the clean is important whenever a header changes. Building the wrong variant won't harm anything (Radio 1 still comes up and the boot log names the env to flash), but Radio 2 won't be detected until the env matches your board. The boot log echoes the active map: `[diag] R2 edge module = V1.0 (NSS=5 …)`.
 6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
 7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / LoRaWAN / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
 
