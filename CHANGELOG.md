@@ -1,5 +1,44 @@
 # Changelog
 
+## v8.3.1 — Radio 2 module-revision (V1.0 / V1.1) support + bring-up hardening
+
+**Status: implemented on `v8.3.1-r2-pin-variants`, build-green (both variants,
+Flash 24.6%). V1.1 pin map (`NSS=4 DIO1=1 RST=3 BUSY=2 RF_SW=5`) bench-confirmed on
+a physical V1.1 module.**
+
+Fixes a Radio-2 detection failure — `[Radio1-B2B] begin() failed: -2`
+(`CHIP_NOT_FOUND`) and a FATAL halt — that appeared on some boards but not others
+with seemingly identical hardware. Root cause: Seeed shipped the **"Wio-SX1262 for
+XIAO" edge module (Radio 2) with two different pinouts**. The chip-select (NSS) is
+on **D4 / GPIO5** on **V1.0** but **D3 / GPIO4** on **V1.1**. The v8.x firmware only
+ever shipped the V1.0 map, so on a V1.1 module the real chip-select is left
+floating during Radio 1's `begin()`; the un-deselected V1.1 chip then drives the
+shared MISO bus and corrupts Radio 1 detection — fatally, since Radio 1 is
+mandatory.
+
+- **Per-revision build variants.** Radio-2 pins are selected by `WIO_SX1262_REV`
+  (10 = V1.0, default; 11 = V1.1):
+  - `xiao_esp32s3` — V1.0 (unchanged; the default release binary).
+  - `xiao_esp32s3_v1_1` — V1.1 (`NSS=4 DIO1=1 RST=3 BUSY=2 RF_SW=5`).
+
+  Each `R2_*` pin is `#ifndef`-guarded, so a single `-DR2_NSS=..` (etc.) can also
+  override one pin from `platformio.ini`. (Radio 1 is fixed B2B silicon — it stays
+  a plain define and is never remapped.)
+- **Bring-up hardening — a Radio-2 fault can no longer take down Radio 1.** Radio 2
+  is held in hardware reset (`RST` is `GPIO3` on *both* revisions) for the whole of
+  Radio 1's probe + `begin()`, then released and brought up afterward. A wrong
+  variant (or any R2 fault) now leaves Radio 1 running single-radio with a message
+  naming the silkscreen check and the env to flash — it no longer halts.
+- **Self-identifying boot log.** Boot prints
+  `[diag] R2 edge module = V1.0  (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)`, so any
+  serial log shows which revision the firmware was built for.
+- **Docs.** `README.md` "Wiring" gains a "Radio 2 module revision" section with
+  silkscreen photos and an identification table.
+- **Do-no-harm note.** On a correctly-matched board the only behavioral change is
+  serial-log *ordering*: the Radio-2 reset diagnostic now prints as
+  `[diag] R2 release  BUSY after reset = …` **after** `[Radio1-B2B] ready` (R2 is
+  reset after R1 is up). Radio operation is unchanged.
+
 ## v8.3 — LoRaWAN keyless bridge + Reticulum repeat + POSITION clock
 
 **Status: implemented on `v8.3-dev`, build-green; awaiting owner bench — not yet

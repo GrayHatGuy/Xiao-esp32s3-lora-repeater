@@ -94,6 +94,7 @@ static void deriveMacIdentity()
 //  Radio 1 — Wio SX1262 via 40-pin B2B header
 //  GPIOs 38–42 are only accessible via the B2B connector.
 // ============================================================
+// Radio 1 is always the B2B-connector SX1262 — fixed silicon, never remapped.
 #define R1_NSS      41  // SPI chip-select  (B2B / A11)
 #define R1_DIO1     39  // IRQ              (B2B)
 #define R1_RESET    42  // Reset            (B2B / A12)
@@ -101,15 +102,63 @@ static void deriveMacIdentity()
 #define R1_ANT_SW   38  // Antenna switch   (B2B)
 
 // ============================================================
-//  Radio 2 — Wio SX1262 via perimeter (edge) header pins
-//  Pin order on module left side (top → bottom): D0, DIO1, RST, BUSY, NSS, RF_SW
-//  XIAO ESP32S3: D0=GPIO1, D1=GPIO2, D2=GPIO3, D3=GPIO4, D4=GPIO5, D5=GPIO6
+//  Radio 2 — Wio SX1262 for XIAO via perimeter (edge) header pins
+//  ----------------------------------------------------------------
+//  WARNING: the Seeed "Wio-SX1262 for XIAO" edge module CHANGED its
+//  pinout between silkscreen revisions. Read the silkscreen on YOUR
+//  Radio-2 module and build the matching variant:
+//     V1.0 -> env xiao_esp32s3       (default; NSS on D4 / GPIO5)
+//     V1.1 -> env xiao_esp32s3_v1_1  (-DWIO_SX1262_REV=11; NSS on D3 / GPIO4)
+//  The module's RIGHT-column silkscreen order (top -> bottom) sockets
+//  onto the XIAO digital pins D0..D6, so each signal lands on the XIAO
+//  pin at the same position:
+//     V1.0: D0,   DIO1, RST,  BUSY, NSS,  RF_SW, D6
+//     V1.1: DIO1, BUSY, RST,  NSS,  RF_SW, D5,    D6
+//  XIAO ESP32S3 D-pin map: D0=GPIO1 D1=GPIO2 D2=GPIO3 D3=GPIO4 D4=GPIO5 D5=GPIO6
+//  Each R2_* is #ifndef-guarded, so a single -DR2_NSS=.. (etc.) can also
+//  override one pin from platformio.ini without editing this file.
 // ============================================================
-#define R2_NSS      5   // SPI chip-select  (D4 / GPIO5)
-#define R2_DIO1     2   // IRQ              (D1 / GPIO2)
-#define R2_RESET    3   // Reset            (D2 / GPIO3)
-#define R2_BUSY     4   // Busy             (D3 / GPIO4)
-#define R2_ANT_SW   6   // RF switch        (D5 / GPIO6)
+#ifndef WIO_SX1262_REV
+  #define WIO_SX1262_REV 10          // 10 = V1.0 (default), 11 = V1.1
+#endif
+
+#if WIO_SX1262_REV == 11
+  // ---- Wio-SX1262 for XIAO  V1.1 ----
+  #ifndef R2_NSS
+    #define R2_NSS    4   // NSS   chip-select  (D3 / GPIO4)
+  #endif
+  #ifndef R2_DIO1
+    #define R2_DIO1   1   // DIO1  IRQ          (D0 / GPIO1)
+  #endif
+  #ifndef R2_RESET
+    #define R2_RESET  3   // RST   reset        (D2 / GPIO3)
+  #endif
+  #ifndef R2_BUSY
+    #define R2_BUSY   2   // BUSY  busy         (D1 / GPIO2)
+  #endif
+  #ifndef R2_ANT_SW
+    #define R2_ANT_SW 5   // RF_SW antenna sw   (D4 / GPIO5)
+  #endif
+  #define WIO_SX1262_REV_STR "V1.1"
+#else
+  // ---- Wio-SX1262 for XIAO  V1.0 (canonical — the original v8.x map) ----
+  #ifndef R2_NSS
+    #define R2_NSS    5   // NSS   chip-select  (D4 / GPIO5)
+  #endif
+  #ifndef R2_DIO1
+    #define R2_DIO1   2   // DIO1  IRQ          (D1 / GPIO2)
+  #endif
+  #ifndef R2_RESET
+    #define R2_RESET  3   // RST   reset        (D2 / GPIO3)
+  #endif
+  #ifndef R2_BUSY
+    #define R2_BUSY   4   // BUSY  busy         (D3 / GPIO4)
+  #endif
+  #ifndef R2_ANT_SW
+    #define R2_ANT_SW 6   // RF_SW antenna sw   (D5 / GPIO6)
+  #endif
+  #define WIO_SX1262_REV_STR "V1.0"
+#endif
 
 // ============================================================
 //  FreeRTOS configuration
@@ -1267,6 +1316,13 @@ void setup()
     pinMode(R1_NSS, OUTPUT); digitalWrite(R1_NSS, HIGH);
     pinMode(R2_NSS, OUTPUT); digitalWrite(R2_NSS, HIGH);
 
+    // Echo the compiled-in Radio-2 edge-module pin map so a serial log always
+    // self-identifies which board revision this firmware was built for. If
+    // Radio-2 fails to detect, this line is the first thing to check against
+    // the module silkscreen (V1.0 vs V1.1 — see README "Wiring").
+    Serial.printf("[diag] R2 edge module = %s  (NSS=%d DIO1=%d RST=%d BUSY=%d RF_SW=%d)\n",
+                  WIO_SX1262_REV_STR, R2_NSS, R2_DIO1, R2_RESET, R2_BUSY, R2_ANT_SW);
+
     // Construct radio objects now the mutex and SPI bus are ready. RF comes
     // from BridgeConfig at runtime (makeLoraConfig). A disabled slot stays null.
     if (g_radioEnabled[0])
@@ -1277,6 +1333,15 @@ void setup()
         g_radio[1] = new WioSX1262(R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
                                    R2_ANT_SW, spi, spiMutex, "Radio2-Edge",
                                    makeLoraConfig(1));
+
+    // HARDENING: hold Radio 2 in hardware RESET (NRESET low) for the WHOLE of
+    // Radio 1's probe + begin(). A chip held in reset tri-states its SPI pins,
+    // so it physically cannot drive the shared MISO and corrupt R1 detection —
+    // regardless of whether the R2 pin map matches the physical module (e.g. a
+    // V1.1 module flashed with the V1.0 variant, which floats R2's real CS). RST
+    // is GPIO3 (D2) on BOTH the V1.0 and V1.1 edge modules, so this assert holds
+    // either revision in reset. R2 is released + brought up only AFTER R1 is up.
+    if (g_radioEnabled[1]) { pinMode(R2_RESET, OUTPUT); digitalWrite(R2_RESET, LOW); }
 
     // Allow B2B power rail and SX1262 TCXO to settle before first SPI access.
     delay(150);
@@ -1296,8 +1361,10 @@ void setup()
                       label, digitalRead(busyPin), millis() - t0,
                       digitalRead(busyPin) ? "STUCK-HIGH -> module absent/unpowered!" : "OK");
     };
+    // Only Radio 1 is pre-flighted here. Radio 2 stays held in reset (asserted
+    // above) so it cannot touch the shared bus while R1 is detected; it is
+    // reset/checked below, after R1 is confirmed up.
     if (g_radioEnabled[0]) busyWait(R1_RESET, R1_BUSY, "R1");
-    if (g_radioEnabled[1]) busyWait(R2_RESET, R2_BUSY, "R2");
 
     // Raw SPI probe on R1 (SX1262 GetStatus 0xC0 + version reg) — bypasses
     // RadioLib so we can see what MISO carries. 0x00/0xFF = MISO open;
@@ -1328,17 +1395,30 @@ void setup()
                       ver[0], ver[1], ver[2], ver[3], ver[4], ver[5], (char*)ver);
     }
 
-    // Initialise every enabled radio. Radio1 failing is fatal (wiring); Radio2
-    // failing just disables that slot so Radio1 keeps going.
-    for (int i = 0; i < NR; i++) {
-        if (!g_radioEnabled[i] || !g_radio[i]) continue;
-        if (g_radio[i]->begin()) continue;
-        if (i == 0) {
-            Serial.println("\nFATAL: Radio1 init failed. Check wiring. Halting.");
-            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    // --- Radio 1 (B2B) — Radio 2 is still held in hardware reset, so a
+    // misconfigured/contending R2 can no longer make this fail. If R1 still
+    // fails here it is a genuine R1 module/wiring fault, so it stays fatal.
+    if (g_radioEnabled[0] && g_radio[0] && !g_radio[0]->begin()) {
+        Serial.println("\nFATAL: Radio1 (B2B) init failed. Check the B2B module/wiring. Halting.");
+        while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+
+    // --- Radio 2 (edge) — release it from reset now that R1 is up, pre-flight,
+    // then begin(). R2 failing is NON-fatal: disable the slot and run single-
+    // radio. The most common cause is a module-revision / pin mismatch, so point
+    // the operator straight at the silkscreen + the matching build variant.
+    if (g_radioEnabled[1] && g_radio[1]) {
+        busyWait(R2_RESET, R2_BUSY, "R2 release");   // pulse RESET high, drain BUSY
+        if (!g_radio[1]->begin()) {
+            Serial.printf(
+                "\n[WARN] Radio2 (edge) not detected — running single-radio (R1 only).\n"
+                "       This build targets module revision %s. If your Radio-2 module\n"
+                "       silkscreen reads a DIFFERENT revision, flash the matching variant:\n"
+                "         V1.0 -> env xiao_esp32s3   |   V1.1 -> env xiao_esp32s3_v1_1\n"
+                "       (See README \"Wiring\" to identify your revision.)\n",
+                WIO_SX1262_REV_STR);
+            g_radioEnabled[1] = false;
         }
-        Serial.printf("\n[WARN] Radio%d init failed — disabling that slot.\n", i + 1);
-        g_radioEnabled[i] = false;
     }
 
     // Start enabled radios listening
