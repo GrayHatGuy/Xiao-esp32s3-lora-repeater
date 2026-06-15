@@ -1,6 +1,6 @@
 # v8.3 Bench Test Protocol — XIAO ESP32-S3 Dual-SX1262 Bridge
 
-**Target:** branch `v8.3-dev` (HEAD `ed81307`) at `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main v8.3`. RadioLib pinned **7.7.0**. Monitor: owner runs `pio device monitor --port COM13 --baud 115200` (CDC USB, 8N1) in their own terminal and reads the single-line `ts= evt= radio= key=val` records (V8.2-SPEC §13).
+**Target:** branch `v8.3-dev` (HEAD `ed81307`) at `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main dev-ABP-lorawan`. RadioLib pinned **7.7.0**. Monitor: owner runs `pio device monitor --port COM13 --baud 115200` (CDC USB, 8N1) in their own terminal and reads the single-line `ts= evt= radio= key=val` records (V8.2-SPEC §13).
 
 > **Log-string fidelity notes (verified in source, not guessed):**
 > - Every `evt=` line is one `blogf()` record: `ts=<ms> evt=<TAG> radio=<R1|R2> key=val ...`. `<ms>` is free-running `millis()` — **match field names/values, not the number**. Floats (`rssi`/`snr`) use `%.1f`; hex `devaddr`/`hout` use `%08lx` → **lowercase**; `fport=%d` prints **-1** when absent.
