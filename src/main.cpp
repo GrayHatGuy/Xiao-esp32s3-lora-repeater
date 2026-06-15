@@ -30,7 +30,7 @@
 #include "WioSX1262.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
-#include "LoRaWANCrypto.h"     // v8.3.1: AES-CMAC + LoRaWAN ABP uplink encoder
+#include "LoRaWANCrypto.h"     // ABP: AES-CMAC + LoRaWAN ABP uplink encoder
 #include "MeshCoreConfig.h"
 #include "MeshtasticConfig.h"
 #include "BridgeConfig.h"
@@ -365,14 +365,14 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
   #define BRIDGE_LW_RELAY            1   // transparent raw repeat to other 0x34 radios
 #endif
 
-// --- v8.3.1 P1: LoRaWAN ABP uplink ENCODER (keyed; opt-in) ------------------
+// --- ABP P1: LoRaWAN ABP uplink ENCODER (keyed; opt-in) ------------------
 // Distinct from the keyless capture/relay above. Minting a valid LoRaWAN uplink
 // requires a per-device ABP identity (DevAddr + NwkSKey + AppSKey), a monotonic
-// FCnt and a CMAC MIC (V8.3.1-SPEC §2/§7). OFF by default so a stock build keeps
+// FCnt and a CMAC MIC (ABP-LORAWAN-SPEC §2/§7). OFF by default so a stock build keeps
 // v8.3's do-no-harm MT/MC->LW drop. When ON *and* both keys parse, the
 // dispatcher transcodes a body into an ABP uplink and queues it for RF re-emit
 // (delivery model B1). P1 sources creds from build flags + an in-RAM FCnt;
-// v8.3.1 P2 replaces this with the schema-v5 per-source store + NVS-persisted
+// ABP P2 replaces this with the schema-v5 per-source store + NVS-persisted
 // FCnt (M1). Keys are 32-hex-char strings; empty (default) => encoder idle.
 #ifndef BRIDGE_LW_ENCODE
   #define BRIDGE_LW_ENCODE           0
@@ -384,7 +384,7 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
   #define BRIDGE_LW_ENC_DEVADDR      0x01000001u   // private NetID (0x01) prefix
 #endif
 #ifndef BRIDGE_LW_ENC_FPORT
-  #define BRIDGE_LW_ENC_FPORT        13            // Custom/weather (V8.3.1-SPEC §3)
+  #define BRIDGE_LW_ENC_FPORT        13            // Custom/weather (ABP-LORAWAN-SPEC §3)
 #endif
 #ifndef BRIDGE_LW_ENC_NWKSKEY
   #define BRIDGE_LW_ENC_NWKSKEY      ""
@@ -579,7 +579,7 @@ static void enqueueVirtualNodeInfo(const RadioChannel &dstChan, int destIdx,
 // trans-crypt paths that preserve the exact origin land in a later commit).
 
 #if BRIDGE_LW_ENCODE
-// v8.3.1 P1: resolve build-flag ABP credentials once into a usable form.
+// ABP P1: resolve build-flag ABP credentials once into a usable form.
 // `ready` is false (=> keep the keyless do-no-harm drop) unless BOTH session
 // keys parse as 32 hex chars. P2 supersedes this with a schema-v5 per-source
 // credential store + an NVS-persisted FCnt (the M1 device model).
@@ -637,7 +637,7 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
         return;
     }
 
-    // Destination is LoRaWAN. v8.3 was keyless (always dropped). v8.3.1 P1: when
+    // Destination is LoRaWAN. v8.3 was keyless (always dropped). ABP P1: when
     // the ABP encoder is built in (BRIDGE_LW_ENCODE) AND credentials parse,
     // transcode the body into a LoRaWAN ABP uplink and queue it for RF re-emit
     // (delivery model B1); otherwise keep v8.3's do-no-harm drop (keyless mode /
@@ -1259,7 +1259,7 @@ void setup()
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
 
 #if BRIDGE_LW_ENC_SELFTEST
-    // v8.3.1 P1: prove the ABP encoder crypto on-device before it ever emits.
+    // ABP P1: prove the ABP encoder crypto on-device before it ever emits.
     LoRaWANCrypto::selfTest();
 #endif
 

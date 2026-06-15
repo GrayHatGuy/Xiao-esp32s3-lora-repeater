@@ -1,26 +1,26 @@
 // LoRaWANCrypto.h
 // ---------------------------------------------------------------------------
-// LoRaWAN 1.0.x ABP *uplink* encoder for the cross-protocol bridge (v8.3.1 P1).
+// LoRaWAN 1.0.x ABP *uplink* encoder for the cross-protocol bridge (ABP P1).
 //
 // Mints a complete, LNS-ingestible Class-A Data-Up PHYPayload from a bridge-held
 // ABP identity (DevAddr + NwkSKey + AppSKey) plus an application payload. This is
 // the *keyed* counterpart to v8.3's *keyless* LoRaWAN capture/relay: emitting
 // valid LoRaWAN is fundamentally keyed (a correct MIC + encrypted FRMPayload
-// require the device keys), so an encoder cannot be keyless (V8.3.1-SPEC §2/§7).
+// require the device keys), so an encoder cannot be keyless (ABP-LORAWAN-SPEC §2/§7).
 //
 //   PHYPayload = MHDR(1) | MACPayload | MIC(4)
 //   MACPayload = FHDR | FPort(1) | FRMPayload
 //   FHDR       = DevAddr(4 LE) | FCtrl(1) | FCnt(2 LE = low 16 of the 32-bit ctr)
 //   MHDR       = 0x40 Unconfirmed Data Up (Major 0); 0x80 = Confirmed (avoid)
-//   FCtrl(up)  = 0x00  (ADR=0, no FOpts — V8.3.1-SPEC §4)
+//   FCtrl(up)  = 0x00  (ADR=0, no FOpts — ABP-LORAWAN-SPEC §4)
 //
-// Crypto sourcing (V8.3.1-SPEC §12, finding A4):
+// Crypto sourcing (ABP-LORAWAN-SPEC §12, finding A4):
 //   - AES-128 ECB is present & proven in the prebuilt esp32s3 mbedTLS (the
 //     MeshCore/Meshtastic encoders already call mbedtls_aes_crypt_ecb).
 //   - AES-CMAC is NOT linkable: CONFIG_MBEDTLS_CMAC_C is compiled OFF in the
 //     arduino-esp32 2.0.17 prebuilt lib, so mbedtls_cipher_cmac() link-errors.
 //     We therefore carry a self-contained RFC 4493 AES-CMAC over AES-ECB here —
-//     the only new crypto primitive v8.3.1 needs.
+//     the only new crypto primitive ABP needs.
 //   - FRMPayload encryption is LoRaWAN's CTR-like mode: keystream block i is
 //     AES-ECB(K, A_i) for i = 1,2,...; built explicitly below so there is no
 //     dependence on mbedTLS CTR counter endianness/carry semantics.

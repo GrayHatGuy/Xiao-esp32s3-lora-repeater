@@ -122,7 +122,7 @@ spare bridge (COM6). **The v8.3 folder may be checked out on `main` or a `bench_
   RX-priority headline; **Pass D** flag toggles (LW-CAP0/SUM0/RELAY0 — all five bench envs build-green);
   **LW-FLOOD** bidirectional multi-bridge (one-way relay already PASS; bidirectional needs COM14 a `relayA`-mirror env).
 
-### Deferred → v8.3+ (likely an 8.3.1 patch; V8.3-SPEC §10)
+### Deferred → v8.3+ (follow-up work; V8.3-SPEC §10)
 ABP/OTAA key-based **decode** (own fleet → MT/MC/custom) and **encode** (MT/MC → LoRaWAN); Reticulum
 `MT/MC → RNS` encoder + reassembly (today MT/MC→RNS is a clean log-and-drop).
 
@@ -131,11 +131,12 @@ Finish/skip the OPEN bench items, then: ff-merge `v8.3-dev`→`main`, annotated 
 draft GitHub release notes + bins for owner review. **NEVER force-push `main`.** RNS↔RNS + the deferred
 items can ship code-verified with full on-air bench in the 8.3.x patch, per owner's framing.
 
-## 🔧 v8.3.1 — LoRaWAN ABP uplink encoder + ChirpStack ingestion (IN PROGRESS)
+## 🔧 ABP LoRaWAN uplink encoder + ChirpStack ingestion — branch `dev-ABP-lorawan` (IN PROGRESS)
 
-Branch **`v8.3.1-dev`** (off `main`). Cycle scope: mint valid LoRaWAN **ABP** uplinks so a
-raw-LoRa source (canonical: a weather station) is ingested by a ChirpStack LNS. **OTAA dropped;
-MT/MC→RNS coding deferred → 8.3.2+** (owner). Design of record: `V8.3.1-SPEC.md`.
+Branch **`dev-ABP-lorawan`** (off `main`, pushed). Release version TBD — the "v8.3.1" slot was
+reassigned to a v8.3 Radio2-pin-defines patch (separate session). Scope: mint valid LoRaWAN **ABP**
+uplinks so a raw-LoRa source (canonical: a weather station) is ingested by a ChirpStack LNS. **OTAA
+dropped; MT/MC→RNS coding deferred** (owner). Design of record: `ABP-LORAWAN-SPEC.md`.
 
 **Owner decisions (locked 2026-06-15, SPEC §0.0):** raw-LoRa **Fork B** · delivery **B1 (RF re-emit)**,
 no WiFi · device model **M1 (per-source)**.

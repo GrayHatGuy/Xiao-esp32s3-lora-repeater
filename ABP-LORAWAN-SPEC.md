@@ -1,6 +1,7 @@
-# V8.3.1-SPEC — LoRaWAN ABP encoder · universal ChirpStack ingestion  *(MT/MC→RNS deferred)*
+# ABP-LORAWAN-SPEC — LoRaWAN ABP encoder · universal ChirpStack ingestion  *(branch `dev-ABP-lorawan`; MT/MC→RNS deferred)*
 
-> **Status: DRAFT (scoping).** Branch `v8.3.1-dev` off `main` @ `a06a398`. Supersedes nothing yet — additive on top of shipped v8.3.
+> **Status: DRAFT (scoping).** Branch `dev-ABP-lorawan` off `main` (pushed). Supersedes nothing yet — additive on top of shipped v8.3.
+> **Release version: TBD / de-versioned 2026-06-15.** This feature was tentatively labelled "v8.3.1" while in scoping; that slot has since been **reassigned to a v8.3 patch (Radio2 pin-defines fix, separate session)**, so the ABP encoder is now tracked by *branch name*, version to be assigned at release. Do NOT tag this branch v8.3.1.
 > **Scope steer (owner):** LoRaWAN **ABP is REQUIRED**; **OTAA is OPTIONAL and may be dropped** if hard/complicated (see §10). The encoder is **opt-in and keyed** — v8.3's *keyless* LoRaWAN capture/relay stays intact as a separate mode (see §8).
 > Some §§ (exact code-seam file:line, final phase effort) will be tightened from the in-flight scope-research synthesis.
 
@@ -22,9 +23,9 @@
 
 1. **LoRaWAN ABP *uplink* encoder** (`encodeLoRaWANUplink`) — the bridge mints valid LoRaWAN uplinks a LoRaWAN LNS (ChirpStack) accepts. §2.
 2. **Universal source → ABP** — Meshtastic / MeshCore / Reticulum / **Custom (raw-LoRa)** traffic becomes LoRaWAN uplinks ingestible by ChirpStack. §3, scenarios §1.
-3. ~~MT/MC → RNS encoder~~ — **DEFERRED this cycle (owner): no RNS coding in v8.3.1.** Design retained in §6 for 8.3.2+.
+3. ~~MT/MC → RNS encoder~~ — **DEFERRED this cycle (owner): no RNS coding in the ABP cycle.** Design retained in §6 for later.
 
-**Non-goals / deferred:** **the entire MT/MC → RNS encoder (§6) — RNS coding deferred per owner;** OTAA join (impractical for an uplink-only emitter — §10); the bidirectional dual-LNS *downlink* crosslink (§5 documents the constraints; implementation is a v8.3.2/v8.4 stretch).
+**Non-goals / deferred:** **the entire MT/MC → RNS encoder (§6) — RNS coding deferred per owner;** OTAA join (impractical for an uplink-only emitter — §10); the bidirectional dual-LNS *downlink* crosslink (§5 documents the constraints; implementation is a later stretch).
 
 ---
 
@@ -53,7 +54,7 @@
 General case of §1.1: any decoded bridge source is mapped to a LoRaWAN ABP uplink (one virtual device per source identity, or one multiplexed device with a source tag — §3). Delivery B1 or B2 as above.
 
 ### 1.3 Dual-repeating-LNS crosslink relay  *(radio1 = ABP1/LNS1 ↑, radio2 = ABP2/LNS2 ↓)*
-The bridge carries payloads between **two** LoRaWAN networks by being a **separate ABP endpoint on each** (radio1 holds ABP1 creds for LNS1; radio2 holds ABP2 creds for LNS2). The "crosslink" is the bridge's **app-layer routing** between the two endpoints (re-encode/re-MIC per side). Constraints in §5. **Implementation = v8.3.2/v8.4 stretch** (documented here so v8.3.1 is built without foreclosing it).
+The bridge carries payloads between **two** LoRaWAN networks by being a **separate ABP endpoint on each** (radio1 holds ABP1 creds for LNS1; radio2 holds ABP2 creds for LNS2). The "crosslink" is the bridge's **app-layer routing** between the two endpoints (re-encode/re-MIC per side). Constraints in §5. **Implementation = later stretch** (documented here so the ABP cycle is built without foreclosing it).
 
 ---
 
@@ -74,7 +75,7 @@ FCtrl(up)  = ADR(0) ADRACKReq(0) ACK(0) ClassB(0) FOptsLen(0)  => 0x00   (see §
 - **Keys held by the bridge** per virtual device: `NwkSKey` (MIC) + `AppSKey` (payload). **Emitting LoRaWAN is fundamentally keyed** — not keyless (§7).
 - **FCnt** must be **monotonic** and **persisted** across reboots (§4, §8).
 
-**Crypto:** MeshCore already uses mbedTLS AES-128-ECB (so ECB + the CTR-mode keystream is in hand). **AES-CMAC for the MIC:** verify `MBEDTLS_CMAC_C` / `mbedtls_cipher_cmac` is enabled in the ESP-IDF build; if not, add a small CMAC-over-AES-ECB helper (~30 lines). *(Confirm exact availability from the scope-research A4 finding.)*
+**Crypto:** MeshCore already uses mbedTLS AES-128-ECB (so ECB + the CTR-mode keystream is in hand). **AES-CMAC for the MIC:** verify `MBEDTLS_CMAC_C` / `mbedtls_cipher_cmac` is enabled in the ESP-IDF build; if not, add a small CMAC-over-AES-ECB helper (~30 lines). *(Confirmed by scope-research A4: it is OFF; helper added in `src/LoRaWANCrypto.h`.)*
 
 **Hook point:** the dispatcher's `enqueueTextForDest` currently log-and-drops when the dest protocol is LoRaWAN (`no-lw-encoder`, `main.cpp` ~557/565). The encoder replaces that drop, building a PHYPayload and pushing it to the dest radio's RouteQueue (RF re-emit, B1) or to the WiFi forwarder (B2). Mirrors the `encodeMeshtasticText` / `encodeMeshCoreGrpTxt` pattern in `MeshEncoderDebug.h`.
 
@@ -87,7 +88,7 @@ Map every source (MT / MC / RNS / Custom) to an ABP uplink. Two device models:
 - **(M1) Per-source virtual ABP device** — one `DevAddr`+keys per mesh sender / per source. ChirpStack shows each as a distinct device. Cleanest semantics; heaviest provisioning (one ABP device per source in ChirpStack) and key/FCnt state per device in NVS.
 - **(M2) Single multiplexed bridge ABP device** — one `DevAddr`+keys; the **source identity is carried in the FRMPayload** (a header byte / tag) and split out by a ChirpStack payload codec. Minimal provisioning; the LNS sees "one device" carrying many sources.
 
-**Recommendation:** support **M2 first** (one device, low friction — ideal for the weather-station scenario where it *is* one source anyway), with **M1 as an option** for deployments that want per-node devices.
+**Recommendation:** support **M2 first** (one device, low friction — ideal for the weather-station scenario where it *is* one source anyway), with **M1 as an option** for deployments that want per-node devices. **(Owner chose M1 — see §0.0.)**
 
 **FPort allocation** (so a ChirpStack codec can demux the source protocol): e.g. `FPort 10 = MT`, `11 = MC`, `12 = RNS`, `13 = Custom/weather` *(final numbers TBD)*. **FRMPayload schema:** `[srcTag][srcId?][len][payload…]` — documented so a JS/codec on ChirpStack decodes back to the original message. (For the weather station: payload = the raw sensor bytes, decoded by a station-specific codec.)
 
@@ -114,13 +115,13 @@ Map every source (MT / MC / RNS / Custom) to an ABP uplink. Two device models:
 5. **TS011 "Relay" does NOT apply** — that spec is a same-network, battery-powered coverage extender (Wake-on-Radio), not a cross-LNS bridge.
 6. **Per-radio regulatory budgets** — duty-cycle/dwell/EIRP on each RF domain independently; RX2 DR/freq matched per LNS; continuous RX (Class C) power is fine on USB.
 
-**Status:** documented; **implementation deferred to v8.3.2/v8.4.** v8.3.1 builds the one-way ABP uplink encoder without foreclosing this (keep keys/FCnt state per-radio-capable in the config schema, §8).
+**Status:** documented; **implementation deferred (later).** The ABP cycle builds the one-way ABP uplink encoder without foreclosing this (keep keys/FCnt state per-radio-capable in the config schema, §8).
 
 ---
 
-## 6. MT/MC → RNS encoder (carry-over) — ⏸️ DEFERRED (not in v8.3.1)
+## 6. MT/MC → RNS encoder (carry-over) — ⏸️ DEFERRED (not in the ABP cycle)
 
-> **RNS coding is deferred this cycle (owner decision).** Retained below as the design of record for whenever it's picked up (8.3.2+); there is **no v8.3.1 implementation**.
+> **RNS coding is deferred this cycle (owner decision).** Retained below as the design of record for whenever it's picked up (later); there is **no implementation in the ABP cycle**.
 
 - **(Phase 1 — tractable) Round-trip passthrough.** Reassemble RNS bytes previously tunnelled as `[rns <seq> <x>/<y>] <base64>` (fill in `reassembleReticulumFragment()`), then **raw re-emit** the reconstructed frame on an RNS radio. **No addressing/crypto** needed — the bytes are already a valid RNS frame. Closes the `RNS → MT/MC → RNS` round trip across two bridges.
 - **(Phase 2 — optional, harder) Arbitrary MT/MC → new RNS packet.** Requires a **configured destination Identity/hash + encryption** to that destination (Reticulum addresses are destination-hash + Identity-keyed). Needs a new addressing-model config; assess feasibility before committing. Today `encodeReticulum()` (`MeshEncoderDebug.h` ~325) returns `false` and the dest-RNS path is a `no-rns-encoder` drop (`main.cpp` ~557).
@@ -129,7 +130,7 @@ Map every source (MT / MC / RNS / Custom) to an ABP uplink. Two device models:
 
 ## 7. Keyed vs keyless (architectural note)
 
-v8.3 LoRaWAN is **keyless** (cleartext-header capture/relay only). v8.3.1's encoder is **keyed** (needs `NwkSKey`+`AppSKey` to mint valid uplinks). **Keep both:** keyless capture/relay remains the default for a radio set to "LoRaWAN" with no keys; the encoder activates only when a radio/dest is configured with ABP credentials. The two modes are mutually exclusive per radio and selected by presence of keys.
+v8.3 LoRaWAN is **keyless** (cleartext-header capture/relay only). The ABP encoder is **keyed** (needs `NwkSKey`+`AppSKey` to mint valid uplinks). **Keep both:** keyless capture/relay remains the default for a radio set to "LoRaWAN" with no keys; the encoder activates only when a radio/dest is configured with ABP credentials. The two modes are mutually exclusive per radio and selected by presence of keys.
 
 ---
 
@@ -147,9 +148,9 @@ v8.3 LoRaWAN is **keyless** (cleartext-header capture/relay only). v8.3.1's enco
 2. **(M) Config/NVS + portal** — ABP credentials + persisted FCnt + FPort map; schema bump + migration.
 3. **(M) Universal mapping (M2 multiplexed)** — source tag + FPort/payload schema + a sample ChirpStack codec; **the weather-station (Custom-source) scenario as the acceptance test.**
 4. **(L, optional) B2 bridge-as-gateway** — Semtech UDP / ChirpStack Gateway Bridge MQTT forwarder over WiFi (removes the separate-gateway requirement).
-5. ~~MT/MC→RNS passthrough~~ — **DEFERRED → 8.3.2+** (RNS coding deferred this cycle, owner). §6 holds the design.
-6. **(L, stretch → v8.3.2/v8.4) Dual-LNS crosslink** (§5) — second ABP identity per radio + Class-C (or Class-A poll) downlink path + cross-routing.
-7. **(optional) M1 per-source devices; arbitrary MT/MC→RNS (§6 Phase 2); OTAA** — only if specifically wanted.
+5. ~~MT/MC→RNS passthrough~~ — **DEFERRED → later** (RNS coding deferred this cycle, owner). §6 holds the design.
+6. **(L, stretch → later) Dual-LNS crosslink** (§5) — second ABP identity per radio + Class-C (or Class-A poll) downlink path + cross-routing.
+7. **(optional) M1 per-source devices; arbitrary MT/MC→RNS (§6 Phase 2); OTAA** — only if specifically wanted. *(Owner chose M1 for the device model — §0.0.)*
 
 ---
 
@@ -158,41 +159,41 @@ v8.3 LoRaWAN is **keyless** (cleartext-header capture/relay only). v8.3.1's enco
 - **OTAA dropped (owner-approved):** OTAA-*encode* needs the JoinAccept **downlink** in a Class-A RX window + `DevNonce` uniqueness/state — impractical for an uplink-only emitter; OTAA-*decode* needs join-derived keys. **ABP only.** (Revisit only if a join-capable bidirectional mode is ever built.)
 - **FCnt persistence vs flash wear** — write-throttle / store coarsely; relax-counters in ChirpStack as fallback.
 - **Duty-cycle** — B1 (RF re-emit) doubles airtime; ensure the throttle enforces LoRaWAN regional limits.
-- **CMAC availability** — confirm `MBEDTLS_CMAC_C`; else bundle a helper.
-- **Per-source provisioning blow-up** (M1) — many devices to register; M2 avoids it.
-- **Weather-station fork** — must confirm raw-LoRa (Fork B); if LoRaWAN (Fork A), it's a gateway task, not this.
-- **Delivery model** — B1 vs B2 is the biggest scope lever; owner to choose.
+- **CMAC availability** — confirmed OFF in the prebuilt lib; bundled the RFC-4493 helper (`src/LoRaWANCrypto.h`).
+- **Per-source provisioning blow-up** (M1) — many devices to register; M2 avoids it. **(Owner accepted M1.)**
+- **Weather-station fork** — confirmed raw-LoRa (Fork B); if LoRaWAN (Fork A), it's a gateway task, not this.
+- **Delivery model** — B1 vs B2 is the biggest scope lever; **owner chose B1.**
 
 ---
 
 ## 11. References
 - Repo: [`CLAUDE.md`](CLAUDE.md), [`V8.3-SPEC.md`](V8.3-SPEC.md), [`BENCH-v8.3.md`](BENCH-v8.3.md); seams `src/main.cpp` (`no-rns-encoder`/`no-lw-encoder` ~557/565), `src/MeshEncoderDebug.h` (`encodeReticulum` ~325, encode patterns), `src/MeshDecoderDebug.h` (`extractLoRaWANMeta` ~978-1012), `src/BridgeConfig.*`.
-- External (cross-LNS research): LoRaWAN 1.0.4 MAC + Backend-Interfaces/Roaming (TS002), TS011 Relay, ChirpStack v4 docs (device classes / multicast / configuration / API). Cited in the v8.3.1 scope research + memory.
+- External (cross-LNS research): LoRaWAN 1.0.4 MAC + Backend-Interfaces/Roaming (TS002), TS011 Relay, ChirpStack v4 docs (device classes / multicast / configuration / API). Cited in the ABP scope research + memory.
 
 ---
 
 ## 12. Scope-research findings (recovered 2026-06-15) — code-grounded
 
-The v8.3.1 scope research (workflow `wf_815177cd-9aa`; LoRaWAN 1.0.4 spec + ChirpStack v4 docs + repo) is complete. Refinements to the sections above:
+The ABP scope research (workflow `wf_815177cd-9aa`; LoRaWAN 1.0.4 spec + ChirpStack v4 docs + repo) is complete. Refinements to the sections above:
 
 **Crypto — the one real gotcha (A4):**
 - mbedTLS **AES-128 ECB + CTR are present & proven in-tree** (`MeshEncoderDebug.h` — MeshCore ECB ~73-81, Meshtastic CTR ~192-202/309-319); HMAC-SHA256, SHA-256, base64 too.
-- ⚠️ **AES-CMAC is NOT linkable** — the prebuilt esp32s3 mbedTLS (arduino-esp32 2.0.17) was built with `CONFIG_MBEDTLS_CMAC_C` **OFF** (`tools/sdk/esp32s3/sdkconfig:1644`); `mbedtls_cipher_cmac` link-errors. **Add a self-contained RFC-4493 AES-CMAC helper (~40 lines)** on `mbedtls_aes_setkey_enc` + `mbedtls_aes_crypt_ecb` (both in the prebuilt lib). Only new crypto primitive required.
+- ⚠️ **AES-CMAC is NOT linkable** — the prebuilt esp32s3 mbedTLS (arduino-esp32 2.0.17) was built with `CONFIG_MBEDTLS_CMAC_C` **OFF** (`tools/sdk/esp32s3/sdkconfig:1644`); `mbedtls_cipher_cmac` link-errors. **Added a self-contained RFC-4493 AES-CMAC helper** (`src/LoRaWANCrypto.h`) on `mbedtls_aes_setkey_enc` + `mbedtls_aes_crypt_ecb` (both in the prebuilt lib). Only new crypto primitive required.
 
 **Exact code seams (A2/A4):**
-- **Encoder hook:** `main.cpp:565-569` — the `MT/MC → LoRaWAN` `drop=no-lw-encoder` site inside `enqueueTextForDest()` (`main.cpp:551-669`), with `dstChan`/`srcId`/`srcTag`/`body` in hand. Replace the drop → `encodeLoRaWANUplink()` → `outPkt[256]` → `g_routeQ[destIdx].push()` → `evt=QUEUE`; add `DedupCache::record(...)` for loop-safety (mirror MT ~610 / MC ~636 / dedup ~654-656).
+- **Encoder hook:** `main.cpp:565-569` — the `MT/MC → LoRaWAN` `drop=no-lw-encoder` site inside `enqueueTextForDest()` (`main.cpp:551-669`), with `dstChan`/`srcId`/`srcTag`/`body` in hand. Replace the drop → `encodeLoRaWANUplink()` → `outPkt[256]` → `g_routeQ[destIdx].push()` → `evt=QUEUE`; add `DedupCache::record(...)` for loop-safety (mirror MT ~610 / MC ~636 / dedup ~654-656). **(Done in P1.)**
 - **Encoder template:** `encodeMeshtasticText` (`MeshEncoderDebug.h:121-206`). Deferral pattern: `encodeReticulum` stub (`:340`).
 - **Decoder (inverse ref):** `extractLoRaWANMeta` (`MeshDecoderDebug.h:978-1012`) — cleartext header only; its `FCnt` is `uint16` (low 16) — the encoder needs the **full 32-bit** FCnt in B0/A_i.
 
 **Config / NVS (A4):**
-- `SCHEMA_VERSION=4` (`BridgeConfig.cpp:89`); `RadioChannel.key[32]` (`RadioChannel.h:19`) holds ONE AES key → **too small for NwkSKey+AppSKey** ⇒ **schema v4→v5** with a per-radio LoRaWAN credential struct (DevAddr/NwkSKey/AppSKey/FPort) + migration arm + a new `LoRaWANConfig::resolve()` (mirror `MeshCoreConfig::resolve` `:36-60`).
-- **FCnt:** a **separate small NVS key** (`prefs.putUInt`), updated per-uplink — NOT the main blob `save()` (`BridgeConfig.cpp:337-348`) → avoids flash wear.
-- **Portal:** `CaptivePortal.cpp:519-523` currently forces sync `0x34` and **clears** the key (keyless); add DevAddr/NwkSKey/AppSKey/FPort inputs gated to the `lw` class + save-handler validation.
+- `SCHEMA_VERSION=4` (`BridgeConfig.cpp:89`); `RadioChannel.key[32]` (`RadioChannel.h:19`) holds ONE AES key → **too small for NwkSKey+AppSKey** ⇒ **schema v4→v5** with a per-radio LoRaWAN credential struct (DevAddr/NwkSKey/AppSKey/FPort) + migration arm + a new `LoRaWANConfig::resolve()` (mirror `MeshCoreConfig::resolve` `:36-60`). **(P2.)**
+- **FCnt:** a **separate small NVS key** (`prefs.putUInt`), updated per-uplink — NOT the main blob `save()` (`BridgeConfig.cpp:337-348`) → avoids flash wear. **(P2.)**
+- **Portal:** `CaptivePortal.cpp:519-523` currently forces sync `0x34` and **clears** the key (keyless); add DevAddr/NwkSKey/AppSKey/FPort inputs gated to the `lw` class + save-handler validation. **(P2.)**
 
 **ChirpStack v4 (A3):**
 - Provision: device-profile (region; **pin MAC 1.0.x**; ABP; Class A) → device with **DevAddr (private prefix, NetID 0x000000/0x000001)** + NwkSKey + AppSKey + FPort/codec.
 - FCnt: persist 32-bit in bridge **or** tick **"Disable frame-counter validation"** (drops replay protection; a v4 quirk where `skipFCntCheck` didn't persist was reported — verify it sticks).
 - **Wrong MIC ⇒ silent drop** (no app event). **ADR off + Unconfirmed** (uplink-only).
-- **Timing:** EU868 ~1%/sub-band (single rolling `BRIDGE_TX_DUTY_PERCENT` only approximates, not per-sub-band ETSI); **US915 400 ms per-packet dwell — the rolling throttle does NOT enforce a per-TX ToA cap; add one** (`estimateAirtimeMs` at `main.cpp:971`).
+- **Timing:** EU868 ~1%/sub-band (single rolling `BRIDGE_TX_DUTY_PERCENT` only approximates, not per-sub-band ETSI); **US915 400 ms per-packet dwell — the rolling throttle does NOT enforce a per-TX ToA cap; add one** (`estimateAirtimeMs` at `main.cpp:971`). **(P4.)**
 
 **RNS (A1 — deferred §6):** keyless origination confirmed impossible (single-dest addr = SHA-256 over name + **destination public key**; payload = per-packet ephemeral-X25519 + Fernet AES-CBC/HMAC). Only keyless path = passthrough egress (reassemble `[rns ..]` fragments → `rawRepeatForDest`); stubs `MeshDecoderDebug.h:930` / `MeshEncoderDebug.h:340`; hook the marker on the MT/MC RX path (~`main.cpp:957-964`) **before** text decode. Deferred per owner.
