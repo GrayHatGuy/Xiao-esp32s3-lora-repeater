@@ -10,26 +10,29 @@ Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
 
 A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles.
 
-Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (MT↔MC) or *same-protocol between two channels* (MC↔MC, MT↔MT — e.g. a private channel bridged to the public one). As of **v8.0** everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy. The `platformio.ini` `LORA_RADIO*` build flags remain available as optional first-boot defaults for source builds.
+Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (MT↔MC) or *same-protocol between two channels* (MC↔MC, MT↔MT — e.g. a private channel bridged to the public one). Everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy. The `platformio.ini` `LORA_RADIO*` build flags remain available as optional first-boot defaults for source builds.
 
 Supported today:
 
-- **Meshtastic** (sync `0x2B`) — AES-CTR + a hand-written protobuf walker that lifts `TEXT_MESSAGE_APP` payloads out of the on-air `Data` submessage. `POSITION_APP` and `TELEMETRY_APP` are also decoded and bridged as compact text lines (`pos 40.7234,-74.0123 alt 12m`, `bat 87% 4.05V`, `env 22.5C RH 45% 1013hPa`). Defaults to the public LongFast channel; override `BRIDGE_MT_CHANNEL_NAME` / `BRIDGE_MT_PSK_B64` (or use the captive portal) to bridge a private channel — the PSK can be a short key, a 16-byte AES-128 key, or a 32-byte AES-256 key, and the channel hash is auto-derived. The bridge decodes incoming `NODEINFO_APP` packets into a 64-entry NVS-persistent NodeDB and emits its own periodic NodeInfo so phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge").
+- **Meshtastic** (sync `0x2B`) — AES-CTR + a hand-written protobuf walker that lifts `TEXT_MESSAGE_APP` payloads out of the on-air `Data` submessage. `POSITION_APP` and `TELEMETRY_APP` are also decoded and bridged as compact text lines (`pos 40.7234,-74.0123 alt 12m`, `bat 87% 4.05V`, `env 22.5C RH 45% 1013hPa`). Defaults to the public LongFast channel; override `BRIDGE_MT_CHANNEL_NAME` / `BRIDGE_MT_PSK_B64` (or use the captive portal) to bridge a private channel — the PSK can be a short key, a 16-byte AES-128 key, or a 32-byte AES-256 key, and the channel hash is auto-derived. The bridge decodes incoming `NODEINFO_APP` packets into a 64-entry NVS-persistent NodeDB and emits its own periodic NodeInfo so phones surface the bridge as a known sender (`!b16b00b5`, "LoRa Bridge"). It also learns wall-clock time opportunistically from a `POSITION_APP` time field, so bridged MeshCore packets carry a real timestamp.
 - **MeshCore channel** (sync `0x12`) — AES-128-ECB decrypt of `GRP_TXT`, with the 2-byte truncated HMAC-SHA256 verified against the channel key. Defaults to the MeshCore public channel (hash `0x11`); override `BRIDGE_MC_KEY_HEX` / `BRIDGE_MC_CHANNEL_NAME` in `platformio.ini` to bridge a private or custom channel instead — the on-air channel-hash byte is auto-derived from `SHA-256(key)[0]` at boot.
-- **Reticulum / RNode** (sync `0x42`, **stub**) — incoming frames are base64-encoded and bridged into the other mesh as text packets of the form `[rns <seq> <x>/<y>] <base64>`. The bridge auto-fragments across multiple MT/MC packets when a single one wouldn't hold the encoded frame, using a CRC-16 low-byte sequence ID so concurrent fragmented frames don't get mixed up on the receiving side. As of v8.2 fragments are paced by the per-radio **airtime throttle** rather than fixed inter-fragment delays (max 8 fragments per frame, tunable via `BRIDGE_RNS_*`). A proper RNS packet encoder is still TODO; until then, "destination = RNS" is a log-and-drop path on serial.
+- **Reticulum / RNode** (sync `0x42`) — incoming frames are base64-encoded and bridged into the other mesh as text packets of the form `[rns <seq> <x>/<y>] <base64>`. The bridge auto-fragments across multiple MT/MC packets when a single one wouldn't hold the encoded frame, using a CRC-16 low-byte sequence ID so concurrent fragmented frames don't get mixed up on the receiving side. Fragments are paced by the per-radio **airtime throttle** (max 8 fragments per frame, tunable via `BRIDGE_RNS_*`). With both radios set to Reticulum, the bridge **transparently raw-repeats** RNS frames byte-for-byte — a range-extending RNS↔RNS repeater (`BRIDGE_RNS_INPROTO_REPEAT`, on by default). A proper `MT/MC → RNS` packet encoder is still TODO; until then that direction is a log-and-drop path on serial.
+- **LoRaWAN** (sync `0x34`, **keyless**) — a localized capture/relay tap, *not* a gateway. The bridge reads only the **cleartext LoRaWAN MAC header** (MType, DevAddr, FCtrl, FCnt, FPort, FRMPayload length; JoinEUI/DevEUI on join-requests) — no keys, no payload decryption, no `FCnt`/MIC synthesis. It can log the header (`evt=RX proto=LW …`), emit a one-line metadata **summary** into your Meshtastic/MeshCore mesh (`BRIDGE_LW_SUMMARY_TO_MESH`), and **transparently raw-repeat** `0x34` frames between two LoRaWAN radios/bridges as a dedup-bounded flood (`BRIDGE_LW_RELAY`) — modeled on the [Tasmota LoRaWAN bridge](https://tasmota.github.io/docs/LoRa-and-LoRaWan-Bridge/). `MT/MC → LoRaWAN` is a deliberate log-and-drop (`no-lw-encoder`): keyless firmware cannot inject content into LoRaWAN. Single-channel per radio (no channel hopping, no Class-A RX windows).
 
-### v8.2 — RX-priority routing + source-identity preservation
+### Routing & behavior
 
-v8.2 replaces the v8.0/8.1 blocking crossover with an **RX-priority pipeline** and adds a **source-identity-preservation** layer. The behaviour you'll notice:
+Every received packet is decoded once, run through a content-hash loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a non-blocking transmit. The behavior worth calling out:
 
 - **Clean far-side bodies.** The old `[MT !id name]` / `[MC]` / `[rns]` text markers are gone. Loop prevention is now a **TTL content-hash dedup** (FNV-1a over the decoded body + sender id + Meshtastic packet_id, recorded on receive *and* on every emission), which also drops the same packet heard on both radios and never false-drops a user message that happens to start with `[MT`. Folding the packet_id lets a node's genuinely-distinct messages with identical text through each time (new id → new hash) while echoes/replays (same id) still drop.
 - **A repeat looks like it came from the original sender, not the bridge.** Cross-protocol **MC→MT** reconstructs the MeshCore sender as a *deterministic virtual Meshtastic node* (id = `FNV-1a("MC|"+name)`) and advertises a synthetic NodeInfo, so a phone shows the message from `Alice @MC`. Cross-protocol **MT→MC** prefixes the body with the Meshtastic sender's name (`Alice@MT: …`, NodeDB short-name or `!hexid`) — the only identity channel MeshCore group text offers. A **same-protocol, same-channel** pair on different frequencies is a *transparent raw repeat*: the original bytes go out unchanged (Meshtastic: hop_limit decremented, `relay_node` set), so the far side sees the original sender natively. The `@MT`/`@MC` origin tags are on by default (`BRIDGE_TAG_ORIGIN_PROTO=0` for bare native-looking names). The whole layer can be disabled with `-DBRIDGE_IDENTITY_PRESERVE=0` (clean-body / bridge-identity behaviour).
 - **TX never clobbers RX.** Each radio defaults to receive; an outbound packet goes onto a per-destination, age-bounded, PSRAM-backed queue and is sent by a CAD-gated (listen-before-talk) non-blocking transmit with CSMA backoff and a duty-cycle airtime throttle. So a long SF11 transmit no longer makes the bridge deaf.
 - **Structured serial logs.** The runtime log is now one greppable `ts=… evt=… radio=… key=val` line per pipeline event (`RX`/`DEDUP_PASS`/`DROP`/`QUEUE`/`CAD`/`TX_START`/`TX_DONE`/`THROTTLE`/`NODEDB`/`NODEINFO`), emitted atomically across both cores.
 
-**v8.2 build flags** — all optional; every flag below is documented with its compiled-in default in [`platformio.ini`](platformio.ini) (uncomment a `-D` line to override). Loop/dedup: `BRIDGE_DEDUP_TTL_MS`, `BRIDGE_DEDUP_TABLE_SIZE`. Route queue: `BRIDGE_ROUTE_QUEUE_DEPTH`, `BRIDGE_ROUTE_MAX_AGE_MS`. TX scheduler / CAD: `BRIDGE_CAD_BACKOFF_MIN_MS`, `BRIDGE_CAD_BACKOFF_MAX_MS`, `BRIDGE_TX_INFLIGHT_TIMEOUT_MS`. Airtime throttle: `BRIDGE_TX_DUTY_PERCENT`, `BRIDGE_TX_MIN_GAP_MS`. Identity: `BRIDGE_IDENTITY_PRESERVE`, `BRIDGE_TAG_ORIGIN_PROTO`, `BRIDGE_MC_NONAME_VIRTUAL`, `BRIDGE_MC_NAME_MAX`, `BRIDGE_VIRT_NODES_MAX`, `BRIDGE_VIRT_NODEINFO_PERIOD_MS`. RNS: `BRIDGE_RNS_MAX_FRAGS` (the old `BRIDGE_RNS_FRAG_DELAY_*` knobs are removed — fragments are paced by the airtime throttle). The v8.0/8.1 first-boot defaults (`LORA_RADIO*_*`, `BRIDGE_MT_*`, `BRIDGE_MC_*`, `BRIDGE_REGION`) are unchanged.
+**Everything above is tunable at compile time.** All flags are optional, each documented with its compiled-in default in [`platformio.ini`](platformio.ini); see [Build flags & compile-time configuration](#build-flags--compile-time-configuration) under Instructions for the full catalog.
 
-All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependencies beyond `jgromes/RadioLib` (pinned `7.7.0` as of v8.2).
+All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependencies beyond `jgromes/RadioLib` (pinned `7.7.0`).
+
+**What's new in each release:** see the **[v8.3 release notes](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3)** and [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. Design + bench docs: [`V8.3-SPEC.md`](V8.3-SPEC.md), [`V8.2-SPEC.md`](V8.2-SPEC.md), [`BENCH-v8.3.md`](BENCH-v8.3.md).
 
 ## Parts Required
 
@@ -74,6 +77,8 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
 
 ## Instructions
 
+> **Fastest path (no toolchain).** Download `xiao-dual-sx1262-v8.3-vanilla-factory.bin` from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest), connect both antennas, and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 xiao-dual-sx1262-v8.3-vanilla-factory.bin`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 7**. The numbered steps below are for building from source.
+
 1. **Stack the hardware.** Mate the B2B shield (radio 1) on top the Xiao, the edge-pin shield (radio 2) on bottom. Connect antennas to **both** radios before powering on. Correct orientation has all antennas on the same side.
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
 3. *(Optional — source builds only)* **Pre-seed the radios** in [`platformio.ini`](platformio.ini). As of v8.0 this is no longer required: a `.bin` built with no `LORA_RADIO*` flags first-boots straight into the captive portal where region, protocol and RF are all set. If you do build from source, these flags become the first-boot defaults the portal form pre-fills:
@@ -83,7 +88,7 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
    -DLORA_RADIO1_SPREAD_FACTOR=11
    -DLORA_RADIO1_CODING_RATE=5
    -DLORA_RADIO1_TX_POWER=20
-   -DLORA_RADIO1_SYNC_WORD=0x2B   ; 0x12 MeshCore, 0x2B Meshtastic, 0x42 Reticulum
+   -DLORA_RADIO1_SYNC_WORD=0x2B   ; 0x12 MeshCore, 0x2B Meshtastic, 0x42 Reticulum, 0x34 LoRaWAN
    ```
 4. *(Optional)* **Set bridge defaults** in `platformio.ini`. These are the values the bridge uses when its NVS config is empty (i.e. a fresh flash). The captive portal in step 7 lets users override them at runtime without rebuilding. The numeric ID and `!`-prefixed string must encode the same value; string macros are single-quoted so spaces survive shell tokenization:
    ```ini
@@ -94,12 +99,40 @@ SX1262 mounts on top of the Xiao's perimeter header. The pin mapping the firmwar
    ```
 5. **Clean + build.** `pio run -t clean && pio run` — the clean is important whenever a header changes.
 6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
-7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
+7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / LoRaWAN / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
 
    <p align="center"><img src="images/captive-portal.png" alt="Captive-portal configuration form served at LoRa-Bridge-XX @ 192.168.4.1" width="360"></p>
    <p align="center"><em>The captive-portal config form (region, per-radio protocol/RF/channel, identity, toggles).</em></p>
 
 8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
+
+### Build flags & compile-time configuration
+
+Every option below is **optional** and lives in [`platformio.ini`](platformio.ini), documented with its compiled-in default (uncomment a `-D` line to override). They are first-boot defaults / behavior tunables only — region, per-radio protocol and RF are normally set in the captive portal at runtime. Grouped by the release that introduced them:
+
+**v8.0 — per-radio RF, identity & channels** *(also the captive-portal defaults)*
+- Per radio (`*` = `1` B2B / `2` edge): `LORA_RADIO*_FREQUENCY`, `LORA_RADIO*_BANDWIDTH`, `LORA_RADIO*_SPREAD_FACTOR`, `LORA_RADIO*_CODING_RATE`, `LORA_RADIO*_TX_POWER`, `LORA_RADIO*_SYNC_WORD` (`0x2B` MT · `0x12` MC · `0x42` RNS · `0x34` LoRaWAN).
+- Global radio: `LORA_PREAMBLE_LEN` (8), `LORA_CRC` (1), `LORA_TCXO_VOLTAGE` (1.8f), `LORA_MAX_PACKET` (256).
+- Identity: `BRIDGE_MT_NODE_ID` (`0xB16B00B5u`) + matching `BRIDGE_MT_NODE_ID_STR` (`"!b16b00b5"`), `BRIDGE_MT_LONG_NAME`, `BRIDGE_MT_SHORT_NAME`.
+- Channels: `BRIDGE_MT_CHANNEL_NAME` (LongFast) + `BRIDGE_MT_PSK_B64` (blank = LongFast; decodes to a 1/16/32-byte key); `BRIDGE_MC_CHANNEL_NAME` (public) + `BRIDGE_MC_KEY_HEX` (channel-hash auto-derived from `SHA-256(key)[0]`).
+- Per-portnum bridging: `BRIDGE_MT_POSITION` (1), `BRIDGE_MT_TELEMETRY` (1); region default: `BRIDGE_REGION`.
+
+**v8.1 — build-time validation** *(automatic; no flag to set)*
+- [`src/LoraConfigCheck.h`](src/LoraConfigCheck.h) rejects an invalid `LORA_RADIO*` set at compile time (`#error` / `static_assert` on sync word, SF/CR/BW/region sanity, TX-power range) — complements the portal's runtime validation of portal-entered values.
+
+**v8.2 — RX-priority routing + source-identity preservation** *(defaults in parens)*
+- Loop/dedup: `BRIDGE_DEDUP_TTL_MS` (60000), `BRIDGE_DEDUP_TABLE_SIZE` (512).
+- Route queue (PSRAM): `BRIDGE_ROUTE_QUEUE_DEPTH` (64), `BRIDGE_ROUTE_MAX_AGE_MS` (30000).
+- TX scheduler / CAD: `BRIDGE_CAD_BACKOFF_MIN_MS` (20), `BRIDGE_CAD_BACKOFF_MAX_MS` (120), `BRIDGE_TX_INFLIGHT_TIMEOUT_MS` (10000).
+- Airtime throttle: `BRIDGE_TX_DUTY_PERCENT` (50), `BRIDGE_TX_MIN_GAP_MS` (0).
+- Identity preservation: `BRIDGE_IDENTITY_PRESERVE` (1), `BRIDGE_TAG_ORIGIN_PROTO` (1), `BRIDGE_MC_NONAME_VIRTUAL` (0), `BRIDGE_MC_NAME_MAX` (32), `BRIDGE_VIRT_NODES_MAX` (32), `BRIDGE_VIRT_NODEINFO_PERIOD_MS` (900000).
+- RNS tunnel: `BRIDGE_RNS_MAX_FRAGS` (8) — fragments paced by the airtime throttle (the old `BRIDGE_RNS_FRAG_DELAY_*` knobs were removed).
+
+**v8.3 — keyless LoRaWAN + RNS↔RNS** *(defaults in parens)*
+- LoRaWAN (sync `0x34`, keyless): `BRIDGE_LW_CAPTURE` (1 — `evt=RX proto=LW` header log), `BRIDGE_LW_SUMMARY_TO_MESH` (1 — one-line metadata summary to MT/MC), `BRIDGE_LW_RELAY` (1 — transparent LW↔LW raw repeat / dedup-bounded flood).
+- Reticulum: `BRIDGE_RNS_INPROTO_REPEAT` (1 — transparent RNS↔RNS raw repeat; `0` = pre-v8.3 tunnel-only).
+
+**Bench only:** `BRIDGE_BENCH_AUTOSAVE` (set on the `bench_*` envs) makes an erased board boot pre-configured and skip the captive portal — never enable it in a release build.
 
 ## Routing & protocol support (current functionality)
 
@@ -113,7 +146,8 @@ is preserved/reconstructed across the bridge — see [`V8.2-SPEC.md`](V8.2-SPEC.
 |----------|------|-------------|-------------|----------------------------|
 | **Meshtastic (MT)** | `0x2B` | AES-CTR + protobuf walk: `TEXT_MESSAGE_APP`, `POSITION_APP`, `TELEMETRY_APP` → text line; `NODEINFO_APP` → NodeDB (not bridged) | Re-encodes for the destination. **Same channel, different frequency → transparent raw repeat** (original bytes, `hop_limit` decremented) | **MT→MC:** body prefixed `Name@MT:` (NodeDB short-name, else `!hexid`). **MT→MT raw repeat:** original sender preserved natively |
 | **MeshCore (MC)** | `0x12` | AES-128-ECB `GRP_TXT` + 2-byte HMAC verify | Re-encodes `GRP_TXT` for the destination channel; same-channel/diff-freq → raw repeat | **MC→MT:** the `"Name: …"` sender becomes a deterministic virtual MT node `FNV-1a("MC|name")` with a synthetic NodeInfo (`Name @MC`); the name is moved into the MT header and stripped from the body |
-| **Reticulum (RNS)** | `0x42` | **RX-only stub** — frame treated as opaque bytes (the bridge holds no RNS keys; it is *not* decrypted) | **RNS→MT/MC:** base64-tunneled as `[rns <seq> <x>/<y>] …` text fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). **MT/MC→RNS: not implemented** (log-and-drop). See the [Reticulum roadmap](#reticulum--rnode-routing) | n/a — frames opaque; RNS→MT fragments carry the bridge's own MT id |
+| **Reticulum (RNS)** | `0x42` | **Not decrypted** — frame treated as opaque bytes (the bridge holds no RNS keys) | **RNS↔RNS:** transparent byte-for-byte raw repeat (range extender, `BRIDGE_RNS_INPROTO_REPEAT`). **RNS→MT/MC:** base64-tunneled as `[rns <seq> <x>/<y>] …` text fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). **MT/MC→RNS: not implemented** (log-and-drop). See the [Reticulum roadmap](#reticulum--rnode-routing) | n/a — frames opaque; RNS→MT fragments carry the bridge's own MT id |
+| **LoRaWAN (LW)** | `0x34` | **Keyless** — cleartext MAC header only (MType / DevAddr / FCtrl / FCnt / FPort / len; JoinEUI/DevEUI on joins); no key, no payload decrypt | **Capture** log + **metadata summary** to MT/MC (`BRIDGE_LW_SUMMARY_TO_MESH`); **LW↔LW transparent raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`). **MT/MC→LW: not implemented** (log-and-drop `no-lw-encoder`) | n/a — keyless; summaries carry the bridge's own MT/MC id |
 | **Custom** | any (portal-entered) | user-chosen sync word; **no built-in decoder** | RF-agnostic dispatch by sync word; a Custom radio with no matching decoder receives + logs but has no protocol-specific re-encode | n/a |
 | **None** | — | radio disabled (single-radio / monitor mode) | — | — |
 
@@ -140,10 +174,12 @@ the captive portal; compile-time defaults and the `BRIDGE_*` tunables live in
 
 - [x] ~~**v8.2: RX-priority routing redesign + source-identity preservation.**~~ — **done** (v8.2), bench-verified 2026-06-13; specced in [`V8.2-SPEC.md`](V8.2-SPEC.md). Non-blocking CAD-gated TX + per-destination PSRAM route queues + airtime throttle (a transmit no longer blocks the other radio's RX); content-hash dedup keyed on body + sender id + Meshtastic packet_id (replaces the `[MT]/[MC]/[rns]` text markers → clean far-side bodies); source-identity preservation (MC→MT virtual nodes + synthetic NodeInfo, MT→MC name prefixes, same-channel transparent raw repeat); structured `evt=` serial logging; RadioLib pinned 7.7.0.
 
+- [x] ~~**v8.3: keyless LoRaWAN + carry-overs.**~~ — **done & shipped** (v8.3), bench-validated on hardware 2026-06-14; specced in [`V8.3-SPEC.md`](V8.3-SPEC.md). Keyless LoRaWAN (`0x34`) capture tap + metadata summary to MT/MC + transparent LW↔LW raw relay / dedup-bounded flood (`MT/MC → LoRaWAN` is a `no-lw-encoder` drop); transparent **RNS↔RNS** raw repeat; and Meshtastic `POSITION_APP` clock-learn. `BridgeConfig` schema v4 unchanged.
+
 **Next, in priority order — protocol routing comes _ahead of_ the Sub-GHz↔2.4 GHz cross-band phase below:**
 
-- [ ] **Reticulum (RNS) routing — lift the RX-only stub to bidirectional.** Today RNS→MT/MC works as a base64 text tunnel; the missing half is a real RNS packet encoder + fragment reassembly so `MT/MC → RNS` and RNS↔RNS work. Full current state + the work list in [Reticulum / RNode routing](#reticulum--rnode-routing) below.
-- [ ] **LoRaWAN routing (sync `0x34`).** LoRaWAN is *not* a group-text mesh — every payload is per-device-encrypted with no shared/broadcast key, so MC/MT-style **content** bridging is architecturally precluded (full analysis in [`V8.2-SPEC.md`](V8.2-SPEC.md) §14). The realistic feature is a one-way **capture/summarize tap** on `0x34`: decode the cleartext header and forward `DevAddr / FCnt / FPort / RSSI` as a metadata text line into MT/MC (analogous to the RNS tunnel); TX stays a permanent log-and-drop. The dispatch seam (enum + sync constant + decode/encode hooks) is fully mapped in the spec.
+- [ ] **Reticulum `MT/MC → RNS` encoder + reassembly.** RNS↔RNS repeat and RNS→MT/MC tunneling shipped in v8.3; the remaining half is a real RNS packet encoder (build a valid frame) plus `reassembleReticulumFragment()` so `MT/MC → RNS` works. Current state + work list in [Reticulum / RNode routing](#reticulum--rnode-routing) below.
+- [ ] **LoRaWAN key-based decode/encode (ABP/OTAA).** The keyless capture/summary/relay tap shipped in v8.3; the remaining LoRaWAN work is optional per-device session-key **decode** (your own fleet → MT/MC) and **encode** (MT/MC → LoRaWAN) — see [`V8.3-SPEC.md`](V8.3-SPEC.md) §10. Content bridging without keys stays architecturally precluded (analysis in [`V8.2-SPEC.md`](V8.2-SPEC.md) §14).
 
 - [ ] **Sub-GHz ↔ 2.4 GHz LoRa cross-band bridging — Phase 1 ON HOLD pending Seeed clarification.** The current build talks the SX1262's native sub-GHz ranges (902-928 MHz US ISM, 868 MHz EU, etc.). A long-horizon goal is to bridge those to 2.4 GHz LoRa networks (e.g. Meshtastic's 2.4 GHz preset) on the worldwide-licence-free **2.4 GHz ISM band** — the headline feature that makes this milestone worth doing.
 
@@ -170,12 +206,13 @@ the captive portal; compile-time defaults and the `BRIDGE_*` tunables live in
 
 Prioritized **ahead of** the Sub-GHz↔2.4 GHz cross-band phase above, but it stays
 a firmware concern — **no RNS controls will be added to the captive portal.** The
-`0x42` sync word is wired into the dispatcher as a third protocol; today only the
-receive half is implemented (current state in [Routing & protocol
+`0x42` sync word is wired into the dispatcher as a third protocol; as of v8.3 the
+receive half **and** transparent RNS↔RNS raw repeat are implemented (current state in [Routing & protocol
 support](#routing--protocol-support-current-functionality)):
 
 | Direction | Status |
 |-----------|--------|
+| `RX:RNS → TX:RNS` (both radios Reticulum) | ✅ **v8.3** — transparent byte-for-byte raw repeat (`BRIDGE_RNS_INPROTO_REPEAT`, on by default). |
 | `RX:RNS → TX:MT or MC` | ✅ base64 text tunnel — raw bytes re-transmitted as `[rns <seq> <x>/<y>] <base64>` fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). |
 | `RX:MT or MC → TX:RNS` | ❌ log-and-drop — no RNS encoder yet (`encodeReticulum()` returns false). |
 | `RX:RNS → human-readable decode` | ❌ opaque base64 only — RNS frame framing isn't parsed. |
