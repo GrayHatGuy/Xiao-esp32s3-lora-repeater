@@ -73,7 +73,20 @@ option = learn from Meshtastic `POSITION_APP` time field.
 **SHIPPED 2026-06-14.** ff-merged `v8.3-dev` → `main` @ `6c92cf4`; annotated tag **`v8.3`** pushed to origin
 (clean fast-forward, no force-push). GitHub release **PUBLISHED as Latest** 2026-06-14 (notes + `vanilla-factory`
 + `app` bins): https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3 . All `must` bench tests passed on hardware
-(LoRaWAN, both clock-learn paths, full Reticulum block, v8.2 routing regression incl. R9 do-no-harm). Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED, LW-Q1..Q5 resolved). Bench protocol:
+(LoRaWAN, both clock-learn paths, full Reticulum block, v8.2 routing regression incl. R9 do-no-harm).
+
+**Post-ship docs (2026-06-14/15): `main`/`origin/main` now @ `6e11a5a`.** README restructured for v8.3
+(de-versioned intro → "Routing & behavior" + v8.3 release-notes link, LoRaWAN protocol bullet, version-grouped
+"Build flags & compile-time configuration" reference; stale v8.1 prod refs fixed). `BENCH-v8.3.md` gained
+§G results + the byte-identity-via-base64 method and the `fmtNodeId(0)=-` / RNS→MC tunnel-QUEUE string
+corrections. **Contest submission (Seeed `meshtastic-build-off-2026` issue #2) updated to v8.3 + posted:**
+https://github.com/Seeed-Projects/meshtastic-build-off-2026/issues/2 — the exact posted body is kept locally as
+`CONTEST_SUBMISSION_v8.3.md` (gitignored via `CONTEST_SUBMISSION_*.md`). **Optional bench NOT run** (all
+`should`/optional, non-gating): LW-FLOOD (single + bidirectional multi-bridge), `bench_lw_nosum`/`norelay`
+(Pass-D remaining two), R8 RX-priority — **R5 + LW-CAP0 PASSED**. Bench-env addition this cycle:
+`bench_mt_samechan` (R5; both radios MT LongFast @906.875/905.0). CLI gotcha for next session: the generator's
+`rns`/`xiao_esp32s3` envs live in `tools/lw-frame-gen` — run with `pio run -d "<repo>\tools\lw-frame-gen" -e <env> …`;
+the root project has the `bench_*` envs (no `-d`). Design of record: `V8.3-SPEC.md` (APPROVED + IMPLEMENTED, LW-Q1..Q5 resolved). Bench protocol:
 `BENCH-v8.3.md`. All commits build green (`pio run -e xiao_esp32s3`, Flash ~24.6%). Bench rig: 3× Xiao
 bridges on **COM6/COM13/COM14** + 2 MT + 2 MC; LoRaWAN/RNS stimulus = `tools/lw-frame-gen/` flashed on a
 spare bridge (COM6). **The v8.3 folder may be checked out on `main` or a `bench_*` env —
