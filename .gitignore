@@ -1,3 +1,6 @@
 ﻿.pio/
 .vscode/
 *.orig
+
+# Local-only contest submission drafts (posted to the Seeed build-off issue; not part of the firmware)
+CONTEST_SUBMISSION_*.md
