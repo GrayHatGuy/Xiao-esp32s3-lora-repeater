@@ -131,6 +131,39 @@ Finish/skip the OPEN bench items, then: ff-merge `v8.3-dev`→`main`, annotated 
 draft GitHub release notes + bins for owner review. **NEVER force-push `main`.** RNS↔RNS + the deferred
 items can ship code-verified with full on-air bench in the 8.3.x patch, per owner's framing.
 
+## 🔧 v8.3.1 — LoRaWAN ABP uplink encoder + ChirpStack ingestion (IN PROGRESS)
+
+Branch **`v8.3.1-dev`** (off `main`). Cycle scope: mint valid LoRaWAN **ABP** uplinks so a
+raw-LoRa source (canonical: a weather station) is ingested by a ChirpStack LNS. **OTAA dropped;
+MT/MC→RNS coding deferred → 8.3.2+** (owner). Design of record: `V8.3.1-SPEC.md`.
+
+**Owner decisions (locked 2026-06-15, SPEC §0.0):** raw-LoRa **Fork B** · delivery **B1 (RF re-emit)**,
+no WiFi · device model **M1 (per-source)**.
+
+**P1 — IMPLEMENTED, build-green, crypto-verified (2026-06-15); on-air bench OPEN.**
+- New `src/LoRaWANCrypto.h`: self-contained **RFC 4493 AES-CMAC** over `mbedtls_aes_*` (CMAC is
+  compiled OUT of the prebuilt esp32s3 lib — `mbedtls_cipher_cmac` won't link; SPEC §12/A4) +
+  `encodeUplink()` (AES-CTR FRMPayload + CMAC MIC, ADR=0, Unconfirmed) + `selfTest()` KATs.
+- `src/main.cpp`: the `no-lw-encoder` drop in `enqueueTextForDest()` is now a keyed transcode →
+  `g_routeQ` RF re-emit (B1), **gated by `BRIDGE_LW_ENCODE` + parsed creds** so a stock build keeps
+  v8.3's do-no-harm drop. `BRIDGE_LW_ENC_*` build flags; build-flag credential resolver (P1 stand-in;
+  P2 swaps in the schema-v5 per-source store + NVS-persisted FCnt); boot self-test under
+  `BRIDGE_LW_ENC_SELFTEST`.
+- `platformio.ini`: `[env:bench_lw_enc]` — R2=LoRaWAN 903.9/BW125/SF7, encoder+self-test on,
+  throwaway ABP creds (DevAddr `0x26011B22`).
+- **Verified:** stock build green @ 24.6% (unchanged → do-no-harm); `bench_lw_enc` green @ 24.7% and
+  *links* (proves the hand-rolled CMAC avoids the absent primitive). Crypto cross-checked against an
+  independent `cryptography`-lib CMAC: RFC4493 vectors match + a minted frame is MIC-valid and
+  round-trips (`40221b0126 00 0100 0d f62f3b0a401acae9 53c1715d`).
+- **P1 acceptance OPEN (owner bench):** flash `bench_lw_enc`, provision the ABP device in ChirpStack
+  (DevAddr `0x26011B22` + bench keys, MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or
+  persist), send an MT text → confirm ChirpStack shows the decoded uplink. Expect
+  `[lw-selftest] overall : PASS` at boot first.
+
+**P2 next:** schema v4→v5 per-source ABP credential struct + portal + NVS-persisted 32-bit FCnt (M1).
+Then P3 universal source→FPort/payload mapping + ChirpStack codec (weather-station acceptance), P4
+regional timing (US915 per-TX dwell cap).
+
 ## Phase status
 
 - **Phase 0 (v8.1)** — ✅ Shipped. Dual-SX1262 multi-protocol bridge. The contest deliverable.

@@ -30,6 +30,7 @@
 #include "WioSX1262.h"
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
+#include "LoRaWANCrypto.h"     // v8.3.1: AES-CMAC + LoRaWAN ABP uplink encoder
 #include "MeshCoreConfig.h"
 #include "MeshtasticConfig.h"
 #include "BridgeConfig.h"
@@ -364,6 +365,34 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
   #define BRIDGE_LW_RELAY            1   // transparent raw repeat to other 0x34 radios
 #endif
 
+// --- v8.3.1 P1: LoRaWAN ABP uplink ENCODER (keyed; opt-in) ------------------
+// Distinct from the keyless capture/relay above. Minting a valid LoRaWAN uplink
+// requires a per-device ABP identity (DevAddr + NwkSKey + AppSKey), a monotonic
+// FCnt and a CMAC MIC (V8.3.1-SPEC §2/§7). OFF by default so a stock build keeps
+// v8.3's do-no-harm MT/MC->LW drop. When ON *and* both keys parse, the
+// dispatcher transcodes a body into an ABP uplink and queues it for RF re-emit
+// (delivery model B1). P1 sources creds from build flags + an in-RAM FCnt;
+// v8.3.1 P2 replaces this with the schema-v5 per-source store + NVS-persisted
+// FCnt (M1). Keys are 32-hex-char strings; empty (default) => encoder idle.
+#ifndef BRIDGE_LW_ENCODE
+  #define BRIDGE_LW_ENCODE           0
+#endif
+#ifndef BRIDGE_LW_ENC_SELFTEST
+  #define BRIDGE_LW_ENC_SELFTEST     0   // boot-time RFC4493/keystream/frame KATs
+#endif
+#ifndef BRIDGE_LW_ENC_DEVADDR
+  #define BRIDGE_LW_ENC_DEVADDR      0x01000001u   // private NetID (0x01) prefix
+#endif
+#ifndef BRIDGE_LW_ENC_FPORT
+  #define BRIDGE_LW_ENC_FPORT        13            // Custom/weather (V8.3.1-SPEC §3)
+#endif
+#ifndef BRIDGE_LW_ENC_NWKSKEY
+  #define BRIDGE_LW_ENC_NWKSKEY      ""
+#endif
+#ifndef BRIDGE_LW_ENC_APPSKEY
+  #define BRIDGE_LW_ENC_APPSKEY      ""
+#endif
+
 // Per-fragment raw-byte budgets, derived from:
 //   max on-air packet sizes: MC = 184 B, MT = 200 B (conservative).
 //   prefix overhead "[rns AA X/Y] " = 13 chars.
@@ -548,6 +577,55 @@ static void enqueueVirtualNodeInfo(const RadioChannel &dstChan, int destIdx,
 //             MeshCore has no header identity field.
 // Same-protocol relays keep the bridge identity here (the raw-repeat /
 // trans-crypt paths that preserve the exact origin land in a later commit).
+
+#if BRIDGE_LW_ENCODE
+// v8.3.1 P1: resolve build-flag ABP credentials once into a usable form.
+// `ready` is false (=> keep the keyless do-no-harm drop) unless BOTH session
+// keys parse as 32 hex chars. P2 supersedes this with a schema-v5 per-source
+// credential store + an NVS-persisted FCnt (the M1 device model).
+struct LwEncCreds {
+    bool     ready;
+    uint32_t devAddr;
+    uint8_t  fport;
+    uint8_t  nwkSKey[16];
+    uint8_t  appSKey[16];
+};
+
+static int lwHexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool lwParseKey16(const char *s, uint8_t out[16]) {
+    if (!s || strlen(s) != 32) return false;
+    for (int i = 0; i < 16; ++i) {
+        int hi = lwHexNibble(s[2 * i]);
+        int lo = lwHexNibble(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+
+static const LwEncCreds &lwEncCreds() {
+    static LwEncCreds c;
+    static bool init = false;
+    if (!init) {
+        init      = true;
+        c.devAddr = (uint32_t)(BRIDGE_LW_ENC_DEVADDR);
+        c.fport   = (uint8_t)(BRIDGE_LW_ENC_FPORT);
+        bool kn   = lwParseKey16(BRIDGE_LW_ENC_NWKSKEY, c.nwkSKey);
+        bool ka   = lwParseKey16(BRIDGE_LW_ENC_APPSKEY, c.appSKey);
+        c.ready   = kn && ka;
+    }
+    return c;
+}
+
+static uint32_t g_lwEncFcnt = 0;   // in-RAM monotonic FCnt; P2 persists in NVS
+#endif  // BRIDGE_LW_ENCODE
+
 static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
                                const RadioChannel &dstChan, int destIdx,
                                const char *srcTag, const char *body)
@@ -559,10 +637,41 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
         return;
     }
 
-    // Destination is LoRaWAN — log and drop. Keyless v8.3 cannot inject content
-    // into LoRaWAN (needs each device's keys + monotonic FCnt + MIC); MT/MC -> LW
-    // encode is deferred to v8.4+ (V8.3-SPEC §10).
+    // Destination is LoRaWAN. v8.3 was keyless (always dropped). v8.3.1 P1: when
+    // the ABP encoder is built in (BRIDGE_LW_ENCODE) AND credentials parse,
+    // transcode the body into a LoRaWAN ABP uplink and queue it for RF re-emit
+    // (delivery model B1); otherwise keep v8.3's do-no-harm drop (keyless mode /
+    // no keys). Injecting content needs the device keys + monotonic FCnt + MIC.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
+#if BRIDGE_LW_ENCODE
+        const LwEncCreds &lw = lwEncCreds();
+        if (lw.ready) {
+            uint8_t  lwPkt[256];
+            uint32_t fcnt = ++g_lwEncFcnt;          // monotonic; never reuse a value
+            size_t   n = LoRaWANCrypto::encodeUplink(
+                             lw.devAddr, lw.nwkSKey, lw.appSKey, fcnt, lw.fport,
+                             (const uint8_t *)body, strlen(body), /*confirmed=*/false,
+                             lwPkt, sizeof(lwPkt));
+            if (n == 0) {
+                blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-encode-fail msg=\"%s\"\n",
+                      (unsigned long)millis(), srcTag, kTag[destIdx], body);
+                return;
+            }
+            // Loop-safety: remember our own emission (mirror the MT/MC dedup path).
+            DedupCache::record(DedupCache::hash(lwPkt, n, lw.devAddr, fcnt));
+            if (g_routeQ[destIdx].push(lwPkt, n)) {
+                blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=LW len=%u "
+                      "devaddr=%08lx fcnt=%lu fport=%u qdepth=%u msg=\"%s\"\n",
+                      (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)n,
+                      (unsigned long)lw.devAddr, (unsigned long)fcnt, (unsigned)lw.fport,
+                      (unsigned)g_routeQ[destIdx].count(), body);
+            } else {
+                blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
+                      (unsigned long)millis(), srcTag, kTag[destIdx]);
+            }
+            return;
+        }
+#endif  // BRIDGE_LW_ENCODE
         blogf("ts=%lu evt=DROP radio=%s dst=%s drop=no-lw-encoder msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, kTag[destIdx], body);
         return;
@@ -1148,6 +1257,11 @@ void setup()
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
+
+#if BRIDGE_LW_ENC_SELFTEST
+    // v8.3.1 P1: prove the ABP encoder crypto on-device before it ever emits.
+    LoRaWANCrypto::selfTest();
+#endif
 
     // Serialises whole log lines across the two core-pinned radio tasks (§13).
     // Created first so every later blogf() is atomic.
