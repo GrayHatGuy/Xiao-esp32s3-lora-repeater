@@ -441,6 +441,12 @@ static void appendLoRaWANDevices(String &page) {
         page += F("port\" value=\"");
         page += (unsigned)(d.fport ? d.fport : 13);
         page += F("\">");
+
+        page += F("<label><input type=\"checkbox\" name=\"lw");
+        page += (int)i;
+        page += F("tag\" value=\"1\"");
+        if (d.flags & LoRaWANConfig::FLAG_TAG_SRC) page += F(" checked");
+        page += F(">Prepend source tag [proto][srcId] to FRMPayload (multiplexed codec)</label>");
     }
 }
 
@@ -480,6 +486,7 @@ static const char *applyLoRaWANDevices() {
         int fp = s_http.arg(pre + "port").toInt();
         if (fp < 1 || fp > 223) return "ABP FPort must be 1-223.";
         d.fport = (uint8_t)fp;
+        if (s_http.arg(pre + "tag") == "1") d.flags |= LoRaWANConfig::FLAG_TAG_SRC;
 
         LoRaWANConfig::setDevice((int)i, d);
     }

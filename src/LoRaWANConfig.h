@@ -29,6 +29,7 @@ namespace LoRaWANConfig {
 
 constexpr size_t   MAX_DEVICES  = 4;     // bounded per-source ABP identity table
 constexpr uint32_t FCNT_RESERVE = 32;    // FCnt values reserved per NVS write
+constexpr uint8_t  FLAG_TAG_SRC = 0x01;  // Device.flags: prepend a [proto][srcId] source tag
 
 // How a device entry is matched to an inbound source at the encode seam.
 enum SrcSel : uint8_t {
@@ -41,7 +42,7 @@ struct Device {
     uint8_t  inUse;        // 0 = empty slot
     uint8_t  srcSel;       // SrcSel
     uint8_t  fport;        // 1..223 (0 = MAC-only; 224+ reserved by LoRaWAN)
-    uint8_t  _pad;
+    uint8_t  flags;        // bit0 = FLAG_TAG_SRC (prepend [proto][srcId] to FRMPayload)
     uint32_t srcMatch;     // node id / protocol per srcSel
     uint32_t devAddr;      // ABP DevAddr
     uint8_t  nwkSKey[16];  // network session key (MIC)
@@ -55,10 +56,11 @@ void debugDump();
 // True if at least one slot is in use with a non-zero DevAddr.
 bool anyConfigured();
 
-// Resolve the best-match device for an inbound source, or nullptr. Preference:
-// an exact MT-node match, then a protocol match, then a SRC_ANY default.
-// outIndex receives the table index (needed for nextFcnt()).
-const Device *resolve(uint8_t srcProto, uint32_t srcId, int &outIndex);
+// Resolve the best-match device for an inbound source (srcSync = the source
+// radio's LoRa sync word, mapped to a protocol internally), or nullptr.
+// Preference: an exact MT-node match, then a protocol match, then a SRC_ANY
+// default. outIndex receives the table index (needed for nextFcnt()).
+const Device *resolve(uint8_t srcSync, uint32_t srcId, int &outIndex);
 
 // Return the next FCntUp for a device and advance it; persists a fresh
 // reservation every FCNT_RESERVE uplinks so the counter survives reboots

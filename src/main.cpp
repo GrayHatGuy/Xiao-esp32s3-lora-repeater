@@ -674,6 +674,80 @@ static const LwEncCreds &lwEncCreds() {
 }
 
 static uint32_t g_lwEncFcnt = 0;   // in-RAM monotonic FCnt; P2 persists in NVS
+
+// Encode `payload` as a LoRaWAN ABP uplink under the per-source ABP device
+// (LoRaWANConfig) or the P1 build-flag fallback, and queue it for RF re-emit
+// (delivery model B1). Shared by the decoded-text path (enqueueTextForDest) and
+// the Custom raw-LoRa path (ingestAndFanout, P3). When the matched device sets
+// FLAG_TAG_SRC, a [proto:1][srcId:4 LE] header is prepended so a multiplexed
+// ChirpStack codec can recover the origin. Returns true if an uplink was
+// attempted (credentials present), false if no ABP identity matched.
+static bool enqueueAbpUplink(const RadioChannel &srcChan, uint32_t srcId,
+                             int destIdx, const char *srcTag,
+                             const uint8_t *payload, size_t payloadLen,
+                             const char *logMsg)
+{
+    uint32_t       devAddr = 0, fcnt = 0;
+    const uint8_t *nwkKey  = nullptr, *appKey = nullptr;
+    uint8_t        fport   = 0;
+    const char    *credSrc = "?";
+    bool           tagSrc  = false;
+
+    int devIdx = -1;
+    const LoRaWANConfig::Device *dev =
+        LoRaWANConfig::resolve(srcChan.protocol, srcId, devIdx);
+    if (dev) {
+        devAddr = dev->devAddr; nwkKey = dev->nwkSKey; appKey = dev->appSKey;
+        fport   = dev->fport;   fcnt   = LoRaWANConfig::nextFcnt(devIdx);
+        credSrc = "nvs";
+        tagSrc  = (dev->flags & LoRaWANConfig::FLAG_TAG_SRC) != 0;
+    } else {
+        const LwEncCreds &lw = lwEncCreds();
+        if (lw.ready) {
+            devAddr = lw.devAddr; nwkKey = lw.nwkSKey; appKey = lw.appSKey;
+            fport   = lw.fport;   fcnt   = ++g_lwEncFcnt;
+            credSrc = "flag";
+        }
+    }
+    if (!nwkKey) return false;
+
+    // FRMPayload = optional [proto][srcId LE] source tag, then the payload.
+    uint8_t frm[242];                                  // LoRaWAN app-payload cap
+    size_t  flen = 0;
+    if (tagSrc) {
+        frm[flen++] = srcChan.protocol;
+        frm[flen++] = (uint8_t)(srcId);       frm[flen++] = (uint8_t)(srcId >> 8);
+        frm[flen++] = (uint8_t)(srcId >> 16); frm[flen++] = (uint8_t)(srcId >> 24);
+    }
+    size_t take = payloadLen;
+    if (take > sizeof(frm) - flen) take = sizeof(frm) - flen;
+    memcpy(frm + flen, payload, take);
+    flen += take;
+
+    uint8_t lwPkt[256];
+    size_t  n = LoRaWANCrypto::encodeUplink(devAddr, nwkKey, appKey, fcnt, fport,
+                                            frm, flen, /*confirmed=*/false,
+                                            lwPkt, sizeof(lwPkt));
+    if (n == 0) {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-encode-fail msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], logMsg ? logMsg : "");
+        return true;
+    }
+    // Loop-safety: remember our own emission (mirror the MT/MC dedup path).
+    DedupCache::record(DedupCache::hash(lwPkt, n, devAddr, fcnt));
+    if (g_routeQ[destIdx].push(lwPkt, n)) {
+        blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=LW len=%u devaddr=%08lx "
+              "fcnt=%lu fport=%u cred=%s tag=%d qdepth=%u msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)n,
+              (unsigned long)devAddr, (unsigned long)fcnt, (unsigned)fport,
+              credSrc, tagSrc ? 1 : 0, (unsigned)g_routeQ[destIdx].count(),
+              logMsg ? logMsg : "");
+    } else {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx]);
+    }
+    return true;
+}
 #endif  // BRIDGE_LW_ENCODE
 
 static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
@@ -694,55 +768,12 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     // no keys). Injecting content needs the device keys + monotonic FCnt + MIC.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
 #if BRIDGE_LW_ENCODE
-        // (P2) Per-source ABP identity from the portal/NVS table first, else the
-        // P1 build-flag identity. A resolved NVS device carries a persisted,
-        // reboot-safe FCnt; the build-flag fallback keeps an in-RAM counter.
-        uint32_t       devAddr = 0, fcnt = 0;
-        const uint8_t *nwkKey  = nullptr, *appKey = nullptr;
-        uint8_t        fport   = 0;
-        const char    *credSrc = "?";
-
-        int devIdx = -1;
-        const LoRaWANConfig::Device *dev =
-            LoRaWANConfig::resolve(srcChan.protocol, srcId, devIdx);
-        if (dev) {
-            devAddr = dev->devAddr; nwkKey = dev->nwkSKey; appKey = dev->appSKey;
-            fport   = dev->fport;   fcnt   = LoRaWANConfig::nextFcnt(devIdx);
-            credSrc = "nvs";
-        } else {
-            const LwEncCreds &lw = lwEncCreds();
-            if (lw.ready) {
-                devAddr = lw.devAddr; nwkKey = lw.nwkSKey; appKey = lw.appSKey;
-                fport   = lw.fport;   fcnt   = ++g_lwEncFcnt;
-                credSrc = "flag";
-            }
-        }
-
-        if (nwkKey) {
-            uint8_t lwPkt[256];
-            size_t  n = LoRaWANCrypto::encodeUplink(
-                            devAddr, nwkKey, appKey, fcnt, fport,
-                            (const uint8_t *)body, strlen(body), /*confirmed=*/false,
-                            lwPkt, sizeof(lwPkt));
-            if (n == 0) {
-                blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-encode-fail msg=\"%s\"\n",
-                      (unsigned long)millis(), srcTag, kTag[destIdx], body);
-                return;
-            }
-            // Loop-safety: remember our own emission (mirror the MT/MC dedup path).
-            DedupCache::record(DedupCache::hash(lwPkt, n, devAddr, fcnt));
-            if (g_routeQ[destIdx].push(lwPkt, n)) {
-                blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=LW len=%u "
-                      "devaddr=%08lx fcnt=%lu fport=%u cred=%s qdepth=%u msg=\"%s\"\n",
-                      (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)n,
-                      (unsigned long)devAddr, (unsigned long)fcnt, (unsigned)fport,
-                      credSrc, (unsigned)g_routeQ[destIdx].count(), body);
-            } else {
-                blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
-                      (unsigned long)millis(), srcTag, kTag[destIdx]);
-            }
+        // ABP encode (P1/P2): transcode the decoded body into an ABP uplink under
+        // the matching per-source device (else the build-flag fallback). Returns
+        // true when an identity matched; otherwise fall through to the keyless drop.
+        if (enqueueAbpUplink(srcChan, srcId, destIdx, srcTag,
+                             (const uint8_t *)body, strlen(body), body))
             return;
-        }
 #endif  // BRIDGE_LW_ENCODE
         blogf("ts=%lu evt=DROP radio=%s dst=%s drop=no-lw-encoder msg=\"%s\"\n",
               (unsigned long)millis(), srcTag, kTag[destIdx], body);
@@ -1007,6 +1038,31 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
 #endif
         return;
     }
+
+#if BRIDGE_LW_ENCODE
+    // Custom raw-LoRa source (e.g. a proprietary weather station): no built-in
+    // decoder, but if a destination radio is a keyed LoRaWAN ABP encoder, wrap
+    // the RAW received bytes as an ABP uplink FRMPayload (P3 weather-station
+    // path). A ChirpStack payload codec decodes the station-specific format.
+    if (BridgeConfig::radioProtocol(srcIdx) == BridgeConfig::PROTO_CUSTOM) {
+        if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
+            blogf("ts=%lu evt=DROP radio=%s proto=Custom drop=loop-dup\n",
+                  (unsigned long)millis(), srcTag);
+            return;
+        }
+        bool any = false;
+        for (int j = 0; j < NR; j++) {
+            if (j == srcIdx) continue;
+            if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (g_chan[j].protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN)
+                any |= enqueueAbpUplink(srcChan, /*srcId=*/0, j, srcTag, buf, len, "custom-raw");
+        }
+        if (!any)
+            blogf("ts=%lu evt=DROP radio=%s proto=Custom drop=no-lw-abp-dest\n",
+                  (unsigned long)millis(), srcTag);
+        return;
+    }
+#endif
 
     // MT NodeInfo packets feed the NodeDB and are NOT bridged as text — they'd
     // be constant noise on the destination mesh. Try this before the text-body

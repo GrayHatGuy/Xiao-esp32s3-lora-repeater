@@ -69,21 +69,31 @@ bool anyConfigured() {
 // `specificity` gates the resolve() priority pass: 2 = MT-node, 1 = protocol,
 // 0 = ANY default. An entry only matches at the pass equal to its selector's
 // specificity, so a more specific device always wins.
-static bool matches(const Device &d, uint8_t srcProto, uint32_t srcId, int specificity) {
+// Map a source radio's LoRa sync word to a BridgeConfig::Protocol for matching.
+static uint8_t protoOf(uint8_t sync) {
+    if (sync == 0x2B) return BridgeConfig::PROTO_MT;
+    if (sync == 0x12) return BridgeConfig::PROTO_MC;
+    if (sync == 0x42) return BridgeConfig::PROTO_RNS;
+    if (sync == 0x34) return BridgeConfig::PROTO_LORAWAN;
+    return BridgeConfig::PROTO_CUSTOM;
+}
+
+static bool matches(const Device &d, uint8_t proto, uint32_t srcId, int specificity) {
     if (!d.inUse || d.devAddr == 0) return false;
     switch (d.srcSel) {
         case SRC_MT_NODE: return specificity == 2 &&
-                                 srcProto == BridgeConfig::PROTO_MT && srcId == d.srcMatch;
-        case SRC_PROTO:   return specificity == 1 && srcProto == (uint8_t)d.srcMatch;
+                                 proto == BridgeConfig::PROTO_MT && srcId == d.srcMatch;
+        case SRC_PROTO:   return specificity == 1 && proto == (uint8_t)d.srcMatch;
         case SRC_ANY:     return specificity == 0;
         default:          return false;
     }
 }
 
-const Device *resolve(uint8_t srcProto, uint32_t srcId, int &outIndex) {
+const Device *resolve(uint8_t srcSync, uint32_t srcId, int &outIndex) {
+    uint8_t proto = protoOf(srcSync);
     for (int spec = 2; spec >= 0; --spec) {
         for (size_t i = 0; i < MAX_DEVICES; i++) {
-            if (matches(s_dev[i], srcProto, srcId, spec)) {
+            if (matches(s_dev[i], proto, srcId, spec)) {
                 outIndex = (int)i;
                 return &s_dev[i];
             }
