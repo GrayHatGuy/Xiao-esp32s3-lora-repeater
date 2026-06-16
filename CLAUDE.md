@@ -151,13 +151,16 @@ no WiFi · device model **M1 (per-source)**.
   P2 swaps in the schema-v5 per-source store + NVS-persisted FCnt); boot self-test under
   `BRIDGE_LW_ENC_SELFTEST`.
 - `platformio.ini`: `[env:bench_lw_enc]` — R2=LoRaWAN 903.9/BW125/SF7, encoder+self-test on,
-  throwaway ABP creds (DevAddr `0x26011B22`).
+  throwaway ABP creds. DevAddr is now `0x01000001` (**NwkID 0** → matches ChirpStack's default
+  private **NetID `0x000000`**; the old `0x26011B22` was NwkID 19 and would be silently dropped by a
+  default LNS). `selfTest()` keeps `0x26011B22` as an internal crypto KAT only (never on air).
+  Bench env also sets `REGION=US`; new `[env:bench_lw_enc_dwell]` (SF12) exercises the P4 dwell cap.
 - **Verified:** stock build green @ 24.6% (unchanged → do-no-harm); `bench_lw_enc` green @ 24.7% and
   *links* (proves the hand-rolled CMAC avoids the absent primitive). Crypto cross-checked against an
   independent `cryptography`-lib CMAC: RFC4493 vectors match + a minted frame is MIC-valid and
   round-trips (`40221b0126 00 0100 0d f62f3b0a401acae9 53c1715d`).
 - **P1 acceptance OPEN (owner bench):** flash `bench_lw_enc`, provision the ABP device in ChirpStack
-  (DevAddr `0x26011B22` + bench keys, MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or
+  (DevAddr `0x01000001` + bench keys, MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or
   persist), send an MT text → confirm ChirpStack shows the decoded uplink. Expect
   `[lw-selftest] overall : PASS` at boot first.
 
@@ -172,6 +175,28 @@ no WiFi · device model **M1 (per-source)**.
 - **P4:** `regionDwellMs()` US915 400 ms per-TX dwell cap in the TX scheduler (EU868 via
   `BRIDGE_TX_DUTY_PERCENT`).
 - **Deferred → later:** ABP/OTAA decode, dual-LNS crosslink, MT/MC→RNS encoder.
+
+**Pre-bench adversarial review + fixes #1–#6 (2026-06-15; `dev-ABP-lorawan` `d98da4b`+`1496717`, LOCAL/not pushed).**
+30-agent workflow (7 dims → per-finding skeptic → completeness critic; 22 findings, 18 confirmed). **Crypto
+VERIFIED SOUND** — an independent Python recompute raised 0 findings; RFC4493 CMAC/B0/A_i/FRMPayload/MIC are
+1.0.x byte-correct. Verdict: a single-device **LW-P1-ACCEPT should pass as-was**; the traps were in the
+multi-device / redeploy / tagged paths. Fixes folded in (build-green `xiao_esp32s3` / `bench_lw_enc` /
+`xiao_esp32s3_lwabp`; stock binary +112 B of never-called code only → do-no-harm intact):
+- **#1** FCnt persisted by **DevAddr** (`fc_<addr>`) not slot index — survives portal row moves; `setDevice()`
+  re-seeds on DevAddr change. **#3** **fail-closed** reserve-before-issue (`advanceFcnt()` persists+verifies
+  the NVS write before issuing; `FCNT_INVALID`→`drop=lw-fcnt-fail`; saturates near 2³²). **#4** build-flag
+  fallback FCnt now reboot-safe via `nextFcntForDevAddr()` (was an in-RAM `++` that reset to 0 each boot) +
+  DevAddr-collision boot warn. **#2** `selfTest()` result latched → encoder refuses to emit on a KAT FAIL
+  (`drop=lw-selftest-fail`). **#5** source tag stamps `protoOf(sync)` enum (1/2/3/4/5), not the raw sync word
+  (codec was decoding MT/MC as "custom"); `chirpstack-codec.js` updated. **#6** over-cap payload dropped
+  (`drop=lw-payload-overflow`), not silently truncated.
+- **Bench-prep (this pass):** bench DevAddr → `0x01000001` (NwkID-0, LNS-default-friendly); `bench_lw_enc`
+  set `REGION=US`; new `bench_lw_enc_dwell` (SF12) for LW-P4-DWELL; `BENCH-v8.4.md` updated (new tests
+  LW-P2-FCNT-MOVE / overflow, DevAddr-NetID note, drop-reason glossary, migration note).
+- ⚠️ **Migration:** counters moved to `fc_<addr>` keys → old `fc<N>` slot keys orphaned, a device resumes at
+  FCnt 0 on first boot after this (fine with disable-FCnt-validation).
+- **NOT fixed (non-gating, deferred):** per-DR payload cap (242 B absolute + dwell only); `FPort==0`/`srcSel`
+  portal guards; `nextFcnt()` mutex (only if NR grows — T_LORA_QUAD); portal FCnt display.
 
 ## Phase status
 
