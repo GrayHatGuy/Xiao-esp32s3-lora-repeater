@@ -1,5 +1,32 @@
 # Changelog
 
+## v8.4 — LoRaWAN ABP uplink encoder (keyed)
+
+**Status: implemented on `dev-ABP-lorawan`, build-green + crypto-verified;
+on-air ChirpStack bench pending — not yet tagged or released.** Targets the v8.4
+release. Design: `ABP-LORAWAN-SPEC.md`.
+
+- **Keyed LoRaWAN ABP *uplink* encoder.** The v8.3 keyless tap couldn't inject
+  content into LoRaWAN (`MT/MC → LoRaWAN` was a `no-lw-encoder` drop). v8.4 adds
+  an opt-in **keyed** encoder: when a `0x34` destination radio has ABP
+  credentials, the bridge transcodes a decoded MT/MC body into a valid LoRaWAN
+  1.0.x **ABP uplink** (DevAddr + `NwkSKey` + `AppSKey`; AES-CTR FRMPayload,
+  AES-CMAC MIC, monotonic FCnt, ADR off, Unconfirmed) and re-emits it over RF
+  (delivery model **B1**) for an existing gateway to forward to a ChirpStack LNS.
+- **New `src/LoRaWANCrypto.h`** — a self-contained **RFC 4493 AES-CMAC** over
+  mbedTLS AES (the prebuilt esp32s3 mbedTLS ships `CONFIG_MBEDTLS_CMAC_C` off, so
+  `mbedtls_cipher_cmac` won't link) + `encodeUplink()` + a boot self-test
+  (`BRIDGE_LW_ENC_SELFTEST`) of the RFC 4493 vectors, the FRMPayload keystream,
+  and a frame round-trip. Crypto cross-checked against an independent CMAC.
+- **Opt-in / do-no-harm.** Gated by `BRIDGE_LW_ENCODE` (default 0) + parsed keys
+  (`BRIDGE_LW_ENC_NWKSKEY` / `_APPSKEY`, plus `_DEVADDR` / `_FPORT`); a stock
+  build keeps v8.3's keyless behavior. New `bench_lw_enc` env.
+- **Next phases (not in v8.4):** per-source credentials + a captive-portal
+  section + NVS-persisted 32-bit FCnt (P2); universal source→FPort/payload
+  mapping + a ChirpStack codec, with the raw-LoRa weather-station as the
+  acceptance test (P3); regional dwell/duty enforcement (P4). OTAA and ABP
+  *decode* remain optional/deferred.
+
 ## v8.3.1 — Radio 2 module-revision (V1.0 / V1.1) support + bring-up hardening
 
 **Status: implemented on `v8.3.1-r2-pin-variants`, build-green (both variants,

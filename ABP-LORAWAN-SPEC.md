@@ -1,7 +1,7 @@
 # ABP-LORAWAN-SPEC — LoRaWAN ABP encoder · universal ChirpStack ingestion  *(branch `dev-ABP-lorawan`; MT/MC→RNS deferred)*
 
 > **Status: DRAFT (scoping).** Branch `dev-ABP-lorawan` off `main` (pushed). Supersedes nothing yet — additive on top of shipped v8.3.
-> **Release version: TBD / de-versioned 2026-06-15.** This feature was tentatively labelled "v8.3.1" while in scoping; that slot has since been **reassigned to a v8.3 patch (Radio2 pin-defines fix, separate session)**, so the ABP encoder is now tracked by *branch name*, version to be assigned at release. Do NOT tag this branch v8.3.1.
+> **Release version: targeted for v8.4** (decided 2026-06-15; earlier de-versioned while TBD). This feature was tentatively labelled "v8.3.1" while in scoping; that slot was **reassigned to a v8.3 patch (Radio2 pin-defines fix, separate session)**. The `dev-ABP-lorawan` branch now targets the **v8.4** release (the spec *filename* stays de-versioned). Do NOT tag this branch v8.3.1.
 > **Scope steer (owner):** LoRaWAN **ABP is REQUIRED**; **OTAA is OPTIONAL and may be dropped** if hard/complicated (see §10). The encoder is **opt-in and keyed** — v8.3's *keyless* LoRaWAN capture/relay stays intact as a separate mode (see §8).
 > Some §§ (exact code-seam file:line, final phase effort) will be tightened from the in-flight scope-research synthesis.
 

@@ -133,8 +133,8 @@ items can ship code-verified with full on-air bench in the 8.3.x patch, per owne
 
 ## 🔧 ABP LoRaWAN uplink encoder + ChirpStack ingestion — branch `dev-ABP-lorawan` (IN PROGRESS)
 
-Branch **`dev-ABP-lorawan`** (off `main`, pushed). Release version TBD — the "v8.3.1" slot was
-reassigned to a v8.3 Radio2-pin-defines patch (separate session). Scope: mint valid LoRaWAN **ABP**
+Branch **`dev-ABP-lorawan`** (off `main`, pushed); **targets the v8.4 release** (the "v8.3.1" slot was
+reassigned to a v8.3 Radio2-pin-defines patch, separate session). Scope: mint valid LoRaWAN **ABP**
 uplinks so a raw-LoRa source (canonical: a weather station) is ingested by a ChirpStack LNS. **OTAA
 dropped; MT/MC→RNS coding deferred** (owner). Design of record: `ABP-LORAWAN-SPEC.md`.
 
