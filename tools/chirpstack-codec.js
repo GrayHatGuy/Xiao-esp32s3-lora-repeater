@@ -10,7 +10,8 @@
 //   - TAGGED   (a multiplexed device):   FRMPayload = [proto:1][srcId:4 LE][payload...]
 //       Lets one ChirpStack device carry many bridge sources; the codec splits them.
 //
-//   proto byte: 1 = Meshtastic, 2 = MeshCore, 3 = Reticulum, 4/other = Custom.
+//   proto byte: 1 = Meshtastic, 2 = MeshCore, 3 = Reticulum, 4 = Custom,
+//               5 = LoRaWAN (the bridge stamps the BridgeConfig::Protocol enum).
 //   payload:    MT/MC bridged traffic is UTF-8 text (e.g. "Alice@MT: hi",
 //               "pos 40.7,-74.0", "env 22.5C RH 45% 1013hPa"); a raw-LoRa Custom
 //               weather station sends its proprietary bytes — decode in decodeStation().
@@ -62,7 +63,7 @@ function decodeStation(p) {
 function encodeDownlink(input) { return { bytes: [] }; }
 
 // --- helpers ---------------------------------------------------------------
-function protoName(p) { return ({ 1: "meshtastic", 2: "meshcore", 3: "reticulum" })[p] || "custom"; }
+function protoName(p) { return ({ 1: "meshtastic", 2: "meshcore", 3: "reticulum", 4: "custom", 5: "lorawan" })[p] || "custom"; }
 function hex8(v) { return ("00000000" + (v >>> 0).toString(16)).slice(-8); }
 function toHex(a) { var s = ""; for (var i = 0; i < a.length; i++) s += ("0" + a[i].toString(16)).slice(-2); return s; }
 function toAscii(a) {

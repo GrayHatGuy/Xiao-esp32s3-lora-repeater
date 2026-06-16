@@ -673,7 +673,11 @@ static const LwEncCreds &lwEncCreds() {
     return c;
 }
 
-static uint32_t g_lwEncFcnt = 0;   // in-RAM monotonic FCnt; P2 persists in NVS
+// ABP crypto self-test gate (#2): default true so a build WITHOUT the boot
+// self-test behaves unchanged; when BRIDGE_LW_ENC_SELFTEST runs, setup() latches
+// its result here and a FAIL stops the encoder from emitting frames whose wrong
+// MIC the LNS would silently drop.
+static bool g_lwCryptoOk = true;
 
 // Encode `payload` as a LoRaWAN ABP uplink under the per-source ABP device
 // (LoRaWANConfig) or the P1 build-flag fallback, and queue it for RF re-emit
@@ -705,24 +709,50 @@ static bool enqueueAbpUplink(const RadioChannel &srcChan, uint32_t srcId,
         const LwEncCreds &lw = lwEncCreds();
         if (lw.ready) {
             devAddr = lw.devAddr; nwkKey = lw.nwkSKey; appKey = lw.appSKey;
-            fport   = lw.fport;   fcnt   = ++g_lwEncFcnt;
+            // (#4) reboot-safe, DevAddr-keyed FCnt (was an in-RAM ++ that reset to
+            // 0 every boot → replays). FCNT_INVALID handled below.
+            fport   = lw.fport;   fcnt   = LoRaWANConfig::nextFcntForDevAddr(lw.devAddr);
             credSrc = "flag";
         }
     }
     if (!nwkKey) return false;
 
+    // (#2) refuse to emit if the on-device crypto self-test failed — a wrong-MIC
+    // frame is silently dropped by the LNS, so stop it here instead.
+    if (!g_lwCryptoOk) {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-selftest-fail msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], logMsg ? logMsg : "");
+        return true;
+    }
+    // (#3) a non-durable FCnt would risk a reboot replay — drop rather than emit.
+    if (fcnt == LoRaWANConfig::FCNT_INVALID) {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-fcnt-fail msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], logMsg ? logMsg : "");
+        return true;
+    }
+
     // FRMPayload = optional [proto][srcId LE] source tag, then the payload.
     uint8_t frm[242];                                  // LoRaWAN app-payload cap
     size_t  flen = 0;
     if (tagSrc) {
-        frm[flen++] = srcChan.protocol;
+        // (#5) stamp the small BridgeConfig::Protocol enum (1=MT/2=MC/3=RNS/
+        // 4=Custom/5=LoRaWAN), NOT the raw LoRa sync word, so the ChirpStack
+        // codec (tools/chirpstack-codec.js) decodes the source proto correctly.
+        frm[flen++] = LoRaWANConfig::protoOf(srcChan.protocol);
         frm[flen++] = (uint8_t)(srcId);       frm[flen++] = (uint8_t)(srcId >> 8);
         frm[flen++] = (uint8_t)(srcId >> 16); frm[flen++] = (uint8_t)(srcId >> 24);
     }
-    size_t take = payloadLen;
-    if (take > sizeof(frm) - flen) take = sizeof(frm) - flen;
-    memcpy(frm + flen, payload, take);
-    flen += take;
+    // (#6) drop an over-cap payload cleanly instead of silently truncating it
+    // into a mangled FRMPayload the codec would mis-decode.
+    if (payloadLen > sizeof(frm) - flen) {
+        blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-payload-overflow "
+              "len=%u cap=%u msg=\"%s\"\n",
+              (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)payloadLen,
+              (unsigned)(sizeof(frm) - flen), logMsg ? logMsg : "");
+        return true;
+    }
+    memcpy(frm + flen, payload, payloadLen);
+    flen += payloadLen;
 
     uint8_t lwPkt[256];
     size_t  n = LoRaWANCrypto::encodeUplink(devAddr, nwkKey, appKey, fcnt, fport,
@@ -1421,8 +1451,14 @@ void setup()
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
 
 #if BRIDGE_LW_ENC_SELFTEST
-    // ABP P1: prove the ABP encoder crypto on-device before it ever emits.
-    LoRaWANCrypto::selfTest();
+    // ABP P1/#2: prove the ABP encoder crypto on-device before it ever emits. A
+    // FAIL latches g_lwCryptoOk=false so enqueueAbpUplink refuses to emit (a
+    // wrong-MIC frame would otherwise be silently dropped at the LNS).
+    bool lwSelfOk = LoRaWANCrypto::selfTest();
+  #if BRIDGE_LW_ENCODE
+    g_lwCryptoOk = lwSelfOk;
+  #endif
+    (void)lwSelfOk;
 #endif
 
     // Serialises whole log lines across the two core-pinned radio tasks (§13).
@@ -1435,6 +1471,16 @@ void setup()
 #if BRIDGE_LW_ENCODE
     // ABP P2: load the per-source LoRaWAN ABP device table + persisted FCnts.
     LoRaWANConfig::begin();
+    // (#4) the build-flag fallback identity now persists its FCnt by DevAddr in
+    // the same key space as the device table. Warn if it collides with a
+    // provisioned device — two RAM counters on one DevAddr can issue a replay.
+    {
+        const LwEncCreds &lw = lwEncCreds();
+        if (lw.ready && LoRaWANConfig::hasDevAddr(lw.devAddr))
+            Serial.printf("[lw-warn] build-flag DevAddr 0x%08lx also configured as a "
+                          "device — use distinct DevAddrs to avoid an FCnt collision\n",
+                          (unsigned long)lw.devAddr);
+    }
 #endif
 
     // First boot (nothing saved): seed a unique MAC-derived identity so the
