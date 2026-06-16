@@ -77,3 +77,48 @@ original text with a valid MIC — plus the dwell cap, reboot-safe counter, and 
 10 open items are not failures; they are blocked on the WiFi config page (owner), a >242 B raw
 transmitter (owner), or a ChirpStack LNS (colleague). Step-by-step for the owner-solo items is in
 `BENCH-SOLO.md`.
+
+---
+
+## References — test protocols & methods (to repeat or audit this bench)
+
+**Test definitions & pass criteria (what each test does):**
+- `BENCH-v8.4.md` — core procedure for A1, A2, A5, B1, B2, B5 (plain steps).
+- `BENCH-SOLO.md` — the WiFi-config-page tests A4, B3, B4, B6, B7 (step by step).
+- The pass/fail criterion for every test is also the **"Result / blocker" column** in the matrix above.
+- `ABP-LORAWAN-SPEC.md` — design of record (frame layout, crypto, FCnt scheme).
+- Pre-bench review fixes #1–#6 are summarised in `BENCH-v8.4.md` (commits `d98da4b`, `1496717`, `9aaf423`).
+
+**Firmware under test:** branch `dev-ABP-lorawan`, tip `bbdc7d6`. Build environments are defined in
+`platformio.ini`:
+- `bench_lw_enc` — sender: R1 Meshtastic 906.875/BW250/SF11, R2 LoRaWAN 903.9/BW125/SF7, REGION=US,
+  build-flag ABP creds, autosave (no portal).
+- `bench_lw_enc_dwell` — as above but R2 **SF12** (used for A2 dwell).
+- `bench_lw_sniffer` — listener: keyless LoRaWAN capture on 903.9/BW125/SF7 with full-frame hex
+  (`BRIDGE_LW_CAPTURE_HEX`), relay/summary off.
+- `xiao_esp32s3` — stock control, encoder compiled out (used for A5).
+
+**Bench credentials (throwaway, baked into the `bench_lw_enc*` envs):** DevAddr `01000001` ·
+NwkSKey `2B7E151628AED2A6ABF7158809CF4F3C` · AppSKey `D41420B7F5A3C96E1D8204F7B3A65C90` · FPort `13`.
+
+**Flash a board:**
+```
+pio run -e <env> -t erase  --upload-port COMx     # wipe NVS (clean config + FCnt)
+pio run -e <env> -t upload --upload-port COMx
+```
+Erase is required when changing env/config — autosave/portal only act on an unconfigured board.
+
+**Capture serial (how the evidence above was obtained) — two equivalent ways:**
+- Manual: `pio device monitor --port COMx --baud 115200`, then press the board's **RST** button to
+  catch the one-time boot dump.
+- Automated (used for this report): `python tools/bench-serial-capture.py COMx <seconds>` — opens the
+  port, hardware-resets the board (DTR/RTS), and prints serial for N seconds. The boot dumps and
+  `evt=…` lines quoted above are verbatim from this tool.
+
+**Verify a captured packet off-box (method behind B5):**
+`python tools/lw-verify.py <PHYPayload-hex> <NwkSKey> <AppSKey> [--tagged]` — validates the MIC and
+decrypts the FRMPayload; mirrors `src/LoRaWANCrypto.h` byte-for-byte.
+
+**Rig & stimulus:** two boards — **DUT-A on COM13** (sender) and **SNIFFER on COM6** (listener); a
+Meshtastic node (`!0AC9F340`, US LongFast) transmitted the text messages. Serial was read on the
+host PC over USB. ChirpStack was **not** used for any result above (Tier C is the colleague's rig).
