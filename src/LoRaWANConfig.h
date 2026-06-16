@@ -30,6 +30,10 @@ namespace LoRaWANConfig {
 constexpr size_t   MAX_DEVICES  = 4;     // bounded per-source ABP identity table
 constexpr uint32_t FCNT_RESERVE = 32;    // FCnt values reserved per NVS write
 constexpr uint8_t  FLAG_TAG_SRC = 0x01;  // Device.flags: prepend a [proto][srcId] source tag
+constexpr uint32_t FCNT_INVALID = 0xFFFFFFFFu;  // nextFcnt*() sentinel: a durable
+                                                // reservation could not be written
+                                                // → caller MUST drop the uplink (a
+                                                // non-durable FCnt risks a reboot replay)
 
 // How a device entry is matched to an inbound source at the encode seam.
 enum SrcSel : uint8_t {
@@ -56,16 +60,34 @@ void debugDump();
 // True if at least one slot is in use with a non-zero DevAddr.
 bool anyConfigured();
 
+// True if any in-use slot holds this DevAddr (used to warn about a build-flag
+// fallback identity colliding with a provisioned per-source device).
+bool hasDevAddr(uint32_t devAddr);
+
+// Map a source radio's LoRa sync word to a BridgeConfig::Protocol value
+// (0x2B->MT=1, 0x12->MC=2, 0x42->RNS=3, 0x34->LoRaWAN=5, else CUSTOM=4). Public
+// so the encode seam can stamp the small protocol enum (not the raw sync word)
+// into the [proto][srcId] source tag, matching tools/chirpstack-codec.js.
+uint8_t protoOf(uint8_t syncWord);
+
 // Resolve the best-match device for an inbound source (srcSync = the source
 // radio's LoRa sync word, mapped to a protocol internally), or nullptr.
 // Preference: an exact MT-node match, then a protocol match, then a SRC_ANY
 // default. outIndex receives the table index (needed for nextFcnt()).
 const Device *resolve(uint8_t srcSync, uint32_t srcId, int &outIndex);
 
-// Return the next FCntUp for a device and advance it; persists a fresh
-// reservation every FCNT_RESERVE uplinks so the counter survives reboots
-// without a flash write per packet.
+// Return the next FCntUp for a device and advance it. The counter is persisted
+// by DevAddr (NOT slot index) so an identity keeps its high-water across portal
+// row moves, and a fresh reservation is written BEFORE the first value of each
+// block is issued (fail-closed): if the NVS write cannot be confirmed this
+// returns FCNT_INVALID and the caller MUST drop the uplink rather than emit a
+// counter that isn't durably reserved (which a reboot could replay).
 uint32_t nextFcnt(int deviceIndex);
+
+// Same reboot-safe, DevAddr-keyed FCntUp for an identity NOT in the device
+// table (the build-flag fallback creds). One identity is cached at a time.
+// Returns FCNT_INVALID on a persist failure, like nextFcnt().
+uint32_t nextFcntForDevAddr(uint32_t devAddr);
 
 // Portal accessors.
 size_t        deviceCount();              // == MAX_DEVICES
