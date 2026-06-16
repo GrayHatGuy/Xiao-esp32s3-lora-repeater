@@ -56,20 +56,20 @@ the firmware (see `src/main.cpp`).
 > different pinouts — you must build the firmware variant that matches yours.**
 > Check the silkscreen first: see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) below.
 
-The table below is the **V1.0** (default) mapping.
+The table shows Radio 2 for **both module revisions** — build the env that matches your silkscreen ([how to identify yours](#radio-2-module-revision-v10-vs-v11)). **Bold** marks the four Radio-2 signals that move between V1.0 and V1.1 (NSS, DIO1, BUSY, ANT_SW); the shared SPI bus and RESET are identical on both.
 
-| Signal | Radio 1 (B2B) | Radio 2 (edge, V1.0) | Notes |
-|--------|---------------|----------------------|-------|
-| SCK    | GPIO7 (D8)    | GPIO7 (D8)     | **shared** SPI bus |
-| MOSI   | GPIO9 (D10)   | GPIO9 (D10)    | **shared** |
-| MISO   | GPIO8 (D9)    | GPIO8 (D9)     | **shared** |
-| NSS / CS | GPIO41      | GPIO5 (D4)     | per-radio chip select |
-| DIO1 / IRQ | GPIO39    | GPIO2 (D1)     | RX-done interrupt |
-| RESET  | GPIO42        | GPIO3 (D2)     | per-radio |
-| BUSY   | GPIO40        | GPIO4 (D3)     | per-radio |
-| ANT_SW | GPIO38        | GPIO6 (D5)     | TX/RX RF switch |
-| VCC    | 3V3           | 3V3            | |
-| GND    | GND           | GND            | |
+| Signal | Radio 1 (B2B) | Radio 2 — **V1.0** (`xiao_esp32s3`) | Radio 2 — **V1.1** (`xiao_esp32s3_v1_1`) | Notes |
+|--------|---------------|-------------------------------------|------------------------------------------|-------|
+| SCK        | GPIO7 (D8)  | GPIO7 (D8)     | GPIO7 (D8)     | **shared** SPI bus |
+| MOSI       | GPIO9 (D10) | GPIO9 (D10)    | GPIO9 (D10)    | **shared** |
+| MISO       | GPIO8 (D9)  | GPIO8 (D9)     | GPIO8 (D9)     | **shared** |
+| NSS / CS   | GPIO41      | **GPIO5 (D4)** | **GPIO4 (D3)** | per-radio chip select |
+| DIO1 / IRQ | GPIO39      | **GPIO2 (D1)** | **GPIO1 (D0)** | RX-done interrupt |
+| RESET      | GPIO42      | GPIO3 (D2)     | GPIO3 (D2)     | per-radio (same on both revs) |
+| BUSY       | GPIO40      | **GPIO4 (D3)** | **GPIO2 (D1)** | per-radio |
+| ANT_SW     | GPIO38      | **GPIO6 (D5)** | **GPIO5 (D4)** | TX/RX RF switch |
+| VCC        | 3V3         | 3V3            | 3V3            | |
+| GND        | GND         | GND            | GND            | |
 
 **Key points**
 
