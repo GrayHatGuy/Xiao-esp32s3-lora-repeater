@@ -10,6 +10,7 @@
 #include "CaptivePortal.h"
 #include "BridgeConfig.h"
 #include "RegionPreset.h"
+#include "LoRaWANConfig.h"   // v8.4 ABP device section (encoder builds only)
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -348,6 +349,145 @@ static void appendScript(String &page) {
       "</script>");
 }
 
+#if defined(BRIDGE_LW_ENCODE) && BRIDGE_LW_ENCODE
+// --- v8.4 LoRaWAN ABP device section (only in encoder-enabled builds) -------
+static int lwHexNib(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static bool lwHexToBytes(const String &s, uint8_t *out, size_t n) {
+    if (s.length() != n * 2) return false;
+    for (size_t i = 0; i < n; i++) {
+        int hi = lwHexNib(s[2 * i]); int lo = lwHexNib(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+static void lwHexFromBytes(const uint8_t *b, size_t n, char *out) {
+    for (size_t i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", b[i]);
+}
+
+static void appendLoRaWANDevices(String &page) {
+    page += F("<h2>LoRaWAN ABP devices (v8.4 encoder)</h2>"
+              "<div class=\"hint\">Mesh / Custom traffic routed to a LoRaWAN radio is "
+              "encoded as an ABP uplink under the first matching device below. Provision "
+              "the SAME DevAddr + keys in your LNS (ChirpStack: MAC 1.0.x, ABP, Class A, "
+              "ADR off, disable frame-counter validation or persist). Disabled slots are "
+              "skipped; build-flag creds are the fallback when no slot matches.</div>");
+    char hx[40];
+    for (size_t i = 0; i < LoRaWANConfig::deviceCount(); i++) {
+        const LoRaWANConfig::Device &d = LoRaWANConfig::device((int)i);
+
+        page += F("<h3 style=\"margin:.9em 0 .2em;font-size:.95em\">Device ");
+        page += (int)i;
+        page += F("</h3>");
+
+        page += F("<label><input type=\"checkbox\" name=\"lw");
+        page += (int)i;
+        page += F("en\" value=\"1\"");
+        if (d.inUse) page += F(" checked");
+        page += F(">Enabled</label>");
+
+        page += F("<label>Applies to source</label><select name=\"lw");
+        page += (int)i;
+        page += F("sel\">");
+        static const char *kSel[] = { "Any source (default)",
+                                      "Meshtastic node id", "Source protocol" };
+        for (uint8_t s = 0; s < 3; s++) {
+            page += F("<option value=\"");
+            page += (int)s;
+            page += F("\"");
+            if (s == d.srcSel) page += F(" selected");
+            page += F(">");
+            page += kSel[s];
+            page += F("</option>");
+        }
+        page += F("</select>");
+
+        snprintf(hx, sizeof(hx), "%lu", (unsigned long)d.srcMatch);
+        page += F("<label>Match value</label><input type=\"text\" name=\"lw");
+        page += (int)i;
+        page += F("match\" value=\"");
+        if (d.srcSel != LoRaWANConfig::SRC_ANY) page += hx;
+        page += F("\"><div class=\"hint\">node-id: 8 hex (e.g. b16b00b5); "
+                  "protocol: 1=MT 2=MC 3=RNS 4=Custom; ignored for Any.</div>");
+
+        snprintf(hx, sizeof(hx), "%08lX", (unsigned long)d.devAddr);
+        page += F("<label>DevAddr (8 hex)</label><input type=\"text\" name=\"lw");
+        page += (int)i;
+        page += F("addr\" maxlength=\"8\" value=\"");
+        if (d.devAddr) page += hx;
+        page += F("\">");
+
+        lwHexFromBytes(d.nwkSKey, 16, hx);
+        page += F("<label>NwkSKey (32 hex)</label><input type=\"text\" name=\"lw");
+        page += (int)i;
+        page += F("nwk\" maxlength=\"32\" value=\"");
+        if (d.inUse) page += hx;
+        page += F("\">");
+
+        lwHexFromBytes(d.appSKey, 16, hx);
+        page += F("<label>AppSKey (32 hex)</label><input type=\"text\" name=\"lw");
+        page += (int)i;
+        page += F("app\" maxlength=\"32\" value=\"");
+        if (d.inUse) page += hx;
+        page += F("\">");
+
+        page += F("<label>FPort (1-223)</label><input type=\"text\" name=\"lw");
+        page += (int)i;
+        page += F("port\" value=\"");
+        page += (unsigned)(d.fport ? d.fport : 13);
+        page += F("\">");
+    }
+}
+
+// Parse + validate the ABP device form into LoRaWANConfig. Returns nullptr on
+// success (and persists the table), or an error string to flash back.
+static const char *applyLoRaWANDevices() {
+    for (size_t i = 0; i < LoRaWANConfig::deviceCount(); i++) {
+        String pre = String("lw") + (int)i;
+        if (s_http.arg(pre + "en") != "1") { LoRaWANConfig::clearDevice((int)i); continue; }
+
+        LoRaWANConfig::Device d = {};
+        d.inUse  = 1;
+        d.srcSel = (uint8_t)s_http.arg(pre + "sel").toInt();
+
+        String mv = s_http.arg(pre + "match"); mv.trim();
+        if (d.srcSel == LoRaWANConfig::SRC_MT_NODE) {
+            if (mv.startsWith("0x") || mv.startsWith("0X")) mv = mv.substring(2);
+            if (!isHexString(mv, 8)) return "ABP node-id match must be 8 hex chars.";
+            d.srcMatch = (uint32_t)strtoul(mv.c_str(), nullptr, 16);
+        } else if (d.srcSel == LoRaWANConfig::SRC_PROTO) {
+            d.srcMatch = (uint32_t)mv.toInt();
+            if (d.srcMatch < 1 || d.srcMatch > 4) return "ABP protocol match must be 1-4.";
+        } else {
+            d.srcMatch = 0;
+        }
+
+        String addr = s_http.arg(pre + "addr"); addr.trim();
+        if (addr.startsWith("0x") || addr.startsWith("0X")) addr = addr.substring(2);
+        if (!isHexString(addr, 8)) return "ABP DevAddr must be 8 hex chars.";
+        d.devAddr = (uint32_t)strtoul(addr.c_str(), nullptr, 16);
+
+        String nwk = s_http.arg(pre + "nwk"); nwk.trim();
+        String app = s_http.arg(pre + "app"); app.trim();
+        if (!lwHexToBytes(nwk, d.nwkSKey, 16)) return "ABP NwkSKey must be 32 hex chars.";
+        if (!lwHexToBytes(app, d.appSKey, 16)) return "ABP AppSKey must be 32 hex chars.";
+
+        int fp = s_http.arg(pre + "port").toInt();
+        if (fp < 1 || fp > 223) return "ABP FPort must be 1-223.";
+        d.fport = (uint8_t)fp;
+
+        LoRaWANConfig::setDevice((int)i, d);
+    }
+    LoRaWANConfig::saveTable();
+    return nullptr;
+}
+#endif  // BRIDGE_LW_ENCODE
+
 static String renderForm(const char *flash = nullptr) {
     char nodeIdBuf[12];
     snprintf(nodeIdBuf, sizeof(nodeIdBuf), "0x%08lX",
@@ -403,6 +543,9 @@ static String renderForm(const char *flash = nullptr) {
     appendRegionSelect(page);
     appendRadio(page, 1);
     appendRadio(page, 2);
+#if defined(BRIDGE_LW_ENCODE) && BRIDGE_LW_ENCODE
+    appendLoRaWANDevices(page);
+#endif
 
     page += F("<h2>Bridge behaviour</h2>");
     page += F("<label><input type=\"checkbox\" name=\"positionEnabled\" value=\"1\"");
@@ -633,6 +776,12 @@ static void handleSave() {
     BridgeConfig::setRegion(region);
     BridgeConfig::setPositionEnabled(s_http.arg("positionEnabled")  == "1");
     BridgeConfig::setTelemetryEnabled(s_http.arg("telemetryEnabled") == "1");
+
+#if defined(BRIDGE_LW_ENCODE) && BRIDGE_LW_ENCODE
+    const char *eLw = applyLoRaWANDevices();   // validates + persists the ABP table
+    if (eLw) { fail(eLw); return; }
+#endif
+
     BridgeConfig::save();
 
     Serial.println("[CaptivePortal] config saved, rebooting...");

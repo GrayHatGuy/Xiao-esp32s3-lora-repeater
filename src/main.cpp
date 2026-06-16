@@ -31,6 +31,7 @@
 #include "MeshDecoderDebug.h"
 #include "MeshEncoderDebug.h"
 #include "LoRaWANCrypto.h"     // ABP: AES-CMAC + LoRaWAN ABP uplink encoder
+#include "LoRaWANConfig.h"     // ABP P2: per-source ABP device table + NVS FCnt
 #include "MeshCoreConfig.h"
 #include "MeshtasticConfig.h"
 #include "BridgeConfig.h"
@@ -693,27 +694,49 @@ static void enqueueTextForDest(const RadioChannel &srcChan, uint32_t srcId,
     // no keys). Injecting content needs the device keys + monotonic FCnt + MIC.
     if (dstChan.protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
 #if BRIDGE_LW_ENCODE
-        const LwEncCreds &lw = lwEncCreds();
-        if (lw.ready) {
-            uint8_t  lwPkt[256];
-            uint32_t fcnt = ++g_lwEncFcnt;          // monotonic; never reuse a value
-            size_t   n = LoRaWANCrypto::encodeUplink(
-                             lw.devAddr, lw.nwkSKey, lw.appSKey, fcnt, lw.fport,
-                             (const uint8_t *)body, strlen(body), /*confirmed=*/false,
-                             lwPkt, sizeof(lwPkt));
+        // (P2) Per-source ABP identity from the portal/NVS table first, else the
+        // P1 build-flag identity. A resolved NVS device carries a persisted,
+        // reboot-safe FCnt; the build-flag fallback keeps an in-RAM counter.
+        uint32_t       devAddr = 0, fcnt = 0;
+        const uint8_t *nwkKey  = nullptr, *appKey = nullptr;
+        uint8_t        fport   = 0;
+        const char    *credSrc = "?";
+
+        int devIdx = -1;
+        const LoRaWANConfig::Device *dev =
+            LoRaWANConfig::resolve(srcChan.protocol, srcId, devIdx);
+        if (dev) {
+            devAddr = dev->devAddr; nwkKey = dev->nwkSKey; appKey = dev->appSKey;
+            fport   = dev->fport;   fcnt   = LoRaWANConfig::nextFcnt(devIdx);
+            credSrc = "nvs";
+        } else {
+            const LwEncCreds &lw = lwEncCreds();
+            if (lw.ready) {
+                devAddr = lw.devAddr; nwkKey = lw.nwkSKey; appKey = lw.appSKey;
+                fport   = lw.fport;   fcnt   = ++g_lwEncFcnt;
+                credSrc = "flag";
+            }
+        }
+
+        if (nwkKey) {
+            uint8_t lwPkt[256];
+            size_t  n = LoRaWANCrypto::encodeUplink(
+                            devAddr, nwkKey, appKey, fcnt, fport,
+                            (const uint8_t *)body, strlen(body), /*confirmed=*/false,
+                            lwPkt, sizeof(lwPkt));
             if (n == 0) {
                 blogf("ts=%lu evt=DROP radio=%s dst=%s drop=lw-encode-fail msg=\"%s\"\n",
                       (unsigned long)millis(), srcTag, kTag[destIdx], body);
                 return;
             }
             // Loop-safety: remember our own emission (mirror the MT/MC dedup path).
-            DedupCache::record(DedupCache::hash(lwPkt, n, lw.devAddr, fcnt));
+            DedupCache::record(DedupCache::hash(lwPkt, n, devAddr, fcnt));
             if (g_routeQ[destIdx].push(lwPkt, n)) {
                 blogf("ts=%lu evt=QUEUE radio=%s dst=%s dstproto=LW len=%u "
-                      "devaddr=%08lx fcnt=%lu fport=%u qdepth=%u msg=\"%s\"\n",
+                      "devaddr=%08lx fcnt=%lu fport=%u cred=%s qdepth=%u msg=\"%s\"\n",
                       (unsigned long)millis(), srcTag, kTag[destIdx], (unsigned)n,
-                      (unsigned long)lw.devAddr, (unsigned long)fcnt, (unsigned)lw.fport,
-                      (unsigned)g_routeQ[destIdx].count(), body);
+                      (unsigned long)devAddr, (unsigned long)fcnt, (unsigned)fport,
+                      credSrc, (unsigned)g_routeQ[destIdx].count(), body);
             } else {
                 blogf("ts=%lu evt=DROP radio=%s dst=%s drop=queue-full\n",
                       (unsigned long)millis(), srcTag, kTag[destIdx]);
@@ -1318,6 +1341,11 @@ void setup()
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
+
+#if BRIDGE_LW_ENCODE
+    // ABP P2: load the per-source LoRaWAN ABP device table + persisted FCnts.
+    LoRaWANConfig::begin();
+#endif
 
     // First boot (nothing saved): seed a unique MAC-derived identity so the
     // captive-portal form pre-fills with a per-device node ID + SSID rather
