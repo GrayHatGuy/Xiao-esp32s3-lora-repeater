@@ -1,252 +1,103 @@
-# BENCH-v8.4 — LoRaWAN ABP uplink encoder (P1–P4) bench plan
+# v8.4 bench guide (plain English)
 
-**Status: code-complete + build-green on `dev-ABP-lorawan`; NOT yet run on hardware.**
+The job: prove the bridge can take a normal mesh text message and send it out as a
+proper LoRaWAN packet that a LoRaWAN network would accept.
 
-| Tier | Needs | Who runs it |
-|---|---|---|
-| **A** — DUT board only | one bridge + USB serial | you |
-| **B** — Synthetic LNS | DUT bridge + a 2nd "sniffer" bridge, **no ChirpStack** | you |
-| **C** — ChirpStack LNS | DUT bridge + ChirpStack + gateway | colleague |
+## What you need
+
+- **Board 1 — the sender.** A Xiao dual-radio bridge on USB. It listens for a mesh
+  message and re-sends it as a LoRaWAN packet. (Yours is on **COM13**.)
+- **Board 2 — the listener.** A second Xiao bridge on USB. It just catches the LoRaWAN
+  packet out of the air so you can see it. (Plan calls this **COM6**.)
+- **A Meshtastic device** (phone app or a node) to send the text that starts it off.
+  For the MeshCore tests, a MeshCore device instead.
+- **Optional, your colleague only:** a ChirpStack server + a LoRaWAN gateway. Not needed
+  for any test below — those are for the final "a real network accepts it" check.
+
+Jargon, once:
+- **Captive portal** = a WiFi config page the board hosts. When you flash the portal
+  build and the board is blank, it shows up as a WiFi hotspot; connect to it and a
+  settings page opens.
+- **ABP device** = NOT a physical thing. It's a set of LoRaWAN credentials (an address +
+  two keys + a port number) you type into that config page, or that come baked into the
+  `bench_lw_enc` build. They sign/encrypt the packet.
+
+## Setup (do once)
+Open PowerShell here:
+```
+cd "C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main dev-ABP-lorawan"
+```
+Every board takes the same 3 commands — wipe, flash, watch:
+```
+pio run -e <build> -t erase  --upload-port <COMx>
+pio run -e <build> -t upload --upload-port <COMx>
+pio device monitor --port <COMx> --baud 115200
+```
+The bench credentials (already baked into `bench_lw_enc`): address `01000001`,
+keys `2B7E151628AED2A6ABF7158809CF4F3C` and `D41420B7F5A3C96E1D8204F7B3A65C90`, port 13.
 
 ---
 
-## Shared setup (read once)
-- **Boards / ports:** DUT-A = **COM13** · SNIFFER = **COM6** · DUT-B/spare = **COM14**.
-- **Run from the project root** (PowerShell):
-  `cd "C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main dev-ABP-lorawan"`
-- **Every board = 3 commands:** `erase` → `upload` → `monitor` (spelled out in each test).
-- **⚠️ Erase before every env/config change.** Autosave + the portal only act on an
-  *unconfigured* board, so re-flashing without erase keeps the OLD config. *Exception:* the
-  FCnt tests (B2/B3) erase **once**, then reboot with the **RST button** (re-erasing wipes
-  the counter under test).
-- **Bench creds** (baked into `bench_lw_enc`/`_dwell`): DevAddr `01000001` ·
-  NwkSKey `2B7E151628AED2A6ABF7158809CF4F3C` · AppSKey `D41420B7F5A3C96E1D8204F7B3A65C90` · FPort 13.
-- **Sync / proto legend:** `0x2B`=Meshtastic(1) · `0x12`=MeshCore(2) · `0x42`=Reticulum(3)
-  · `0x34`=LoRaWAN(5) · else Custom(4). DevAddr `01000001` = NwkID 0 (matches ChirpStack
-  default NetID `0x000000`; a mismatched NwkID is silently dropped).
-- **Config check:** open the monitor, press **RST**, and confirm the `Confirm at boot:`
-  line each test names. A wrong value almost always means you skipped `-t erase`.
+## The 3 tests that prove it works (no ChirpStack, no config page)
 
----
-
-## Tier A — DUT board only
-
-### A1 · LW-ENC-SELFTEST — crypto self-test *(gate)*
-**Board:** DUT-A COM13 · **env:** `bench_lw_enc`
+### 1. Self-test — the math is right  ✅ ALREADY PASSED on your COM13 board
+Flash `bench_lw_enc` to the sender and watch it boot:
 ```
 pio run -e bench_lw_enc -t erase  --upload-port COM13
 pio run -e bench_lw_enc -t upload --upload-port COM13
 pio device monitor --port COM13 --baud 115200
 ```
-**Confirm at boot:** `[lw-selftest] overall : PASS` · `[lw-enc] … ready=1 DevAddr=0x01000001 FPort=13` · `radio2 RF … sync=0x34 903.900 … SF7` · `region=1`.
-**Do:** just watch the boot output.
-**PASS:** 4× `RFC4493 CMAC … PASS`, `FRMPayload A_1 … PASS`, `frame … PASS`, `overall : PASS`.
-**FAIL:** any `FAIL` — the encoder then refuses to emit (`drop=lw-selftest-fail`).
+**Pass:** the boot text shows `[lw-selftest] overall : PASS`. (It did.)
 
-### A2 · LW-DWELL — US915 per-TX dwell cap (P4)
-**Board:** DUT-A COM13 · **env:** `bench_lw_enc_dwell`
-```
-pio run -e bench_lw_enc_dwell -t erase  --upload-port COM13
-pio run -e bench_lw_enc_dwell -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Confirm at boot:** `radio2 RF … sync=0x34 903.900 BW125.0 SF12` · `region=1`.
-**Do:** send any MT text to R1 (or let a routed frame reach R2).
-**PASS:** `evt=DROP radio=… drop=dwell toa=~1480 limit=400` — frame NOT transmitted.
-**FAIL:** an `evt=TX_START` / on-air frame at SF12 (dwell not enforced).
-
-### A3 · LW-OVERFLOW — over-cap payload dropped, not truncated (#6)
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp` (portal)
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** set a radio to **Custom** (your raw-LoRa freq/BW/SF/sync); add an ABP device (Any source). Save & reboot.
-**Confirm at boot:** `[LoRaWANConfig] … anyConfigured=1` + a `dev0 …` line · the Custom `radioN RF` line.
-**Do:** transmit a raw frame **> 242 B** (or > 237 B if the source tag is on).
-**PASS:** `evt=DROP … drop=lw-payload-overflow len=… cap=…`; no QUEUE for it.
-**FAIL:** a truncated frame is queued/sent.
-
-### A4 · LW-PORTAL — portal ABP config persists (P2)
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp` (portal)
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** "LoRaWAN ABP devices" → Device 0: Enabled, *Any source*, DevAddr + NwkSKey + AppSKey + FPort. Set a radio to LoRaWAN. **Save & reboot.**
-**Confirm at boot:** `[LoRaWANConfig] loaded … anyConfigured=1` + `dev0 … devaddr=… fport=…` · `radioN RF … sync=0x34 …`.
-**PASS:** the saved DevAddr/FPort appear in the boot dump AND re-opening the portal shows them.
-**FAIL:** `anyConfigured=0` / values blank (didn't persist).
-
-### A5 · R-DO-NO-HARM — stock build unaffected
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3`
-```
-pio run -e xiao_esp32s3 -t erase  --upload-port COM13
-pio run -e xiao_esp32s3 -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Confirm at boot:** **NO** `[lw-selftest]` and **NO** `[lw-enc]` lines · `radio2 RF … sync=0x12 910.525 BW62.5 SF7` (MeshCore).
-**Do:** run normal MT↔MC traffic.
-**PASS:** normal routing; **no** ABP `evt=QUEUE`; `MT/MC→LW` still `drop=no-lw-encoder`.
-**FAIL:** any ABP output (encoder leaked into a stock build).
-
----
-
-## Tier B — Synthetic LNS (DUT + sniffer, no ChirpStack)
-
-**Flash the SNIFFER once (COM6) — it stays put for all of Tier B:**
+### 2. See the packet go out
+Plug in the second board as the listener and flash it:
 ```
 pio run -e bench_lw_sniffer -t erase  --upload-port COM6
 pio run -e bench_lw_sniffer -t upload --upload-port COM6
 pio device monitor --port COM6 --baud 115200
 ```
-**Confirm at boot (sniffer):** `radio2 RF … sync=0x34 903.900 BW125.0 SF7` (no `[lw-enc]`/`[lw-selftest]` — encoder off). When the DUT emits, the sniffer prints `evt=RX proto=LW … devaddr=… fcnt=… fport=…` + `evt=LWRAW raw=<hex>`. Keep this terminal open for every B test.
+Now, from your Meshtastic device, send any text on the default LongFast channel.
+**Pass:** the listener prints a line like
+`evt=RX proto=LW devaddr=0x01000001 fcnt=… fport=13` and a line `evt=LWRAW raw=<hex>`.
+That `<hex>` is the actual LoRaWAN packet, on the air.
 
-### B1 · LW-AIR-EMIT — the encoder transmits a valid uplink
-**Board:** DUT-A COM13 · **env:** `bench_lw_enc`
-```
-pio run -e bench_lw_enc -t erase  --upload-port COM13
-pio run -e bench_lw_enc -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Confirm at boot (DUT):** `[lw-selftest] overall : PASS` · `[lw-enc] … ready=1 DevAddr=0x01000001 FPort=13` · `radio2 RF … sync=0x34 903.900 … SF7`.
-**Do:** send one MT text from a node on the DUT's R1 (Meshtastic US LongFast 906.875/BW250/SF11).
-**PASS:** SNIFFER prints `evt=RX proto=LW mtype=Data(Up,Unconf) devaddr=0x01000001 fport=13 len=…`.
-**FAIL:** nothing on the sniffer — check the DUT shows `evt=QUEUE … dstproto=LW` and both radios share 903.9/BW125/SF7.
-
-### B2 · LW-FCNT-REBOOT — FCnt monotonic across reboot (#3/#4)
-**Board:** DUT-A COM13 (`bench_lw_enc`, from B1). **Erase once, then power-cycle — do NOT re-flash.**
-```
-# (only if not already on bench_lw_enc:)
-pio run -e bench_lw_enc -t erase  --upload-port COM13
-pio run -e bench_lw_enc -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Do:** send several texts (note the SNIFFER `fcnt=` values) → **press RST on the DUT** → send more.
-**PASS:** post-reboot `fcnt=` **resumes ahead of** the last pre-reboot value (may jump up to 32; never repeats/decreases).
-**FAIL:** `fcnt` restarts low (would replay at a real LNS).
-
-### B3 · LW-FCNT-MOVE — a DevAddr keeps its counter across rows (#1)
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp` (portal)
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** Device 0 = DevAddr **X** (+ keys/FPort), *Any source*; set a radio to LoRaWAN. Save.
-**Do:** send N texts (note SNIFFER `fcnt=`) → portal: **clear Device 0, add the same DevAddr X in Device 1** → reboot → send again.
-**PASS:** the first post-move `fcnt=` is **≥** the last value seen for X.
-**FAIL:** it resumes at slot 1's stale/zero counter.
-
-### B4 · LW-RESOLVE — per-source selection (MT-node → protocol → ANY)
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp`, source radio = Meshtastic
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config (distinct DevAddrs):** Device 0 = *MT node id* = node A → **W** · Device 1 = *Source protocol = Meshtastic* → **X** · Device 3 = *Any source* → **Z**. Save.
-**Confirm at boot:** three `dev0/1/3 …` lines with sel/devaddr as set.
-**Do:** send from MT node A, then MT node B (different id), then any other source.
-**PASS (SNIFFER):** A → `devaddr=…W` · B → `…X` · other → `…Z`.
-**FAIL:** wrong DevAddr per source (resolve order broken).
-*MC note:* MeshCore matches only *Source protocol*/*Any* (no MC-node selector). For an MC pass, set the source radio to MeshCore + add a *Source protocol = MeshCore* device.
-
-### B5 · LW-MIC-OFFLINE — validate MIC + decrypt, no ChirpStack
-**Board:** none (host PC). Uses a frame captured by the SNIFFER in any B test.
+### 3. Prove a real network would accept it (off-line, on your PC)
+Copy the `raw=<hex>` from step 2 and run:
 ```
 pip install cryptography
-python tools/lw-verify.py <raw-hex-from-evt=LWRAW> 2B7E151628AED2A6ABF7158809CF4F3C D41420B7F5A3C96E1D8204F7B3A65C90
+python tools/lw-verify.py <paste-the-hex> 2B7E151628AED2A6ABF7158809CF4F3C D41420B7F5A3C96E1D8204F7B3A65C90
 ```
-**PASS:** `MIC … -> PASS` and `Decrypted … as ASCII : '<your text>'` → `VERDICT: MIC valid — ChirpStack would ACCEPT`.
-**FAIL:** `MIC … -> FAIL` (recheck keys / the copied hex). A PASS predicts a Tier-C PASS.
+**Pass:** it prints `MIC … -> PASS` and shows your message text decrypted back out, ending
+with `VERDICT: MIC valid — ChirpStack would ACCEPT this frame`.
 
-### B6 · LW-TAG — source tag decodes to the right protocol (#5)
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp`
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** one ABP device with **"Prepend source tag" ON**; set the source radio to MT (then repeat with MC).
-**Do:** send a text; copy the SNIFFER `evt=LWRAW raw=…`; run
-`python tools/lw-verify.py <raw-hex> <NwkSKey> <AppSKey> --tagged`.
-**PASS:** `src tag : proto=1(meshtastic)` (MT) and `proto=2(meshcore)` (MC) + the payload.
-**FAIL:** `proto=43`/"?" (raw sync word — the pre-#5 bug).
-
-### B7 · LW-MC-SOURCE — MeshCore → ABP
-**Board:** DUT-A COM13 · **env:** `xiao_esp32s3_lwabp`, source radio = **MeshCore**
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** source radio = MeshCore; one ABP device (*Any* or *Source protocol = MeshCore*). Save.
-**Do:** send an MC text from an MC node.
-**PASS:** DUT `evt=QUEUE … dstproto=LW … cred=nvs`; SNIFFER `evt=RX proto=LW devaddr=…`; `lw-verify.py` decrypts the MC body.
-**FAIL:** `drop=no-lw-abp-dest` (no LoRaWAN dest radio) or no sniffer RX.
+If those three pass, the feature works. Everything below is optional.
 
 ---
 
-## Tier C — ChirpStack LNS (colleague's rig)
+## Optional extras
 
-**Provisioning (every C test):** ChirpStack v4 + a gateway in range. Device-profile =
-your region · **MAC 1.0.x · ABP · Class A · ADR off**; device = **DevAddr + NwkSKey +
-AppSKey + FPort matching the DUT**; tick **"Disable frame-counter validation"** (or rely
-on persisted FCnt); paste `tools/chirpstack-codec.js` into the codec. **DevAddr NwkID
-must match the LNS NetID.** Stick to **C1 + C2** — Tier B already proved the resolve
-matrix + crypto off-box.
+- **Reboot counter test:** in step 2, note the `fcnt=` numbers, press the sender's RST
+  button, send more texts. The number must keep going **up**, never restart. (Proves it
+  won't get rejected as a replay after a power cycle.)
+- **Dwell-time limit:** flash the sender with `bench_lw_enc_dwell` instead (same commands,
+  swap the build name). It uses a slow setting on purpose; the sender should print
+  `drop=dwell` and **not** transmit — that's the legal air-time cap working.
+- **MeshCore source:** same as step 2 but send from a MeshCore device. Needs the config
+  page to set the sender's first radio to MeshCore (see "config page" below).
+- **Config page (only if you want to set credentials without recompiling):** flash
+  `xiao_esp32s3_lwabp`, connect to the board's WiFi hotspot, open the page, fill the
+  "LoRaWAN ABP devices" row (address + the two keys + port), set one radio to LoRaWAN,
+  Save. On reboot the serial should say `anyConfigured=1`. This is just a convenience —
+  `bench_lw_enc` already has working credentials built in.
 
-### C1 · LW-P1-ACCEPT — uplink ingested by ChirpStack *(⭐ gate)*
-**Board:** DUT COM13 · **env:** `bench_lw_enc`
-```
-pio run -e bench_lw_enc -t erase  --upload-port COM13
-pio run -e bench_lw_enc -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**ChirpStack:** provision DevAddr `01000001` + the bench keys + FPort 13.
-**Confirm at boot (DUT):** `[lw-selftest] overall : PASS` · `[lw-enc] … ready=1 DevAddr=0x01000001`.
-**Do:** send an MT text to the DUT's R1.
-**PASS:** DUT `evt=QUEUE … cred=flag`; **ChirpStack shows the decoded uplink** for `01000001` (FCnt increasing).
-**FAIL:** no LNS event — wrong MIC / MAC version / DevAddr NwkID vs NetID (run B5 first to rule the crypto out).
+## For your colleague (has ChirpStack)
+Flash `bench_lw_enc`, add a device in ChirpStack with the same address `01000001`,
+the two keys, port 13 (LoRaWAN 1.0.x, ABP, Class A, turn off frame-counter checking).
+Send a text from a Meshtastic device. Pass = the message shows up decoded in ChirpStack.
 
-### C2 · LW-P3-WEATHER — Custom raw-LoRa → ABP → ChirpStack *(⭐)*
-**Board:** DUT COM13 · **env:** `xiao_esp32s3_lwabp`
-```
-pio run -e xiao_esp32s3_lwabp -t erase  --upload-port COM13
-pio run -e xiao_esp32s3_lwabp -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200
-```
-**Portal config:** set a radio to **Custom** (station's exact freq/BW/SF/CR/sync); add an ABP device (Any or *Source protocol = Custom*). **Edit `decodeStation()` in the codec to your real layout first.**
-**ChirpStack:** provision that device's DevAddr/keys/FPort.
-**Do:** transmit a raw frame from the station (or a 2nd board on that RF).
-**PASS:** DUT `evt=QUEUE … cred=nvs … msg="custom-raw"`; ChirpStack shows the uplink + codec readings.
-**FAIL:** `drop=no-lw-abp-dest` / `drop=loop-dup` / `drop=lw-payload-overflow`.
-
-### C3 · LW-P3-TAG — codec decodes the source tag (#5)
-Same board/flash/portal as C2, but the device has **"Prepend source tag" ON** and the codec has `HAS_SOURCE_TAG=true`.
-**PASS:** ChirpStack decodes `source:{proto,srcId}` with the correct proto name + payload.
-**FAIL:** proto wrong / not split.
-
-### C4 · LW-FCNT-LNS — LNS accepts increasing FCnt, rejects replays
-Same board/flash as C1, but provision the device **with** frame-counter validation **enabled**.
-**PASS:** consecutive uplinks accepted; after a DUT RST the LNS still accepts (resumed-ahead FCnt); a forced low/replayed FCnt is rejected.
-**FAIL:** valid uplinks dropped, or a replay accepted.
-
----
-
-## Reference
-
-**Offline verifier** — `tools/lw-verify.py` (mirrors `src/LoRaWANCrypto.h`):
-```
-python tools/lw-verify.py <PHYPayload-hex> <NwkSKey-hex32> <AppSKey-hex32> [--fcnt-msb N] [--tagged]
-```
-Prints MHDR / DevAddr(+NwkID) / FCnt / FPort, **MIC PASS/FAIL**, decrypted FRMPayload.
-
-**Serial events:** `evt=QUEUE … cred=flag|nvs tag=0|1` (queued) · `evt=RX proto=LW … devaddr=… fcnt=… fport=…` (sniffer) · `evt=LWRAW … raw=<hex>` (sniffer, full frame) · `drop=lw-selftest-fail` · `drop=lw-fcnt-fail` / `FCNT_PERSIST_FAIL` · `drop=lw-payload-overflow` · `drop=dwell` · `[lw-warn] … DevAddr … collision`.
-
-**Pre-bench fixes (folded in):** #1 FCnt-by-DevAddr (B3) · #2 self-test gate (A1) · #3 fail-closed FCnt (B2) · #4 reboot-safe build-flag FCnt (B2) · #5 proto-enum tag (B6/C3) · #6 over-cap drop (A3). Commits `d98da4b`,`1496717`,`9aaf423` on `dev-ABP-lorawan`.
-
-**Notes:** a wrong MIC is silently dropped by ChirpStack — suspect keys / MAC version / DevAddr NwkID before the bridge. Migration: FCnt moved to `fc_<addr>` NVS keys; old `fc<N>` keys orphaned → a device resumes at FCnt 0 on first boot (fine with "Disable frame-counter validation"). Encoder is uplink-only (Class A, ADR off). Deferred (not v8.4): ABP/OTAA decode, dual-LNS, MT/MC→RNS.
+## If something fails
+- Nothing on the listener in step 2: the two boards aren't on the same radio settings, or
+  the sender didn't send — check the sender's serial for `evt=QUEUE … dstproto=LW`.
+- `MIC -> FAIL` in step 3: the keys you typed don't match, or the hex got truncated.
+- Wrong values in the boot text: you skipped the `erase` step, so the board kept old
+  settings — erase, flash, recheck.
