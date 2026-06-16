@@ -40,9 +40,9 @@ and FRMPayload-decrypt** truly need either a real ChirpStack **or** the off-box
 **Your rig (3× Xiao dual-SX1262 bridges, no ChirpStack):**
 | Role | Board | Build | Purpose |
 |---|---|---|---|
-| **DUT** | bridge #1 (e.g. COM6) | `bench_lw_enc` (or `bench_lw_enc_dwell` for P4) | R1=Meshtastic in, R2=LoRaWAN ABP encoder out (903.9/BW125/SF7) |
-| **SNIFFER** ("synthetic LNS") | bridge #2 (e.g. COM13) | `bench_lw_sniffer` | R2=keyless LoRaWAN capture on 903.9; prints `evt=RX proto=LW …` + `evt=LWRAW raw=…` |
-| **STIMULUS** | bridge #3 / MT node / Custom board | (see each test) | originates the mesh text or raw-LoRa frame the DUT transcodes |
+| **DUT-A** | bridge on COM13 | `bench_lw_enc` (or `bench_lw_enc_dwell` for P4) | R1=Meshtastic in, R2=LoRaWAN ABP encoder out (903.9/BW125/SF7) |
+| **SNIFFER** ("synthetic LNS") | bridge on COM6 | `bench_lw_sniffer` | R2=keyless LoRaWAN capture on 903.9; prints `evt=RX proto=LW …` + `evt=LWRAW raw=…` |
+| **STIMULUS / DUT-B** | bridge on COM14 / MT / MC node / Custom board | (see each test) | originates the mesh text or raw-LoRa frame the DUT transcodes; or a 2nd DUT for a parallel MC pass (B4/B7) |
 
 Stimulus source options (the DUT needs *inbound* traffic to transcode — it does not
 self-generate): a **Meshtastic node/app** on the DUT's R1 channel (default LongFast)
@@ -84,7 +84,8 @@ pio run -e <env> -t erase  --upload-port COMx     # 1. wipe flash+NVS (clean con
 pio run -e <env> -t upload --upload-port COMx     # 2. flash firmware
 pio device monitor --port COMx --baud 115200      # 3. watch serial (Ctrl-] to exit)
 ```
-Example port map (yours): **DUT=COM6 · SNIFFER=COM13 · 2nd-DUT/spare=COM14**. Always pass
+Example port map (yours): **DUT-A=COM13 · SNIFFER=COM6 · DUT-B/spare=COM14** (COM6 and
+COM14 are interchangeable for the sniffer-vs-spare/2nd-DUT roles). Always pass
 `--upload-port`/`--port` (several boards are attached); one monitor terminal per board.
 
 **⚠️ Erase is REQUIRED when you change env/config.** The autosave and the captive portal
@@ -129,11 +130,11 @@ LNS's NetID is **silently dropped** — the #1 suspect after a wrong MIC.
 
 ## Tier A — DUT board only (no second board, no LNS)
 
-**Run (DUT only, e.g. COM6) — erase + upload + monitor, swapping the env per test:**
+**Run (DUT-A only, COM13) — erase + upload + monitor, swapping the env per test:**
 ```
-pio run -e bench_lw_enc -t erase  --upload-port COM6
-pio run -e bench_lw_enc -t upload --upload-port COM6
-pio device monitor --port COM6 --baud 115200
+pio run -e bench_lw_enc -t erase  --upload-port COM13
+pio run -e bench_lw_enc -t upload --upload-port COM13
+pio device monitor --port COM13 --baud 115200
 ```
 Per-test env: **A1** `bench_lw_enc` · **A2** `bench_lw_enc_dwell` · **A3/A4**
 `xiao_esp32s3_lwabp` (apply the portal settings the test names) · **A5** `xiao_esp32s3`.
@@ -179,24 +180,24 @@ Per-test env: **A1** `bench_lw_enc` · **A2** `bench_lw_enc_dwell` · **A3/A4**
 ## Tier B — Synthetic LNS (2–3 bridges, NO ChirpStack)
 
 **Common setup for Tier B:**
-1. **DUT** = bridge #1, `bench_lw_enc`, on COM-A. (R1=MT LongFast, R2=LoRaWAN 903.9.)
-2. **SNIFFER** = bridge #2, `bench_lw_sniffer`, on COM-B. (R2 captures 903.9/BW125/SF7.)
+1. **DUT-A** = bridge on COM13, `bench_lw_enc`. (R1=MT LongFast, R2=LoRaWAN 903.9.)
+2. **SNIFFER** = bridge on COM6, `bench_lw_sniffer`. (R2 captures 903.9/BW125/SF7.)
 3. **STIMULUS** = a Meshtastic node/app on the DUT R1 LongFast channel.
-4. Open a monitor on **both** COM-A (DUT) and COM-B (SNIFFER).
+4. Open a monitor on **both** COM13 (DUT-A) and COM6 (SNIFFER).
 Each MT text you send appears on the DUT as `evt=QUEUE … dstproto=LW … fcnt=… cred=flag`
 and on the SNIFFER as `evt=RX proto=LW … devaddr=0x01000001 fcnt=… fport=13` (+ `evt=LWRAW raw=…`).
 
 **Flash both boards (erase → upload → monitor, one terminal each):**
 ```
-# DUT — the encoder (COM6)
-pio run -e bench_lw_enc -t erase  --upload-port COM6
-pio run -e bench_lw_enc -t upload --upload-port COM6
-pio device monitor --port COM6 --baud 115200          # terminal 1
+# DUT-A — the encoder (COM13)
+pio run -e bench_lw_enc -t erase  --upload-port COM13
+pio run -e bench_lw_enc -t upload --upload-port COM13
+pio device monitor --port COM13 --baud 115200         # terminal 1
 
-# SNIFFER — the synthetic LNS (COM13)
-pio run -e bench_lw_sniffer -t erase  --upload-port COM13
-pio run -e bench_lw_sniffer -t upload --upload-port COM13
-pio device monitor --port COM13 --baud 115200         # terminal 2
+# SNIFFER — the synthetic LNS (COM6)
+pio run -e bench_lw_sniffer -t erase  --upload-port COM6
+pio run -e bench_lw_sniffer -t upload --upload-port COM6
+pio device monitor --port COM6 --baud 115200          # terminal 2
 ```
 **B3/B4/B6/B7** swap the DUT to `xiao_esp32s3_lwabp` (erase first; apply the named portal
 ABP device(s) + source radio, Save). **Stimulus:** set MT/MC nodes to the DUT's R1 channel
@@ -290,9 +291,9 @@ off-box Tier-B result (see the provisioning split above), so stick to C1 + C2.
 
 **Flash the DUT (erase → upload → monitor):**
 ```
-pio run -e bench_lw_enc -t erase  --upload-port COM6    # C1 (build-flag creds)
-pio run -e bench_lw_enc -t upload --upload-port COM6
-pio device monitor --port COM6 --baud 115200
+pio run -e bench_lw_enc -t erase  --upload-port COM13   # C1 (build-flag creds)
+pio run -e bench_lw_enc -t upload --upload-port COM13
+pio device monitor --port COM13 --baud 115200
 ```
 The ChirpStack device must **match the DUT's creds**: **C1** = DevAddr `01000001` + the
 bench keys + FPort 13; **C2/C3** = `xiao_esp32s3_lwabp` (erase first, then provision the
