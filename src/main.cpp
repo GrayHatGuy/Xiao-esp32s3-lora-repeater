@@ -1231,6 +1231,17 @@ static uint32_t estimateAirtimeMs(size_t payloadLen, uint8_t sf, float bwKhz,
     return (uint32_t)(toa + 0.999f);                  // round up to whole ms
 }
 
+// (P4) Per-TX dwell-time limit (ms) for a region's band, or 0 when the region is
+// governed by duty cycle instead (enforced by BRIDGE_TX_DUTY_PERCENT). The FCC
+// US915 LoRaWAN band caps each transmission at 400 ms time-on-air; EU868 has no
+// per-TX dwell limit (it's a ~1%/sub-band duty cycle).
+static uint32_t regionDwellMs(uint8_t region) {
+    switch (region) {
+        case BridgeConfig::REGION_US: return 400;
+        default:                      return 0;
+    }
+}
+
 // ============================================================
 //  Generic per-radio FreeRTOS task — the RX-priority loop (V8.2-SPEC.md).
 //  Each iteration, in priority order:
@@ -1340,8 +1351,31 @@ void radioTask(void *pvParameters)
                       (unsigned long)millis(), tag, (unsigned long)bo);
             } else {
                 size_t  txLen = g_txPending[i].len;
-                int16_t txs = self->startTransmit(g_txPending[i].data, txLen);
-                if (txs == RADIOLIB_ERR_NONE) {
+                // (P4) US915 per-TX dwell cap: drop a LoRaWAN transmission whose
+                // time-on-air would exceed the regional dwell limit (FCC 400 ms)
+                // rather than emit an out-of-spec uplink. Other protocols and
+                // duty-cycle regions (regionDwellMs == 0) are unaffected.
+                uint32_t dwellLim = regionDwellMs(BridgeConfig::region());
+                bool dwellBlocked = false;
+                if (dwellLim &&
+                    g_chan[i].protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN) {
+                    uint32_t toa = estimateAirtimeMs(
+                        txLen, BridgeConfig::radioSf(i),
+                        BridgeConfig::radioBandwidth(i),
+                        BridgeConfig::radioCr(i), LORA_PREAMBLE_LEN);
+                    if (toa > dwellLim) {
+                        blogf("ts=%lu evt=DROP radio=%s drop=dwell toa=%lu limit=%lu len=%u\n",
+                              (unsigned long)millis(), tag, (unsigned long)toa,
+                              (unsigned long)dwellLim, (unsigned)txLen);
+                        g_txPendingValid[i] = false;
+                        self->startReceive();
+                        dwellBlocked = true;
+                    }
+                }
+                int16_t txs = dwellBlocked
+                    ? (int16_t)RADIOLIB_ERR_NONE
+                    : self->startTransmit(g_txPending[i].data, txLen);
+                if (!dwellBlocked && txs == RADIOLIB_ERR_NONE) {
                     g_txBusy[i]         = true;
                     g_txStartMs[i]      = millis();
                     g_txPendingValid[i] = false;
@@ -1364,7 +1398,7 @@ void radioTask(void *pvParameters)
                     blogf("ts=%lu evt=THROTTLE radio=%s air=%lu gap=%lu nexttx=%lu\n",
                           (unsigned long)millis(), tag, (unsigned long)air,
                           (unsigned long)gap, (unsigned long)g_nextTxAllowedMs[i]);
-                } else {
+                } else if (!dwellBlocked) {
                     blogf("ts=%lu evt=DROP radio=%s drop=tx-startfail rc=%d\n",
                           (unsigned long)millis(), tag, txs);
                     g_txPendingValid[i] = false;
