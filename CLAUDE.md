@@ -161,9 +161,17 @@ no WiFi · device model **M1 (per-source)**.
   persist), send an MT text → confirm ChirpStack shows the decoded uplink. Expect
   `[lw-selftest] overall : PASS` at boot first.
 
-**P2 next:** schema v4→v5 per-source ABP credential struct + portal + NVS-persisted 32-bit FCnt (M1).
-Then P3 universal source→FPort/payload mapping + ChirpStack codec (weather-station acceptance), P4
-regional timing (US915 per-TX dwell cap).
+**P2–P4 IMPLEMENTED 2026-06-15 (build-green; on-air bench pending — `BENCH-v8.4.md`).**
+- **P2:** new `src/LoRaWANConfig.{h,cpp}` — a 4-slot per-source ABP identity table in its OWN NVS
+  namespace (`lwabp`, NOT a BridgeConfig schema bump) + a captive-portal "LoRaWAN ABP devices"
+  section + reboot-safe FCnt (block reservation). Seam resolves per-source device → else build-flag.
+  New env `xiao_esp32s3_lwabp` (encoder on, portal-configurable). Fixed a latent sync→proto bug in
+  `resolve()`.
+- **P3:** shared `enqueueAbpUplink()`; **Custom raw-LoRa → ABP** weather-station path (raw RX bytes
+  as FRMPayload); optional per-device source tag (`[proto][srcId]`); `tools/chirpstack-codec.js`.
+- **P4:** `regionDwellMs()` US915 400 ms per-TX dwell cap in the TX scheduler (EU868 via
+  `BRIDGE_TX_DUTY_PERCENT`).
+- **Deferred → later:** ABP/OTAA decode, dual-LNS crosslink, MT/MC→RNS encoder.
 
 ## Phase status
 

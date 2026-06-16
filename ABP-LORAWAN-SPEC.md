@@ -145,8 +145,9 @@ v8.3 LoRaWAN is **keyless** (cleartext-header capture/relay only). The ABP encod
 ## 9. Prioritized phases  *(effort S/M/L — refine from scope synthesis)*
 
 1. **(M) AES-CMAC helper + `encodeLoRaWANUplink`** — ✅ **IMPLEMENTED 2026-06-15** (§0.0). RFC-4493 AES-CMAC + build/encrypt/MIC of a valid ABP uplink at the `no-lw-encoder` seam → push to `g_routeQ` (B1). Crypto unit-verified vs RFC4493 + an independent CMAC; both builds green. **Remaining = the on-air bench** (Custom/MT source → ABP uplink → real gateway → ChirpStack shows the decoded payload).
-2. **(M) Config/NVS + portal** — ABP credentials + persisted FCnt + FPort map; schema bump + migration.
-3. **(M) Universal mapping (M2 multiplexed)** — source tag + FPort/payload schema + a sample ChirpStack codec; **the weather-station (Custom-source) scenario as the acceptance test.**
+2. ✅ **IMPLEMENTED (P2) 2026-06-15** — Config/NVS + portal. Per-source ABP creds + persisted FCnt + portal section, in a **dedicated `LoRaWANConfig` module + its own NVS namespace (`lwabp`)** — NOT a BridgeConfig schema v4→v5 bump (cleaner / isolated / no migration). Reboot-safe FCnt via block reservation. Build-flag creds stay as a fallback.
+3. ✅ **IMPLEMENTED (P3) 2026-06-15** — Universal mapping. M1 per-source devices (owner's choice) + an **optional** per-device source tag for a multiplexed device; **Custom raw-LoRa → ABP** (the weather-station path: raw RX bytes → FRMPayload); `tools/chirpstack-codec.js` sample codec. On-air weather-station run = the acceptance test (`BENCH-v8.4.md`).
+   - ✅ **Regional timing (P4) 2026-06-15** — US915 per-TX dwell cap (400 ms ToA) in the TX scheduler; EU868 duty via `BRIDGE_TX_DUTY_PERCENT`.
 4. **(L, optional) B2 bridge-as-gateway** — Semtech UDP / ChirpStack Gateway Bridge MQTT forwarder over WiFi (removes the separate-gateway requirement).
 5. ~~MT/MC→RNS passthrough~~ — **DEFERRED → later** (RNS coding deferred this cycle, owner). §6 holds the design.
 6. **(L, stretch → later) Dual-LNS crosslink** (§5) — second ABP identity per radio + Class-C (or Class-A poll) downlink path + cross-routing.

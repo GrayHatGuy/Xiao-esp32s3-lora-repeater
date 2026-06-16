@@ -21,11 +21,22 @@ release. Design: `ABP-LORAWAN-SPEC.md`.
 - **Opt-in / do-no-harm.** Gated by `BRIDGE_LW_ENCODE` (default 0) + parsed keys
   (`BRIDGE_LW_ENC_NWKSKEY` / `_APPSKEY`, plus `_DEVADDR` / `_FPORT`); a stock
   build keeps v8.3's keyless behavior. New `bench_lw_enc` env.
-- **Next phases (not in v8.4):** per-source credentials + a captive-portal
-  section + NVS-persisted 32-bit FCnt (P2); universal source→FPort/payload
-  mapping + a ChirpStack codec, with the raw-LoRa weather-station as the
-  acceptance test (P3); regional dwell/duty enforcement (P4). OTAA and ABP
-  *decode* remain optional/deferred.
+- **Per-source ABP devices + portal + persisted FCnt (P2).** A dedicated
+  `src/LoRaWANConfig.{h,cpp}` module holds a bounded 4-slot per-source ABP
+  identity table in its OWN NVS namespace (`lwabp`) — not a BridgeConfig schema
+  bump — with a captive-portal "LoRaWAN ABP devices" section and a reboot-safe
+  FCnt (block reservation, one write per 32 uplinks). The encode seam resolves a
+  per-source device (else the build-flag fallback). New `xiao_esp32s3_lwabp` env.
+- **Universal mapping + Custom weather-station path + codec (P3).** Any decoded
+  source maps to an ABP uplink; a raw-LoRa **Custom** source wraps its raw RX
+  bytes as the FRMPayload (the canonical weather-station scenario). Optional
+  per-device source tag (`[proto][srcId]`) for a multiplexed device.
+  `tools/chirpstack-codec.js` is a sample ChirpStack v4 codec.
+- **Regional timing (P4).** US915 per-TX **dwell cap** (400 ms ToA) in the TX
+  scheduler; EU868 duty via `BRIDGE_TX_DUTY_PERCENT`.
+- **Bench:** `BENCH-v8.4.md` (P1–P4 plan). On-air ChirpStack run is the pending gate.
+- **Deferred (not in v8.4):** ABP/OTAA *decode* (own fleet → MT/MC), the dual-LNS
+  crosslink, and the MT/MC→RNS encoder.
 
 ## v8.3.1 — Radio 2 module-revision (V1.0 / V1.1) support + bring-up hardening
 
