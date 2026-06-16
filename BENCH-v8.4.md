@@ -74,13 +74,49 @@ and a Meshtastic/MeshCore node as the stimulus.
 | `xiao_esp32s3_lwabp` | A, B, C | encoder on, **portal**-configured (no autosave, no build-flag keys). For portal/per-source/weather tests. |
 | `xiao_esp32s3` | A | stock (encoder compiled out) — the do-no-harm control. |
 
-**Flash / monitor (run from the project root; the path has spaces):**
+**Commands & ports.** Run from the project root in PowerShell (the path has spaces):
 ```
-pio run -e <env> -t upload --upload-port COMx
-pio device monitor --port COMx --baud 115200
+cd "C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main dev-ABP-lorawan"
 ```
-Use a **separate terminal per board** so you can watch the DUT and the SNIFFER side by
-side. Always pass `--upload-port`/`--port` — multiple boards are connected at once.
+Per board, three steps — substitute the test's **env** and the board's **COM port**:
+```
+pio run -e <env> -t erase  --upload-port COMx     # 1. wipe flash+NVS (clean config + FCnt)
+pio run -e <env> -t upload --upload-port COMx     # 2. flash firmware
+pio device monitor --port COMx --baud 115200      # 3. watch serial (Ctrl-] to exit)
+```
+Example port map (yours): **DUT=COM6 · SNIFFER=COM13 · 2nd-DUT/spare=COM14**. Always pass
+`--upload-port`/`--port` (several boards are attached); one monitor terminal per board.
+
+**⚠️ Erase is REQUIRED when you change env/config.** The autosave and the captive portal
+only act on an *unconfigured* board (`if (!isConfigured())`), so re-flashing over existing
+NVS **keeps the old config** — `-t erase` first guarantees the new env's settings (and a
+clean ABP table + FCnt) actually take effect. *Exception:* for the FCnt-persistence tests
+(B2/B3) erase **once** at the start, then reboot via **power-cycle / RST button** — do not
+erase or re-flash mid-test or you wipe the counter under test. (Forgot to erase? Within
+~5 s of boot, press BOOT or send any serial byte to force the portal.)
+
+**Config application:**
+- **Autosave envs** (`bench_lw_enc`, `bench_lw_enc_dwell`, `bench_lw_sniffer`): after
+  erase+upload the build-flag config self-saves on first boot (`[setup] BRIDGE_BENCH_AUTOSAVE:
+  persisted build-flag config`) — **no portal, no manual setup**.
+- **Portal env** (`xiao_esp32s3_lwabp`): after erase+upload it enters the captive portal
+  (`[setup] … entering captive portal` + a Wi-Fi AP). Connect, apply the radio + ABP-device
+  settings the test names, **Save** (the bridge reboots).
+
+**Applied radio / region / cred config per env:**
+| Env | R1 (mesh source) | R2 (LoRaWAN out) | Region | ABP creds |
+|---|---|---|---|---|
+| `bench_lw_enc` | Meshtastic 906.875 / BW250 / SF11 (0x2B) | LoRaWAN 903.9 / BW125 / SF7 (0x34) | US | DevAddr `01000001` + bench keys, FPort 13 (autosave) |
+| `bench_lw_enc_dwell` | Meshtastic 906.875 / BW250 / SF11 | LoRaWAN 903.9 / BW125 / **SF12** | US | same (autosave) |
+| `bench_lw_sniffer` | Meshtastic 906.875 / BW250 / SF11 (unused) | **LoRaWAN capture** 903.9 / BW125 / SF7 (0x34) | — | none (keyless) |
+| `xiao_esp32s3_lwabp` | portal-set | portal-set (set a radio to LoRaWAN) | portal-set | portal-set ABP device(s) |
+| `xiao_esp32s3` | Meshtastic 906.875 / BW250 / SF11 (0x2B) | MeshCore 910.525 / BW62.5 / SF7 (0x12) | unset | none |
+
+**Channel match (protocol conformance):** an **MT stimulus node** must be on the DUT's R1
+— **Meshtastic US LongFast 906.875 / BW250 / SF11**; an **MC node** on the DUT's MeshCore
+channel. The **SNIFFER** capture radio must match the DUT's R2 emission **903.9 / BW125 /
+SF7** (the `bench_lw_sniffer` env already does; for the SF12 dwell test the sniffer won't
+hear it — that test is DUT-serial-only).
 
 **Bench creds** (throwaway, baked into `bench_lw_enc`/`_dwell`):
 `DevAddr 01000001` · `NwkSKey 2B7E151628AED2A6ABF7158809CF4F3C` ·
@@ -92,6 +128,16 @@ LNS's NetID is **silently dropped** — the #1 suspect after a wrong MIC.
 ---
 
 ## Tier A — DUT board only (no second board, no LNS)
+
+**Run (DUT only, e.g. COM6) — erase + upload + monitor, swapping the env per test:**
+```
+pio run -e bench_lw_enc -t erase  --upload-port COM6
+pio run -e bench_lw_enc -t upload --upload-port COM6
+pio device monitor --port COM6 --baud 115200
+```
+Per-test env: **A1** `bench_lw_enc` · **A2** `bench_lw_enc_dwell` · **A3/A4**
+`xiao_esp32s3_lwabp` (apply the portal settings the test names) · **A5** `xiao_esp32s3`.
+**Erase before each env switch.**
 
 ### A1 · LW-ENC-SELFTEST — crypto known-answer self-test  *(gate)*
 - **HW:** DUT only. **Flash:** `bench_lw_enc`. Watch boot serial.
@@ -139,6 +185,23 @@ LNS's NetID is **silently dropped** — the #1 suspect after a wrong MIC.
 4. Open a monitor on **both** COM-A (DUT) and COM-B (SNIFFER).
 Each MT text you send appears on the DUT as `evt=QUEUE … dstproto=LW … fcnt=… cred=flag`
 and on the SNIFFER as `evt=RX proto=LW … devaddr=0x01000001 fcnt=… fport=13` (+ `evt=LWRAW raw=…`).
+
+**Flash both boards (erase → upload → monitor, one terminal each):**
+```
+# DUT — the encoder (COM6)
+pio run -e bench_lw_enc -t erase  --upload-port COM6
+pio run -e bench_lw_enc -t upload --upload-port COM6
+pio device monitor --port COM6 --baud 115200          # terminal 1
+
+# SNIFFER — the synthetic LNS (COM13)
+pio run -e bench_lw_sniffer -t erase  --upload-port COM13
+pio run -e bench_lw_sniffer -t upload --upload-port COM13
+pio device monitor --port COM13 --baud 115200         # terminal 2
+```
+**B3/B4/B6/B7** swap the DUT to `xiao_esp32s3_lwabp` (erase first; apply the named portal
+ABP device(s) + source radio, Save). **Stimulus:** set MT/MC nodes to the DUT's R1 channel
+(Meshtastic US LongFast 906.875/BW250/SF11, or the MeshCore channel for B7). The SNIFFER
+stays on `bench_lw_sniffer` (903.9/BW125/SF7) throughout.
 
 ### B1 · LW-AIR-EMIT — the encoder actually transmits a valid-shaped uplink
 - **Steps:** send one MT text from the stimulus node.
@@ -224,6 +287,16 @@ use `01000001` = NwkID 0 = default NetID `0x000000`). Each ABP device is **one
 DevAddr** in ChirpStack with the matching keys; reproducing the full B4 matrix
 end-to-end means one ChirpStack device per DevAddr — usually unnecessary given the
 off-box Tier-B result (see the provisioning split above), so stick to C1 + C2.
+
+**Flash the DUT (erase → upload → monitor):**
+```
+pio run -e bench_lw_enc -t erase  --upload-port COM6    # C1 (build-flag creds)
+pio run -e bench_lw_enc -t upload --upload-port COM6
+pio device monitor --port COM6 --baud 115200
+```
+The ChirpStack device must **match the DUT's creds**: **C1** = DevAddr `01000001` + the
+bench keys + FPort 13; **C2/C3** = `xiao_esp32s3_lwabp` (erase first, then provision the
+portal device's DevAddr/keys/FPort and paste the codec). Erase before switching env.
 
 ### C1 · LW-P1-ACCEPT — build-flag ABP uplink → ChirpStack  *(⭐ acceptance gate)*
 - **Flash:** `bench_lw_enc`. Provision DevAddr `01000001` + the bench keys, FPort 13.
