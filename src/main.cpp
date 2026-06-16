@@ -408,6 +408,9 @@ static void resolveRadioChannel(uint8_t syncWord, const char *chName,
 #ifndef BRIDGE_LW_CAPTURE
   #define BRIDGE_LW_CAPTURE          1   // log evt=RX proto=LW header metadata
 #endif
+#ifndef BRIDGE_LW_CAPTURE_HEX
+  #define BRIDGE_LW_CAPTURE_HEX      0   // also log evt=LWRAW raw=<full PHYPayload hex>
+#endif                                   // (bench "synthetic LNS" sniffer -> tools/lw-verify.py)
 #ifndef BRIDGE_LW_SUMMARY_TO_MESH
   #define BRIDGE_LW_SUMMARY_TO_MESH  1   // also emit a metadata summary to MT/MC (LW-Q2)
 #endif
@@ -1031,6 +1034,18 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         else
             blogf("ts=%lu evt=RX radio=%s proto=LW parse=fail len=%u\n",
                   (unsigned long)millis(), srcTag, (unsigned)len);
+#endif
+#if BRIDGE_LW_CAPTURE_HEX
+        // Full PHYPayload hex for an off-box "synthetic LNS" verify (MIC + decrypt
+        // via tools/lw-verify.py) without a real ChirpStack. Bench sniffer only.
+        {
+            char hx[2 * 256 + 1];
+            size_t hn = (len < 256) ? len : 256;
+            for (size_t i = 0; i < hn; i++) snprintf(hx + 2 * i, 3, "%02x", buf[i]);
+            hx[2 * hn] = '\0';
+            blogf("ts=%lu evt=LWRAW radio=%s len=%u raw=%s\n",
+                  (unsigned long)millis(), srcTag, (unsigned)len, hx);
+        }
 #endif
 #if BRIDGE_LW_SUMMARY_TO_MESH
         if (parsed) {
