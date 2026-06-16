@@ -128,6 +128,45 @@ LNS's NetID is **silently dropped** — the #1 suspect after a wrong MIC.
 
 ---
 
+## Pre-flight config check — confirm on serial BEFORE you test
+Every board dumps its full config at boot. **Open the monitor first, then press the
+board's RST button** (or replug USB) so you catch the one-time dump, and confirm it
+matches the env's intent before sending any traffic. A mismatch almost always means you
+skipped `-t erase` (the board kept an old NVS config). Keys are never printed — the
+self-test + the first `evt=QUEUE … cred=flag` line confirm the keys are right.
+
+**DUT-A (`bench_lw_enc`) — expected boot lines:**
+```
+[lw-selftest] overall : PASS
+[lw-enc] ABP encoder ON — build-flag creds ready=1 DevAddr=0x01000001 FPort=13; NVS devices configured=0
+[BridgeConfig] v4 configured=1 region=1
+  radio1 RF     = proto=1 sync=0x2B 906.875 MHz BW250.0 SF11 CR5 TX20dBm
+  radio2 RF     = proto=5 sync=0x34 903.900 MHz BW125.0 SF7 CR5 TX20dBm
+```
+Confirm: **selftest PASS** · **ready=1** with the right **DevAddr/FPort** · **region=1**
+(US) · **R2 = sync 0x34 / 903.9 / BW125 / SF7** (LoRaWAN out) · R1 = sync 0x2B Meshtastic
+LongFast. (Sync words: `0x2B`=Meshtastic, `0x12`=MeshCore, `0x34`=LoRaWAN, `0x42`=Reticulum;
+`proto=` 1=MT/2=MC/3=RNS/4=Custom/5=LoRaWAN.)
+
+**Per-env expected config:**
+| Env | self-test | `[lw-enc]` line | region | radio2 RF (LoRaWAN out / capture) |
+|---|---|---|---|---|
+| `bench_lw_enc` | `overall : PASS` | `ready=1 DevAddr=0x01000001 FPort=13 … configured=0` | `1` (US) | `sync=0x34 903.900 BW125.0 SF7` |
+| `bench_lw_enc_dwell` | `overall : PASS` | `ready=1 DevAddr=0x01000001 FPort=13 … configured=0` | `1` (US) | `sync=0x34 903.900 BW125.0 `**`SF12`** |
+| `xiao_esp32s3_lwabp` *(after portal Save)* | `overall : PASS` | `ready=0 … configured=1` (build-flag DevAddr shown is the unused default) | per portal | the radio you set to `sync=0x34` |
+| `bench_lw_sniffer` | *(none — encoder off)* | *(none)* | `0` | `sync=0x34 903.900 BW125.0 SF7` (capture) |
+| `xiao_esp32s3` | *(none)* | *(none)* | `0` | `sync=0x12 910.525 BW62.5 SF7` (MeshCore) |
+
+- **Portal env (`xiao_esp32s3_lwabp`):** after Save+reboot, also confirm one
+  `[LoRaWANConfig] dev0 sel=… match=0x… devaddr=0x… fport=… fcnt=…` line **per device** and
+  `[LoRaWANConfig] loaded … anyConfigured=1` — that proves your portal ABP device persisted.
+  `ready=0` on the `[lw-enc]` line is correct here (no build-flag keys → it uses the NVS device).
+- **No `[lw-selftest]`/`[lw-enc]` on the sniffer or stock builds** is expected (encoder
+  compiled out) — for those just confirm the `radioN RF` line.
+- The dump prints **once** at boot; to re-see it, reset the board with the monitor already open.
+
+---
+
 ## Tier A — DUT board only (no second board, no LNS)
 
 **Run (DUT-A only, COM13) — erase + upload + monitor, swapping the env per test:**

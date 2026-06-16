@@ -1486,11 +1486,17 @@ void setup()
 #if BRIDGE_LW_ENCODE
     // ABP P2: load the per-source LoRaWAN ABP device table + persisted FCnts.
     LoRaWANConfig::begin();
-    // (#4) the build-flag fallback identity now persists its FCnt by DevAddr in
-    // the same key space as the device table. Warn if it collides with a
-    // provisioned device — two RAM counters on one DevAddr can issue a replay.
     {
         const LwEncCreds &lw = lwEncCreds();
+        // Pre-flight echo: confirm the active ABP identity from serial BEFORE
+        // sending traffic (avoids a wasted test run on a mis-set board). Keys are
+        // never printed — only DevAddr/FPort/ready + whether any NVS device exists.
+        Serial.printf("[lw-enc] ABP encoder ON — build-flag creds ready=%d "
+                      "DevAddr=0x%08lX FPort=%u; NVS devices configured=%d\n",
+                      lw.ready ? 1 : 0, (unsigned long)lw.devAddr, (unsigned)lw.fport,
+                      LoRaWANConfig::anyConfigured() ? 1 : 0);
+        // (#4) warn if the build-flag fallback identity collides with a provisioned
+        // device — two RAM counters on one DevAddr can issue a replayed FCnt.
         if (lw.ready && LoRaWANConfig::hasDevAddr(lw.devAddr))
             Serial.printf("[lw-warn] build-flag DevAddr 0x%08lx also configured as a "
                           "device — use distinct DevAddrs to avoid an FCnt collision\n",
