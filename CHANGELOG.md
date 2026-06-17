@@ -20,9 +20,14 @@ remaining item is live-ChirpStack (Tier C) ingestion (`BENCH-RESULTS.md`). Desig
   `mbedtls_cipher_cmac` won't link) + `encodeUplink()` + a boot self-test
   (`BRIDGE_LW_ENC_SELFTEST`) of the RFC 4493 vectors, the FRMPayload keystream,
   and a frame round-trip. Crypto cross-checked against an independent CMAC.
-- **Opt-in / do-no-harm.** Gated by `BRIDGE_LW_ENCODE` (default 0) + parsed keys
-  (`BRIDGE_LW_ENC_NWKSKEY` / `_APPSKEY`, plus `_DEVADDR` / `_FPORT`); a stock
-  build keeps v8.3's keyless behavior. New `bench_lw_enc` env.
+- **Ships in the standard build (config-gated do-no-harm).** As of v8.4 the encoder
+  is compiled into `xiao_esp32s3` (V1.0) **and** `xiao_esp32s3_v1_1` (V1.1) — no
+  separate env — but stays **dormant** until you set a radio to LoRaWAN and add an
+  ABP device (`BRIDGE_LW_ENCODE` default 1; set 0 to compile it out). A stock MT/MC
+  bridge is behaviourally unchanged; the only delta is a boot `[LoRaWANConfig]` /
+  `[lw-enc]` line and ~12 KB flash. Build-flag keys (`BRIDGE_LW_ENC_NWKSKEY` /
+  `_APPSKEY` / `_DEVADDR` / `_FPORT`) remain the single-device fallback. Bench env:
+  `bench_lw_enc`; `xiao_esp32s3_lwabp` now just adds the boot self-test.
 - **Per-source ABP devices + portal + persisted FCnt (P2).** A dedicated
   `src/LoRaWANConfig.{h,cpp}` module holds a bounded 4-slot per-source ABP
   identity table in its OWN NVS namespace (`lwabp`) — not a BridgeConfig schema
