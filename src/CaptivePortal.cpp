@@ -313,25 +313,22 @@ static void appendScript(String &page) {
         page += b;
     }
     page += F("};");
-    // TODO (bench 2026-06-16, owner request — THIS CAUSED A REAL BENCH ERROR):
-    // when a radio's Protocol dropdown changes (e.g. MT <-> MC), the form keeps
-    // the PRIOR protocol's RF params (freq/BW/SF/CR) and channel key stale, so
-    // the operator must hand-fix every field. It bit us: switching R1 to MeshCore
-    // left the freq stale, the operator retyped it and slipped a digit (910.575
-    // vs the correct 910.525) — a 50 kHz error that demodulates just enough to
-    // FAIL CRC (rx-error rc=-7), costing a long debug session. Fix: on protocol
-    // switch, auto-fill the new proto's defaults (guard so a user-entered custom
-    // value isn't clobbered — overwrite only when empty or still the prior default):
-    //   - Channel key: MeshCore public = 8b3387e9c5cdea6ac9e5edbaa115cd72
-    //     (BRIDGE_MC_KEY_HEX); Meshtastic LongFast = blank.
-    //   - Freq: MeshCore -> build-flag default 910.525 (LORA_RADIO2_FREQUENCY),
-    //     operator overrides per community; MT auto-computes from the preset. A
-    //     sane pre-filled default beats a silently-stale one (root cause above).
-    //   - BW/SF/CR: reset to the new proto's preset (MeshCore BW62.5/SF7/CR5;
-    //     Meshtastic from the PRE/PN modem-preset tables above).
-    // Wire into upd(n) below.
+    // Auto-fill RF defaults on protocol switch (bench 2026-06-16, owner request).
+    // Switching a radio's Protocol dropdown used to keep the PRIOR protocol's
+    // freq/BW/SF/CR + channel key, so the operator hand-fixed every field — which
+    // caused a real bench slip: R1->MeshCore left the freq stale, it got retyped
+    // as 910.575 vs the correct 910.525 (50 kHz off) -> rx-error rc=-7 -> a long
+    // debug. upd(n) below now fills the new protocol's defaults on an ACTUAL
+    // dropdown change (tracked via LASTP), guarded so a value the user typed for
+    // the current protocol is never clobbered:
+    //   - MeshCore: public key 8b3387...cd72 (BRIDGE_MC_KEY_HEX), 910.525 /
+    //     BW62.5 / SF7 / CR5 (the build-flag MeshCore defaults; operator overrides
+    //     freq per community).
+    //   - Meshtastic: blank PSK (LongFast); freq stays preset-computed.
+    //   - Custom / LoRaWAN: left manual (community/channel-specific by design).
     page += F(
       "var PC=[0,0];"                        // last computed freq per radio
+      "var LASTP=[null,null];"               // last protocol per radio (autofill-on-change)
       "function gv(i){return document.getElementById(i).value;}"
       "function djb2(s){var h=5381;for(var i=0;i<s.length;i++)"
         "h=((h*33)+s.charCodeAt(i))>>>0;return h;}"
@@ -346,6 +343,24 @@ static void appendScript(String &page) {
         "PC[n-1]=fs;"
         "fh.textContent=lbl+': '+fs+(ff.value!==fs?' \\u2014 overridden':'');}"
       "function upd(n){var p=gv('r'+n+'proto');"
+        // Fill the new protocol's RF defaults ONLY when the dropdown actually
+        // changes (not on page load or channel-name keystrokes), so a value the
+        // user typed for the current protocol is never overwritten.
+        "if(LASTP[n-1]!==null&&LASTP[n-1]!==p){"
+          "var ck=document.getElementsByName('r'+n+'ChannelKey')[0];"
+          "var bw=document.getElementsByName('r'+n+'Bw')[0];"
+          "var sf=document.getElementsByName('r'+n+'Sf')[0];"
+          "var cr=document.getElementsByName('r'+n+'Cr')[0];"
+          "var ff=document.getElementById('r'+n+'freq');"
+          "if(p==='2'){"                       // MeshCore: build-flag defaults
+            "if(ck)ck.value='8b3387e9c5cdea6ac9e5edbaa115cd72';"
+            "if(bw)bw.value='62.5';if(sf)sf.value='7';if(cr)cr.value='5';"
+            "if(ff){ff.value='910.525';PC[n-1]='910.525';}"   // sync PC so a later MT switch recomputes
+          "}else if(p==='1'){"                 // Meshtastic: LongFast PSK blank
+            "if(ck)ck.value='';"
+          "}"
+        "}"
+        "LASTP[n-1]=p;"
         "var tok={'1':'mt','2':'mc','3':'rns','4':'custom','5':'lw','0':'none'}[p];"
         "var fl=document.querySelectorAll('.r'+n+'fld');"
         "for(var i=0;i<fl.length;i++){"
