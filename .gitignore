@@ -4,3 +4,7 @@
 
 # Local-only contest submission drafts (posted to the Seeed build-off issue; not part of the firmware)
 CONTEST_SUBMISSION_*.md
+
+# Local-only release staging (release notes/bins are published via `gh release`, not tracked in-repo)
+release-artifacts/
+RELEASE_NOTES_*.md
