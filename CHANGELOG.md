@@ -2,9 +2,11 @@
 
 ## v8.4 — LoRaWAN ABP uplink encoder (keyed)
 
-**Status: implemented on `dev-ABP-lorawan`, build-green + crypto-verified;
-on-air ChirpStack bench pending — not yet tagged or released.** Targets the v8.4
-release. Design: `ABP-LORAWAN-SPEC.md`.
+**Status: SHIPPED 2026-06-16 (tag `v8.4-ABP-lorawan`) — build-green, crypto-verified,
+and hardware-verified on air.** Meshtastic *and* MeshCore frames encode to valid ABP
+uplinks that decrypt back with a valid MIC; **12/16 bench tests pass**, and the only
+remaining item is live-ChirpStack (Tier C) ingestion (`BENCH-RESULTS.md`). Design:
+`ABP-LORAWAN-SPEC.md`.
 
 - **Keyed LoRaWAN ABP *uplink* encoder.** The v8.3 keyless tap couldn't inject
   content into LoRaWAN (`MT/MC → LoRaWAN` was a `no-lw-encoder` drop). v8.4 adds
@@ -34,7 +36,16 @@ release. Design: `ABP-LORAWAN-SPEC.md`.
   `tools/chirpstack-codec.js` is a sample ChirpStack v4 codec.
 - **Regional timing (P4).** US915 per-TX **dwell cap** (400 ms ToA) in the TX
   scheduler; EU868 duty via `BRIDGE_TX_DUTY_PERCENT`.
-- **Bench:** `BENCH-v8.4.md` (P1–P4 plan). On-air ChirpStack run is the pending gate.
+- **Portal UX: auto-fill RF defaults on protocol switch.** Changing a radio's
+  Protocol dropdown now fills the new protocol's defaults (MeshCore: public key +
+  `910.525`/BW62.5/SF7/CR5; Meshtastic: blank LongFast PSK), fired only on an actual
+  change so a value the user typed isn't clobbered. Closes the stale-field trap
+  behind a 50 kHz freq slip (`910.575` vs `910.525`) that cost a bench session.
+- **Bench:** hardware-verified on the COM13-DUT / COM6-sniffer rig — **12 PASS /
+  4 OPEN** (`BENCH-RESULTS.md`): crypto self-test, dwell cap, stock do-no-harm, MT
+  *and* MC → ABP (decrypt + MIC), reboot-safe + DevAddr-keyed FCnt, per-source
+  resolve, source-protocol tag, over-cap drop. The only open items are the
+  colleague's live **ChirpStack (Tier C, C1–C4)** ingestion. Plan: `BENCH-v8.4.md`.
 - **Deferred (not in v8.4):** ABP/OTAA *decode* (own fleet → MT/MC), the dual-LNS
   crosslink, and the MT/MC→RNS encoder.
 
