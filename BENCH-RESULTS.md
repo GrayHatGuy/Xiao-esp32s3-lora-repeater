@@ -6,10 +6,10 @@ to `b31527a`; code unchanged since `bbdc7d6` — intervening commits are docs on
 **Rig:** DUT-A = COM13 (sender), SNIFFER = COM6 (keyless listener / "synthetic LNS"); stimulus =
 owner's Meshtastic node `!0AC9F340`. Serial captured from the host over USB.
 
-## Score: 11 PASS · 5 OPEN (0 FAIL)
-- **Closed (PASS):** A1, A2, A4, A5, B1, B2, B3, B4, B5, B6, B7 — the full bench-side chain: crypto, on-air emit, decrypt, reboot-safe FCnt, do-no-harm, portal persistence (A4), DevAddr-keyed FCnt across a row move (B3), per-source DevAddr resolution (B4), source-protocol tag MT+MC (B6), MeshCore→ABP (B7).
+## Score: 12 PASS · 4 OPEN (0 FAIL)
+- **Closed (PASS):** A1, A2, A3, A4, A5, B1, B2, B3, B4, B5, B6, B7 — the full bench-side chain: crypto, on-air emit, decrypt, reboot-safe FCnt, do-no-harm, portal persistence (A4), DevAddr-keyed FCnt across a row move (B3), per-source DevAddr resolution (B4), source-protocol tag MT+MC (B6), MeshCore→ABP (B7), over-cap payload drop (A3).
 - **Owner-solo set (WiFi config page): COMPLETE** — A4 / B3 / B4 / B6 / B7 all PASS.
-- **Open — owner, needs >242 B raw transmitter:** A3.
+- **A3 (over-cap drop): PASS** — 250 B Custom frame from `tools/lw-frame-gen` (`oversize` env).
 - **Open — colleague, ChirpStack LNS:** C1, C2, C3, C4.
 
 ## Status matrix
@@ -18,7 +18,7 @@ owner's Meshtastic node `!0AC9F340`. Serial captured from the host over USB.
 |----|------|--------|------------------|--------|
 | **A1** | Crypto self-test (gate) | ✅ PASS | `[lw-selftest] overall : PASS` on COM13 | done |
 | **A2** | US915 per-TX dwell cap | ✅ PASS | SF12 frame: `drop=dwell toa=1811 limit=400`, not transmitted | done |
-| **A3** | Oversize payload dropped | ⬜ OPEN | needs a >242 B raw-LoRa transmitter (gear not on bench) | owner (gear) |
+| **A3** | Oversize payload dropped | ✅ PASS | 250 B Custom frame → `drop=lw-payload-overflow len=250 cap=237` (tag-aware cap), not transmitted | done |
 | **A4** | Portal saves ABP device | ✅ PASS | reboot reload: `anyConfigured=1`, `dev0 … devaddr=0x01000001 fport=13` persisted; Radio 2 now LoRaWAN | done |
 | **A5** | Stock build do-no-harm | ✅ PASS | stock boot: zero `[lw-selftest]`/`[lw-enc]`/`[LoRaWANConfig]` | done |
 | **B1** | Message → packet on air | ✅ PASS | MT text → DUT `evt=QUEUE dstproto=LW` → SNIFFER `evt=RX proto=LW` | done |
@@ -48,6 +48,17 @@ owner's Meshtastic node `!0AC9F340`. Serial captured from the host over USB.
 evt=QUEUE radio=R1 dst=R2 dstproto=LW len=34 devaddr=01000001 fcnt=33 fport=13 cred=flag
 evt=DROP  radio=R2 drop=dwell toa=1811 limit=400 len=34      <- 1811 ms > 400 ms, NOT sent
 ```
+
+**A3 — over-cap payload dropped, not truncated (#6) (COM13 DUT + COM14 generator):** R1 set to Custom
+(905.0 / BW250 / SF7 / sync 0xAB) to match `tools/lw-frame-gen` `oversize` env, which transmitted a
+250 B raw frame (`6` = FRAME-OVERSIZE). The bridge received it and refused to encode an over-cap
+FRMPayload:
+```
+evt=RX   radio=R1 proto=? len=250 rssi=-62 snr=13.5
+evt=DROP radio=R1 dst=R2 drop=lw-payload-overflow len=250 cap=237 msg="custom-raw"
+```
+250 B > the 237 B cap (242 − 5 for the source tag — confirms the tag-aware cap math); dropped cleanly,
+no TX. Repeat frames logged `drop=loop-dup` (dedup works on the Custom path too).
 
 **A4 — portal config persists (COM13, `xiao_esp32s3_lwabp`):** owner set Device 0 = DevAddr
 `01000001` / Any source / FPort 13 via the WiFi portal and saved; the board rebooted and reloaded the
@@ -137,14 +148,14 @@ CRC failures). Triggered by the portal not auto-filling defaults on protocol swi
 `CaptivePortal.cpp` `appendScript()`.
 
 ## What "closed" means here
-The 11 passes cover the whole signal chain end-to-end **without a LNS**: a real mesh message —
+The 12 passes cover the whole signal chain end-to-end **without a LNS**: a real mesh message —
 **Meshtastic *and* MeshCore** — is encoded into a valid LoRaWAN 1.0.x uplink, transmitted on air,
 captured, and decrypted back to the original text with a valid MIC — plus the dwell cap, reboot-safe
 counter, stock do-no-harm, portal persistence (A4), DevAddr-keyed FCnt across a config row move (B3),
-per-source DevAddr resolution (B4), source-protocol tagging (B6), and the MeshCore→ABP transcode (B7).
-**The entire owner-solo set (A4 / B3 / B4 / B6 / B7) is now PASS.** The 5 open items are not failures;
-they are blocked on a >242 B raw transmitter (owner: A3) or a ChirpStack LNS (colleague: C1–C4).
-Step-by-step for the owner-solo items is in `BENCH-SOLO.md`.
+per-source DevAddr resolution (B4), source-protocol tagging (B6), the MeshCore→ABP transcode (B7), and
+the over-cap payload drop (A3). **The entire owner-solo set (A4 / B3 / B4 / B6 / B7) is PASS, and A3 is
+done via the `lw-frame-gen` oversize frame — so the only tests left are Tier C (ChirpStack).** The 4
+open items (C1–C4) need the colleague's ChirpStack LNS.
 
 ---
 
