@@ -313,6 +313,23 @@ static void appendScript(String &page) {
         page += b;
     }
     page += F("};");
+    // TODO (bench 2026-06-16, owner request — THIS CAUSED A REAL BENCH ERROR):
+    // when a radio's Protocol dropdown changes (e.g. MT <-> MC), the form keeps
+    // the PRIOR protocol's RF params (freq/BW/SF/CR) and channel key stale, so
+    // the operator must hand-fix every field. It bit us: switching R1 to MeshCore
+    // left the freq stale, the operator retyped it and slipped a digit (910.575
+    // vs the correct 910.525) — a 50 kHz error that demodulates just enough to
+    // FAIL CRC (rx-error rc=-7), costing a long debug session. Fix: on protocol
+    // switch, auto-fill the new proto's defaults (guard so a user-entered custom
+    // value isn't clobbered — overwrite only when empty or still the prior default):
+    //   - Channel key: MeshCore public = 8b3387e9c5cdea6ac9e5edbaa115cd72
+    //     (BRIDGE_MC_KEY_HEX); Meshtastic LongFast = blank.
+    //   - Freq: MeshCore -> build-flag default 910.525 (LORA_RADIO2_FREQUENCY),
+    //     operator overrides per community; MT auto-computes from the preset. A
+    //     sane pre-filled default beats a silently-stale one (root cause above).
+    //   - BW/SF/CR: reset to the new proto's preset (MeshCore BW62.5/SF7/CR5;
+    //     Meshtastic from the PRE/PN modem-preset tables above).
+    // Wire into upd(n) below.
     page += F(
       "var PC=[0,0];"                        // last computed freq per radio
       "function gv(i){return document.getElementById(i).value;}"
