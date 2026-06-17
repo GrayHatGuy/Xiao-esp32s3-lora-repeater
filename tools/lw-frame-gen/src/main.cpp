@@ -61,6 +61,12 @@ static const uint8_t FRAME_U2[] = {0x40,0x8A,0x1F,0x01,0x26,0x00,0x02,0x00,0x02,
 static const uint8_t FRAME_D[]  = {0x80,0x8A,0x1F,0x01,0x26,0x00,0x07,0x00,0x99,0x88,0x77,0x66};
 static const uint8_t FRAME_J[]  = {0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x3C,0x2B,0x1A,0x00,0x0B,0xA3,0x04,0x00,0x55,0x66,0xDE,0xAD,0xBE,0xEF};
 static const uint8_t FRAME_C[]  = {0x40,0x8A,0x1F,0x01,0x26,0x00,0x01,0x00,0x02,0x99,0x88};
+// A3 (over-cap drop, fix #6): a 250 B raw frame, filled with a printable A..Z
+// pattern in setup(). Sent on a Custom sync word (env `oversize`, 0xAB) so the DUT
+// (R1=Custom) routes the raw bytes into the ABP encoder, where 250 B > the 242 B
+// FRMPayload cap => evt=DROP drop=lw-payload-overflow. 250 B fits LoRa's 255 B PHY
+// max and the bridge's 256 B RX buffer, so it arrives whole (not truncated).
+static uint8_t FRAME_OVERSIZE[250];
 
 struct Frame { const char *name; const uint8_t *bytes; size_t len; const char *expect; };
 static const Frame FRAMES[] = {
@@ -69,6 +75,7 @@ static const Frame FRAMES[] = {
   {"FRAME-D  (ConfDataUp)",   FRAME_D,  sizeof(FRAME_D),  "proto=LW mtype=ConfDataUp devaddr=0x26011f8a fcnt=7 fport=-1"},
   {"FRAME-J  (JoinRequest)",  FRAME_J,  sizeof(FRAME_J),  "proto=LW mtype=JoinRequest; summary DevEUI 0004a30b001a2b3c"},
   {"FRAME-C  (short->fail)",  FRAME_C,  sizeof(FRAME_C),  "proto=LW parse=fail (len 11 < 12)"},
+  {"FRAME-OVERSIZE (250 B)",  FRAME_OVERSIZE, sizeof(FRAME_OVERSIZE), "drop=lw-payload-overflow (Custom->ABP: 250 B > 242 B cap)"},
 };
 static const int NFRAMES = sizeof(FRAMES) / sizeof(FRAMES[0]);
 static int g_idx = 0;
@@ -89,6 +96,9 @@ void setup() {
   delay(300);
   pinMode(PIN_ANT_SW, OUTPUT); digitalWrite(PIN_ANT_SW, LOW);
   pinMode(PIN_BOOT, INPUT_PULLUP);
+  // A3: fill the oversize frame with a recognizable printable pattern (A..Z).
+  for (size_t i = 0; i < sizeof(FRAME_OVERSIZE); i++)
+    FRAME_OVERSIZE[i] = (uint8_t)('A' + (i % 26));
   // Park Radio 2's CS HIGH so it stays off the shared SPI bus while we probe
   // Radio 1 (mirrors the bridge's WioSX1262 constructor; without it, begin()
   // returns rc=-2 RADIOLIB_ERR_CHIP_NOT_FOUND).
@@ -112,7 +122,7 @@ void setup() {
   radio.setDio2AsRfSwitch(true);                      // Wio module internal RF switch
 
   Serial.println("[gen] radio ready. Commands (type in this monitor):");
-  Serial.println("        1=FRAME-U  2=FRAME-U2  3=FRAME-D  4=FRAME-J  5=FRAME-C");
+  Serial.println("        1=FRAME-U  2=FRAME-U2  3=FRAME-D  4=FRAME-J  5=FRAME-C  6=FRAME-OVERSIZE (250 B -> A3)");
   Serial.println("        n = next in cycle   (the BOOT button also sends next)");
   Serial.println("        LW-LOOP/dedup: send the same number twice within 60 s -> DUT logs capture then drop=lw-dup");
 #if GEN_AUTO_MS
@@ -124,7 +134,7 @@ void loop() {
   // Serial command: specific frame (1-5) or next (n).
   if (Serial.available()) {
     char c = (char)Serial.read();
-    if (c >= '1' && c <= '5')      { g_idx = c - '1'; sendFrame(g_idx); }
+    if (c >= '1' && c <= '6')      { g_idx = c - '1'; sendFrame(g_idx); }
     else if (c == 'n' || c == 'N') { g_idx = (g_idx + 1) % NFRAMES; sendFrame(g_idx); }
   }
   // BOOT button -> next in cycle (falling-edge, simple debounce).
