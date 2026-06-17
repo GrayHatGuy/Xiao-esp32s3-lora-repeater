@@ -55,7 +55,7 @@ pio device monitor --port COM13 --baud 115200
 ```
 **Confirm at boot:** `radio2 RF … sync=0x34 903.900 BW125.0 SF12` · `region=1`.
 **Do:** send any MT text to R1 (or let a routed frame reach R2).
-**PASS:** `evt=DROP radio=… drop=dwell toa=~1480 limit=400` — frame NOT transmitted.
+**PASS:** `evt=DROP radio=… drop=dwell toa=1811 limit=400` — frame NOT transmitted (exact `toa` scales with payload; any value > `limit=400` passes).
 **FAIL:** an `evt=TX_START` / on-air frame at SF12 (dwell not enforced).
 
 ### A3 · LW-OVERFLOW — over-cap payload dropped, not truncated (#6)

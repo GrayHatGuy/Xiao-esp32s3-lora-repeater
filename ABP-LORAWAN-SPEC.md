@@ -17,7 +17,7 @@
 - `src/main.cpp` — replaced the `no-lw-encoder` drop (the seam) with a keyed transcode → `g_routeQ` RF re-emit (B1), gated by `BRIDGE_LW_ENCODE` + parsed creds so a stock build keeps v8.3's do-no-harm drop; `BRIDGE_LW_ENC_*` flags; build-flag credential resolver (P2 replaces with schema-v5 per-source store + NVS FCnt); boot self-test under `BRIDGE_LW_ENC_SELFTEST`.
 - `platformio.ini` — `[env:bench_lw_enc]` (R2=LoRaWAN 903.9, encoder+self-test on, throwaway ABP creds).
 - **Verified:** stock build green (24.6%, do-no-harm), `bench_lw_enc` green (24.7%) and *links* (no `mbedtls_cipher_cmac`); crypto cross-checked against an independent `cryptography`-lib CMAC — RFC4493 vectors match + a minted frame is MIC-valid and round-trips.
-- **P1 acceptance still open (owner bench):** on-air `raw/MT source → ABP uplink → real gateway → ChirpStack decoded payload`. Provision DevAddr `0x26011B22` + the bench keys (MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or persist).
+- **P1 acceptance still open (owner bench):** on-air `raw/MT source → ABP uplink → real gateway → ChirpStack decoded payload`. Provision DevAddr `0x01000001` + the bench keys (MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or persist). *(The old `0x26011B22` was NwkID 19 → silently dropped by a default LNS; the live bench DevAddr `0x01000001` is NwkID 0, matching ChirpStack's default NetID `0x000000`. `selfTest()` retains `0x26011B22` as an internal crypto KAT only — never on air.)*
 
 ## 0. Goals
 
