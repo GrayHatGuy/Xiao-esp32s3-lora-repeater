@@ -60,10 +60,10 @@ The form is one long page: **identity → device region → bridge behaviour →
 
 | Field | What it is | Build flag |
 |---|---|---|
-| **Node ID (uint32, hex)** | The bridge's own Meshtastic node number. Must encode the same value as the string below. On a fresh board it is **derived from the device MAC** (unique per board). | `BRIDGE_MT_NODE_ID` |
-| **Node ID string ("!" + 8 hex)** | The same number in Meshtastic's `!`-hex form. Validated to match the Node ID. | `BRIDGE_MT_NODE_ID_STR` |
-| **Long name** | The bridge's Meshtastic long name shown in clients. On a fresh board it defaults to **`<NodeID> LoRa Bridge`** (e.g. `1DE9DC80 LoRa Bridge`). | `BRIDGE_MT_LONG_NAME` |
-| **Short name** | The bridge's Meshtastic short name (max 8 chars). Defaults to **`BR` + the node ID's low byte** (e.g. `BR80`). | `BRIDGE_MT_SHORT_NAME` |
+| **Node ID (uint32, hex)** | The bridge's own Meshtastic node number. Must encode the same value as the string below. On a fresh board it is **derived from the device MAC** (unique per board). | *MAC-derived; portal-editable* |
+| **Node ID string ("!" + 8 hex)** | The same number in Meshtastic's `!`-hex form. Validated to match the Node ID. | *MAC-derived; portal-editable* |
+| **Long name** | The bridge's Meshtastic long name shown in clients. On a fresh board it defaults to **`<NodeID> LoRa Bridge`** (e.g. `1DE9DC80 LoRa Bridge`). | *auto from node ID; portal-editable* |
+| **Short name** | The bridge's Meshtastic short name (max 8 chars). Defaults to **`BR` + the node ID's low byte** (e.g. `BR80`). | *auto from node ID; portal-editable* |
 
 ### Device region
 
