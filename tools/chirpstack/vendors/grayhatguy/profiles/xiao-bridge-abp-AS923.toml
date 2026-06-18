@@ -1,0 +1,18 @@
+# Xiao LoRa Bridge — ABP, AS923 (RP002-1.0.3). Authored, not yet bench-verified.
+# RX2 = AS923 default 923.2 MHz / DR2 (SF10/BW125). (AS923-2/3/4 frequency
+# offsets are a fast-follow; this profile is the AS923-1 base.)
+[profile]
+  vendor_profile_id = 3
+  region = "AS923"
+  mac_version = "1.0.3"
+  reg_params_revision = "RP002-1.0.3"
+  supports_otaa = false
+  supports_class_b = false
+  supports_class_c = false
+  max_eirp = 16
+
+  [profile.abp]
+    rx1_delay = 1
+    rx1_dr_offset = 0
+    rx2_dr = 2
+    rx2_freq = 923200000

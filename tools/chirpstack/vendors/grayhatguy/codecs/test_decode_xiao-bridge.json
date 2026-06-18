@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Untagged Meshtastic text",
+    "input": { "bytes": [104, 105], "fPort": 10 },
+    "expected": { "data": { "fPort": 10, "raw_hex": "6869", "text": "hi" } }
+  },
+  {
+    "name": "Weather station (placeholder layout) on FPort 13",
+    "input": { "bytes": [202, 8, 194, 1, 154, 39], "fPort": 13 },
+    "expected": { "data": { "fPort": 13, "raw_hex": "ca08c2019a27", "station": { "tempC": 22.5, "humidityPct": 45, "pressureHpa": 1013.8 } } }
+  }
+]

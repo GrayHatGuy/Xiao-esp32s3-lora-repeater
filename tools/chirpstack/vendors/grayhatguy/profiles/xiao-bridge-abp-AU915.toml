@@ -1,0 +1,17 @@
+# Xiao LoRa Bridge — ABP, AU915 (RP002-1.0.3). Authored, not yet bench-verified.
+# RX2 = AU915 default 923.3 MHz / DR8 (SF12/BW500).
+[profile]
+  vendor_profile_id = 2
+  region = "AU915"
+  mac_version = "1.0.3"
+  reg_params_revision = "RP002-1.0.3"
+  supports_otaa = false
+  supports_class_b = false
+  supports_class_c = false
+  max_eirp = 20
+
+  [profile.abp]
+    rx1_delay = 1
+    rx1_dr_offset = 0
+    rx2_dr = 8
+    rx2_freq = 923300000

@@ -1,0 +1,17 @@
+# Xiao LoRa Bridge — ABP, EU868 (RP002-1.0.3). Authored, not yet bench-verified.
+# RX2 = EU868 default 869.525 MHz / DR0 (SF12/BW125).
+[profile]
+  vendor_profile_id = 4
+  region = "EU868"
+  mac_version = "1.0.3"
+  reg_params_revision = "RP002-1.0.3"
+  supports_otaa = false
+  supports_class_b = false
+  supports_class_c = false
+  max_eirp = 16
+
+  [profile.abp]
+    rx1_delay = 1
+    rx1_dr_offset = 0
+    rx2_dr = 0
+    rx2_freq = 869525000

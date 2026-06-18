@@ -1,0 +1,14 @@
+[device]
+  name = "Xiao ESP32-S3 Dual-SX1262 LoRa Bridge"
+  description = "Multi-protocol LoRa mesh bridge (Meshtastic / MeshCore / Reticulum) with a keyed LoRaWAN ABP uplink encoder. Mesh or raw-LoRa (Custom) traffic routed to a LoRaWAN radio is re-emitted as a Class-A ABP uplink for a gateway to forward to ChirpStack."
+
+  [device.metadata]
+    product_url = "https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater"
+    documentation_url = "https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater"
+
+  # One firmware entry; ABP profiles only. An OTAA profile will be added when the
+  # OTAA firmware ships (a separate release) — until then a device must use ABP.
+  [[device.firmware]]
+    version = "8.4"
+    profiles = ["xiao-bridge-abp-US915.toml", "xiao-bridge-abp-AU915.toml", "xiao-bridge-abp-AS923.toml", "xiao-bridge-abp-EU868.toml"]
+    codec = "xiao-bridge.js"

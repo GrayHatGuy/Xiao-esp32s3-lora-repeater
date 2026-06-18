@@ -1,0 +1,9 @@
+[vendor]
+  name = "GrayHatGuy"
+  # LoRa-Alliance assigned vendor id; 0 when none is assigned.
+  vendor_id = 0
+  ouis = []
+  devices = ["xiao-lora-bridge.toml"]
+
+  [vendor.metadata]
+    homepage = "https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater"

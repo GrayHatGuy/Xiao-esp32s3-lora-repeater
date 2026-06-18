@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Uplink-only device consumes no downlinks",
+    "input": { "data": {} },
+    "expected": { "bytes": [] }
+  }
+]
