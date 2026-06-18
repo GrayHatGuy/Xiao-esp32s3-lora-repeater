@@ -267,6 +267,30 @@ codec serves both tagged and untagged devices). See
 These are used only when **no portal slot matches**, so a build with no portal devices
 still emits under one identity.
 
+### Enabling, provisioning & end-to-end flow
+
+Emitting valid LoRaWAN is **keyed**. As of v8.4 the encoder **ships in the standard
+`xiao_esp32s3` / `xiao_esp32s3_v1_1` build** — it stays **dormant** until you set a radio
+to LoRaWAN *and* configure an ABP device above, so a stock MT/MC bridge is behaviourally
+unchanged. No special env is needed (the `xiao_esp32s3_lwabp` env just adds the boot
+self-test).
+
+End to end:
+
+1. Set a radio's protocol to **LoRaWAN** ([§4.4](#44-lorawan)) and configure an ABP device
+   above (or the `BRIDGE_LW_ENC_*` build-flag fallback).
+2. Provision the **same** DevAddr + NwkSKey + AppSKey in ChirpStack (**MAC 1.0.x, ABP,
+   Class A, ADR off**), and paste [`tools/chirpstack-codec.js`](tools/chirpstack-codec.js)
+   into the device profile's Codec tab — or import the ready-made templates in
+   [`tools/chirpstack/`](tools/chirpstack/README.md).
+3. The `0x34` radio then re-emits your decoded mesh (MT/MC) — or a **Custom** raw-LoRa
+   station's raw bytes — as ABP uplinks for an in-range gateway to forward to ChirpStack.
+
+**Status:** the encoder is **hardware-verified on air** (MT *and* MC → valid ABP uplinks,
+decrypt + MIC checked — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); **live-ChirpStack ingestion
+is the one remaining bench item** ([`BENCH-v8.4.md`](BENCH-v8.4.md)). Full design:
+[`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
+
 ---
 
 ## 6. Saving

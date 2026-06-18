@@ -168,8 +168,6 @@ the serial log:
    ```
    Expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
-> **Advanced — v8.4 LoRaWAN ABP uplink encoder (opt-in).** Emitting valid LoRaWAN is *keyed*. As of v8.4 the encoder **ships in the standard `xiao_esp32s3` / `xiao_esp32s3_v1_1` build** (dormant until configured — no special env needed; the `xiao_esp32s3_lwabp` env just adds the boot self-test), so configure per-source ABP identities in the captive portal's **"LoRaWAN ABP devices"** section (DevAddr + NwkSKey + AppSKey + FPort, a reboot-safe FCnt, and an optional source tag). The `BRIDGE_LW_ENC_*` build flags are a single-device fallback. Provision the matching ABP device in ChirpStack (MAC 1.0.x, ABP, Class A, ADR off) and paste [`tools/chirpstack-codec.js`](tools/chirpstack-codec.js); then a `0x34` destination radio re-emits your decoded mesh (MT/MC) — or a **Custom** raw-LoRa station's raw bytes — as ABP uplinks for a gateway to forward. The encoder is **hardware-verified on air** (MT/MC → valid ABP, decrypt + MIC checked, [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); **live-ChirpStack ingestion is the one remaining bench item** ([`BENCH-v8.4.md`](BENCH-v8.4.md)). Full design: [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
-
 ## Roadmap
 
 ### Other future work
