@@ -160,9 +160,9 @@ it shows and any special behaviour.
 ![Figure 2d — Radio set to Reticulum](images/manual/figure-2d.png)
 
 - **Channel name** is a free label (Reticulum has no channel key).
-- **Frequency** shows a `band default:` hint; **Bandwidth / SF / CR** are editable
-  (default 250 / 11 / 5). **Both Reticulum endpoints must use the same plan** for the
-  byte-for-byte repeat to work.
+- Selecting Reticulum **auto-fills the RNode defaults** — **914.875 MHz / 125 kHz / SF8 /
+  CR5**; **Frequency, Bandwidth, SF and CR** are all editable. **Both Reticulum endpoints
+  must use the same plan** for the byte-for-byte repeat to work.
 
 ### 4.6 Custom
 

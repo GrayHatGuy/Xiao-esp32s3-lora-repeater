@@ -461,6 +461,9 @@ static void appendScript(String &page) {
             "if(ff){ff.value='910.525';PC[n-1]='910.525';}"   // sync PC so a later MT switch recomputes
           "}else if(p==='1'){"                 // Meshtastic: default LongFast PSK (CO-4)
             "if(ck)ck.value='AQ==';"
+          "}else if(p==='3'){"                 // Reticulum: RNode defaults (914.875/125/8/5)
+            "if(bw)bw.value='125.0';if(sf)sf.value='8';if(cr)cr.value='5';"
+            "if(ff){ff.value='914.875';PC[n-1]='914.875';}"
           "}"
         "}"
         "LASTP[n-1]=p;"
@@ -492,8 +495,8 @@ static void appendScript(String &page) {
           "fl[i].style.display=sh?'':'none';}"
         "var fh=document.getElementById('r'+n+'fhint');"
         "if(p==='1'){setF(n,slot(gv('region'),PN[ps],PRE[ps][0]),'computed');}"
-        "else if(p==='3'){var r=REG[gv('region')];"
-          "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}"
+        "else if(p==='3'){fh.textContent="
+          "'Reticulum: enter the exact frequency / SF / BW \\u2014 both ends must match.';}"
         "else if(p==='2'){fh.textContent="
           "'MeshCore: enter the exact frequency your community uses.';}"
         "else if(p==='5'){fh.textContent="
