@@ -17,8 +17,8 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 
 | Item | Value |
 |---|---|
-| **Production line** | `main` @ **v8.4** (`99c544b`, tag `v8.4-ABP-lorawan`, **GitHub Latest**) — "LoRaWAN ABP uplink encoder (keyed)", shipped & contest-submitted 2026-06-17. Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 module-revision variants → v8.4 ABP encoder. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | **v8.4.1 "UI_UM_config"** — captive-portal look-and-feel cleanup (Phase 1, owner-approval-gated) + a WiFi-config-portal user manual PDF (Phase 2). |
+| **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
+| **Active cycle** | none — v8.4.1 shipped. Next candidate: **v8.5 OTAA** (LoRaWAN join support; HIGH/VERY-HIGH — needs a Class-A downlink-RX subsystem + a downlink-capable gateway to bench; deferred, owner-gated). |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
