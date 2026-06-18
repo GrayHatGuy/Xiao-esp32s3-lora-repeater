@@ -1,5 +1,49 @@
 # Changelog
 
+## v8.4.1 — captive-portal UI cleanup + user manual + ChirpStack tooling (UI_UM_config)
+
+**Status: SHIPPED 2026-06-18 (tag `v8.4.1-UI_UM_config`).** A UI / docs / tooling
+release — **no protocol, routing, or on-air behaviour changes**. `BridgeConfig` schema
+**v4 unchanged** (the new per-radio LoRaWAN region reuses a spare `RadioRf` byte — no NVS
+migration); V1.0 and V1.1 builds behave as on v8.4. Builds green: `xiao_esp32s3` /
+`xiao_esp32s3_v1_1` / `xiao_esp32s3_lwabp`.
+
+- **Captive-portal look-and-feel cleanup.** Bridge-behaviour toggles moved into the top
+  identity frame (with a "Meshtastic only" note); the Meshtastic Channel key shows the
+  `AQ==` LongFast default; Meshtastic BW/SF/CR are shown read-only and auto-filled from the
+  Modem preset; the MeshCore helper notes the public key starts `8b…`; the Channel name is
+  locked to `N/A` for LoRaWAN and defaults to `N/A` (editable) for Custom; a hint warns that
+  a custom Meshtastic PSK needs a matching private channel name.
+- **LoRaWAN region / channel-slot picker.** A per-radio LoRaWAN **region** selector (US915 /
+  AU915 / AS923 / EU868) + a **channel slot** dropdown auto-fills Frequency / SF / Bandwidth
+  (CR fixed at 4/5) from RP002-1.0.3 channel plans. The region is **persisted** (reuses a
+  spare `RadioRf` byte — no schema bump).
+- **Per-device identity from the MAC.** A fresh board now derives its long name
+  (`<NodeID> LoRa Bridge`) and short name (`BR<low-byte>`) from the MAC-derived node ID
+  instead of a shared build-flag default. The now-residual `BRIDGE_MT_NODE_ID` / `_STR` /
+  `_LONG_NAME` / `_SHORT_NAME` flags were removed (they were always overridden by the MAC
+  derivation).
+- **Smarter protocol-switch autofill.** Choosing a Modem preset updates the Meshtastic
+  Channel name (until you enter a custom key, which unlocks the name — same idea on
+  MeshCore); selecting **Reticulum** auto-fills the RNode defaults (914.875 MHz / 125 kHz /
+  SF8 / CR5); Reticulum BW/SF/CR are now user-editable.
+- **New user manual — [`CONFIG-USER-MANUAL.md`](CONFIG-USER-MANUAL.md)** (linked from the
+  README): a field-by-field walkthrough of every portal screen with its build flag, a
+  detailed LoRaWAN ABP section (Applies-to-source ladder + source tag), three example setups
+  (MT↔MC, MT→LoRaWAN, MT public→private), and the full build-flag reference.
+- **ChirpStack tooling.** Importable device-profile templates under
+  [`tools/chirpstack/`](tools/chirpstack/) (US915 / AU915 / AS923 / EU868 ABP profiles +
+  vendor/device manifests + codec test vectors) and a hardened
+  [`tools/chirpstack-codec.js`](tools/chirpstack-codec.js) decoder (real UTF-8, `warnings`/
+  `errors`, device-variable-driven source-tag handling).
+- **Compile-time preloading.** New per-radio channel build flags
+  (`LORA_RADIO{1,2}_CHANNEL_NAME` / `_KEY`) + three commented "scenario" blocks in
+  `platformio.ini` you can uncomment to preload the wifi config (MT↔MC, MT→LoRaWAN, MT
+  public→private).
+- **README dedup.** Restructured + trimmed (8→5 install steps); the per-protocol table
+  merged into "Routing & behavior"; the full build-flag catalog migrated to the manual; the
+  header + silkscreen images resized.
+
 ## v8.4 — LoRaWAN ABP uplink encoder (keyed)
 
 **Status: SHIPPED 2026-06-16 (tag `v8.4-ABP-lorawan`) — build-green, crypto-verified,
