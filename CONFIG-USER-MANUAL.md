@@ -19,6 +19,7 @@ and [§8](#8-preloading-with-compile-time-build-flags) shows ready-made example 
 6. [Saving](#6-saving)
 7. [Example setups](#7-example-setups)
 8. [Preloading with compile-time build flags](#8-preloading-with-compile-time-build-flags)
+9. [Other build flags (reference)](#9-other-build-flags-reference)
 
 ---
 
@@ -273,7 +274,13 @@ still emits under one identity.
 ![Figure 4 — Save & reboot](images/manual/figure-4.png)
 
 **Save & reboot** writes the config to NVS and restarts the bridge into normal
-operation. To change anything later, re-enter the portal ([§1](#1-reaching-the-config-portal)).
+operation. Watch it come up over USB serial:
+
+```bash
+pio device monitor --port COMx
+```
+
+To change anything later, re-enter the portal ([§1](#1-reaching-the-config-portal)).
 
 ---
 
@@ -344,6 +351,59 @@ above as commented `-D` blocks.
 > after changing them **erase the device** (`pio run -t erase -t upload`) to see the
 > new defaults; otherwise the saved NVS config wins. You can always override any of
 > them in the captive portal at runtime.
+
+---
+
+## 9. Other build flags (reference)
+
+All optional, set in [`platformio.ini`](platformio.ini); the compiled-in default is
+shown in parentheses. These are global tunables and behaviour toggles beyond the
+per-field flags named in the sections above.
+
+**Global radio**
+- `LORA_PREAMBLE_LEN` (8) — LoRa preamble symbol count (all radios).
+- `LORA_CRC` (1) — enable the LoRa hardware CRC.
+- `LORA_TCXO_VOLTAGE` (1.8f) — TCXO control voltage.
+- `LORA_MAX_PACKET` (256) — max LoRa packet buffer, bytes.
+
+**Loop / duplicate guard**
+- `BRIDGE_DEDUP_TTL_MS` (60000) — how long a seen *(body + sender id + packet_id)* hash blocks duplicates.
+- `BRIDGE_DEDUP_TABLE_SIZE` (512) — recent-hash table entries.
+
+**Outbound route queue (PSRAM-backed)**
+- `BRIDGE_ROUTE_QUEUE_DEPTH` (64) — packets buffered per destination radio.
+- `BRIDGE_ROUTE_MAX_AGE_MS` (30000) — drop a queued packet older than this.
+
+**TX scheduler (CAD / CSMA / airtime throttle)**
+- `BRIDGE_CAD_BACKOFF_MIN_MS` (20) / `BRIDGE_CAD_BACKOFF_MAX_MS` (120) — random CSMA backoff window after a busy CAD.
+- `BRIDGE_TX_INFLIGHT_TIMEOUT_MS` (10000) — force-recover a non-blocking TX that never reports done.
+- `BRIDGE_TX_DUTY_PERCENT` (50) — max self-TX duty cycle; `0` = no duty cap (min-gap only).
+- `BRIDGE_TX_MIN_GAP_MS` (0) — absolute floor on the post-TX off-air gap.
+
+**Source-identity preservation**
+- `BRIDGE_IDENTITY_PRESERVE` (1) — `0` = clean-body / bridge-identity behaviour.
+- `BRIDGE_TAG_ORIGIN_PROTO` (1) — `1` = `Alice@MT:` / `Alice @MC`; `0` = bare native-looking names.
+- `BRIDGE_MC_NONAME_VIRTUAL` (0) — MeshCore body with no `name:` prefix: `0` = bridge id, `1` = per-channel virtual node.
+- `BRIDGE_MC_NAME_MAX` (32) — longest MeshCore sender name parsed from a body prefix.
+- `BRIDGE_VIRT_NODES_MAX` (32) — virtual-node LRU size.
+- `BRIDGE_VIRT_NODEINFO_PERIOD_MS` (900000) — minimum interval between a virtual node's NodeInfo re-advertisements.
+
+**Reticulum**
+- `BRIDGE_RNS_MAX_FRAGS` (8) — max MT/MC fragments per tunneled RNS frame.
+- `BRIDGE_RNS_INPROTO_REPEAT` (1) — transparent RNS↔RNS raw repeat when both radios are Reticulum; `0` = tunnel-only.
+
+**LoRaWAN keyless tap** (separate from the keyed ABP encoder in [§5](#5-lorawan-abp-devices))
+- `BRIDGE_LW_CAPTURE` (1) — log `evt=RX proto=LW` header metadata.
+- `BRIDGE_LW_SUMMARY_TO_MESH` (1) — emit a one-line LoRaWAN metadata summary into the MT/MC mesh.
+- `BRIDGE_LW_RELAY` (1) — transparent raw repeat between two LoRaWAN radios.
+
+**Build-time validation** *(automatic — no flag to set)* — `src/LoraConfigCheck.h` rejects an
+invalid `LORA_RADIO*` set at compile time (`#error` / `static_assert` on sync word, SF/CR/BW/region
+sanity, and TX-power range).
+
+**Bench only**
+- `BRIDGE_BENCH_AUTOSAVE` — makes an erased board boot pre-configured and skip the captive portal.
+  **Never enable this in a release build.**
 
 ---
 

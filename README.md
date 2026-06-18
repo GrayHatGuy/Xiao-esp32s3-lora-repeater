@@ -2,7 +2,7 @@
 
 Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
 
-<img width="4096" height="3265" alt="PXL_20260507_021829300~2" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
+<img width="50%" alt="PXL_20260507_021829300~2" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
 
 ###### *touched by claude but not by epstein*
 
@@ -10,7 +10,7 @@ Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
 
 A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles.
 
-Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (MT↔MC) or *same-protocol between two channels* (MC↔MC, MT↔MT — e.g. a private channel bridged to the public one). Everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy. The `platformio.ini` `LORA_RADIO*` build flags remain available as optional first-boot defaults for source builds.
+Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (e.g. Meshtastic↔MeshCore) or *same-protocol between two channels* (e.g. a private channel bridged to the public one). Each radio runs one of six protocols: **Meshtastic**, **MeshCore**, **Reticulum**, **LoRaWAN** (keyless tap + keyed ABP uplink encoder), **Custom** (any user-defined RF plan / sync word), or **None** (radio disabled). Everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal; see the **[config user manual](CONFIG-USER-MANUAL.md)** for a field-by-field walkthrough and compile-time preloading. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy.
 
 Supported today:
 
@@ -31,11 +31,24 @@ Every received packet is decoded once, run through a content-hash loop/dup guard
 - **Same-protocol transparent repeat spans every protocol.** Two radios on the *same* protocol + channel at *different* frequencies raw-repeat byte-for-byte — a range extender — for Meshtastic, MeshCore, **Reticulum (`RNS↔RNS`, v8.3)** and **LoRaWAN (`LW↔LW`, v8.3)**. The RNS / LoRaWAN repeats are byte-exact (no header mutation — a LoRaWAN MIC would break otherwise), loop-bounded by the shared content-hash dedup + the airtime throttle.
 - **LoRaWAN: keyless tap, plus a keyed encoder (v8.4).** A `0x34` radio runs a keyless capture / metadata-summary / `LW↔LW` relay tap (**v8.3**). **v8.4** adds an opt-in **keyed ABP uplink encoder**: with ABP credentials set, `MT/MC → LoRaWAN` becomes a real ABP-uplink encode that RF-re-emits to a gateway → ChirpStack LNS (**hardware-verified on air** — MT *and* MC frames decrypt back, MIC valid; only the live-ChirpStack ingestion bench is open — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); with no keys it stays the keyless `no-lw-encoder` drop. The two modes are mutually exclusive per radio, selected by ABP config — and as of v8.4 the encoder ships in the standard V1.0/V1.1 build (dormant until configured), so a stock MT/MC bridge is **behaviourally** unaffected.
 
-**Everything above is tunable at compile time.** All flags are optional, each documented with its compiled-in default in [`platformio.ini`](platformio.ini); see [Build flags & compile-time configuration](#build-flags--compile-time-configuration) under Instructions for the full catalog.
+**Everything above is tunable at compile time.** All flags are optional, each documented with its compiled-in default in [`platformio.ini`](platformio.ini); see the **[config user manual](CONFIG-USER-MANUAL.md)** for the full build-flag catalog.
 
 All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependencies beyond `jgromes/RadioLib` (pinned `7.7.0`).
 
 **What's new in each release:** see [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. The latest is the **v8.4 LoRaWAN ABP uplink encoder** ([v8.4 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan)) — **hardware-verified on air** (Meshtastic *and* MeshCore → valid ABP uplinks, decrypt-verified, MIC-valid; **12/16 bench tests pass**, only live-ChirpStack ingestion remaining — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)), plus a captive-portal **auto-fill of RF defaults on protocol switch** UX fix. Built on the **[v8.3.1 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3.1)** (Radio-2 V1.0/V1.1 fix). Design + bench docs: [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md), [`BENCH-v8.4.md`](BENCH-v8.4.md), [`BENCH-RESULTS.md`](BENCH-RESULTS.md).
+
+**Per-protocol summary** — the bridge dispatches by **LoRa sync word**; each radio is assigned a protocol in the portal, and a received packet is decoded once, run through the content-hash loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a CAD-gated non-blocking transmit. Source identity is preserved/reconstructed across the bridge (see [`V8.2-SPEC.md`](V8.2-SPEC.md)).
+
+| Protocol | Sync | RX (decode) | Bridge / TX | Identity across the bridge |
+|----------|------|-------------|-------------|----------------------------|
+| **Meshtastic (MT)** | `0x2B` | AES-CTR + protobuf walk: `TEXT_MESSAGE_APP`, `POSITION_APP`, `TELEMETRY_APP` → text line; `NODEINFO_APP` → NodeDB (not bridged) | Re-encodes for the destination. **Same channel, different frequency → transparent raw repeat** (original bytes, `hop_limit` decremented) | **MT→MC:** body prefixed `Name@MT:` (NodeDB short-name, else `!hexid`). **MT→MT raw repeat:** original sender preserved natively |
+| **MeshCore (MC)** | `0x12` | AES-128-ECB `GRP_TXT` + 2-byte HMAC verify | Re-encodes `GRP_TXT` for the destination channel; same-channel/diff-freq → raw repeat | **MC→MT:** the `"Name: …"` sender becomes a deterministic virtual MT node `FNV-1a("MC|name")` with a synthetic NodeInfo (`Name @MC`); the name is moved into the MT header and stripped from the body |
+| **Reticulum (RNS)** | `0x42` | **Not decrypted** — frame treated as opaque bytes (the bridge holds no RNS keys) | **RNS↔RNS:** transparent byte-for-byte raw repeat (range extender, `BRIDGE_RNS_INPROTO_REPEAT`). **RNS→MT/MC:** base64-tunneled as `[rns <seq> <x>/<y>] …` text fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). **MT/MC→RNS: not implemented** (log-and-drop). See the [Reticulum roadmap](#reticulum--rnode-routing) | n/a — frames opaque; RNS→MT fragments carry the bridge's own MT id |
+| **LoRaWAN (LW)** | `0x34` | **Keyless** — cleartext MAC header only (MType / DevAddr / FCtrl / FCnt / FPort / len; JoinEUI/DevEUI on joins); no key, no payload decrypt | **Capture** log + **metadata summary** to MT/MC (`BRIDGE_LW_SUMMARY_TO_MESH`); **LW↔LW transparent raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`). **`MT/MC/Custom → LW`: keyed ABP uplink encoder (v8.4, opt-in)** — per-source ABP devices (portal-configured, reboot-safe FCnt) transcode to a valid LoRaWAN ABP uplink (CMAC MIC + AES-CTR FRMPayload + monotonic FCnt); a raw-LoRa **Custom** source sends its raw bytes (weather station). RF-re-emits for a gateway → ChirpStack (**hardware-verified on air**; only live-ChirpStack ingestion pending — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); default (no keys) stays the keyless `no-lw-encoder` drop | keyless tap: summaries carry the bridge's own MT/MC id. ABP encode: each uplink is sent under a bridge-held ABP device identity (DevAddr) |
+| **Custom** | any (portal-entered) | user-chosen sync word; **no built-in decoder** | RF-agnostic dispatch by sync word; a Custom radio with no matching decoder receives + logs but has no protocol-specific re-encode | n/a |
+| **None** | — | radio disabled (single-radio / monitor mode) | — | — |
+
+Per-radio fields, the LoRaWAN ABP-device section and every build flag are documented in the **[config user manual](CONFIG-USER-MANUAL.md)**.
 
 ## Parts Required
 
@@ -105,7 +118,7 @@ the right-hand pin column:
 
 | V1.0 | V1.1 |
 |------|------|
-| ![Wio-SX1262 for XIAO V1.0 silkscreen](images/wio-sx1262-v1.0.jpg) | ![Wio-SX1262 for XIAO V1.1 silkscreen](images/wio-sx1262-v1.1.jpg) |
+| <img src="images/wio-sx1262-v1.0.jpg" alt="Wio-SX1262 for XIAO V1.0 silkscreen" width="380"> | <img src="images/wio-sx1262-v1.1.jpg" alt="Wio-SX1262 for XIAO V1.1 silkscreen" width="380"> |
 
 ```bash
 # V1.0 module (default):
@@ -123,113 +136,39 @@ the serial log:
 
 ## Instructions
 
-> **Fastest path (no toolchain).** **First check your Radio 2 module's silkscreen revision** ([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above) and download the **matching** `vanilla-factory` bin from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest): `…-v1.0-vanilla-factory.bin` for a **V1.0** Radio-2 module, `…-v1.1-vanilla-factory.bin` for **V1.1**. Connect both antennas and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 <bin>`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 7**. The numbered steps below are for building from source.
+> **Fastest path (no toolchain).** **First check your Radio 2 module's silkscreen revision** ([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above) and download the **matching** `vanilla-factory` bin from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest): `…-v1.0-vanilla-factory.bin` for a **V1.0** Radio-2 module, `…-v1.1-vanilla-factory.bin` for **V1.1**. Connect both antennas and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 <bin>`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 4** (bridge setup). The numbered steps below are for building from source.
 
 1. **Stack the hardware.** Mate the B2B shield (radio 1) on top the Xiao, the edge-pin shield (radio 2) on bottom. Connect antennas to **both** radios before powering on. Correct orientation has all antennas on the same side.
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
-3. *(Optional — source builds only)* **Pre-seed the radios** in [`platformio.ini`](platformio.ini). As of v8.0 this is no longer required: a `.bin` built with no `LORA_RADIO*` flags first-boots straight into the captive portal where region, protocol and RF are all set. If you do build from source, these flags become the first-boot defaults the portal form pre-fills:
-   ```ini
-   -DLORA_RADIO1_FREQUENCY=906.875f
-   -DLORA_RADIO1_BANDWIDTH=250.0f
-   -DLORA_RADIO1_SPREAD_FACTOR=11
-   -DLORA_RADIO1_CODING_RATE=5
-   -DLORA_RADIO1_TX_POWER=20
-   -DLORA_RADIO1_SYNC_WORD=0x2B   ; 0x12 MeshCore, 0x2B Meshtastic, 0x42 Reticulum, 0x34 LoRaWAN
+3. **Build, flash & monitor.** Read the **Radio 2** silkscreen and pick the matching env (see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above): **V1.0** → `xiao_esp32s3` (default), **V1.1** → `xiao_esp32s3_v1_1`. Then erase, clean-build, flash and open the serial monitor (replace `COMx` with your port):
+   ```bash
+   # --- V1.0 Radio-2 module (default) ---
+   pio run -e xiao_esp32s3 -t erase --upload-port COMx     # wipe flash + NVS (boots into the portal)
+   pio run -e xiao_esp32s3 -t clean
+   pio run -e xiao_esp32s3
+   pio run -e xiao_esp32s3 -t upload --upload-port COMx
+   pio device monitor --port COMx
+
+   # --- V1.1 Radio-2 module ---
+   pio run -e xiao_esp32s3_v1_1 -t erase --upload-port COMx
+   pio run -e xiao_esp32s3_v1_1 -t clean
+   pio run -e xiao_esp32s3_v1_1
+   pio run -e xiao_esp32s3_v1_1 -t upload --upload-port COMx
+   pio device monitor --port COMx
    ```
-4. *(Optional)* **Set bridge defaults** in `platformio.ini`. These are the values the bridge uses when its NVS config is empty (i.e. a fresh flash). The captive portal in step 7 lets users override them at runtime without rebuilding. The numeric ID and `!`-prefixed string must encode the same value; string macros are single-quoted so spaces survive shell tokenization:
-   ```ini
-   -DBRIDGE_MT_NODE_ID=0xB16B00B5u
-   '-DBRIDGE_MT_NODE_ID_STR="!b16b00b5"'
-   '-DBRIDGE_MT_LONG_NAME="B16B00B5 LoRa Bridge"'
-   '-DBRIDGE_MT_SHORT_NAME="BR"'
+   The clean matters whenever a header changes. Building the wrong variant won't harm anything — Radio 1 still comes up and the boot log names the env to flash — but Radio 2 won't be detected with the default env if your board is **V1.1**, until you flash the matching variant. The boot log echoes the active map:
    ```
-5. **Pick your Radio 2 variant, then clean + build.** First read the **Radio 2** module silkscreen and choose the matching build env (see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above): a **V1.0** module → `xiao_esp32s3` (default), a **V1.1** module → `xiao_esp32s3_v1_1`. Then `pio run -t clean -e <env> && pio run -e <env>` — the clean is important whenever a header changes. Building the wrong variant won't harm anything (Radio 1 still comes up and the boot log names the env to flash), but Radio 2 won't be detected until the env matches your board. The boot log echoes the active map: `[diag] R2 edge module = V1.0 (NSS=5 …)`.
-6. **Upload.** `pio run -t upload` or use the PlatformIO toolbar.
-7. **First-boot setup over WiFi.** Open `pio device monitor` at 115200 baud. On a fresh flash the bridge launches an open WiFi AP named `LoRa-Bridge-<XX>` (last byte of the MAC-derived MT node ID, in hex — unique per device). Join that SSID from a phone or laptop — any HTTP request will be DNS-redirected to the single-page config form. As of v8.0 the form covers **everything**: device region, per-radio protocol (Meshtastic / MeshCore / Reticulum / LoRaWAN / Custom / None), modem preset, channel name + key, frequency (Tier 2 channel-slot value pre-filled for Meshtastic, editable), Custom RF plan, identity and the POSITION/TELEMETRY toggles. Hit **Save & reboot** and the bridge restarts into normal mode with the NVS values. To re-enter the form on an already-configured device, reset the board and — within the ~5 s window the serial log announces — either press the **BOOT** button *or* send any character from the serial monitor. (The serial route matters when the BOOT button is physically hidden under the radio shield.)  ***NOTE: if the key press reset fails then erase the device and it will reboot into the active wifi portal config***
-
-   <p align="center"><img src="images/captive-portal.png" alt="Captive-portal configuration form served at LoRa-Bridge-XX @ 192.168.4.1" width="360"></p>
-   <p align="center"><em>The captive-portal config form (region, per-radio protocol/RF/channel, identity, toggles).</em></p>
-
-   > **Full field-by-field reference:** [WiFi Config Portal & compile-time settings user manual](CONFIG-USER-MANUAL.md) — every portal field with its build flag, the LoRaWAN ABP details (Applies-to-source / source tag), and ready-made example setups (MT↔MC, MT→LoRaWAN, MT public→private).
-
-8. **Monitor.** Once the bridge is configured, expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
+   default (V1.0): [diag] R2 edge module = V1.0 (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)
+   V1.1:           [diag] R2 edge module = V1.1 (NSS=4 DIO1=1 RST=3 BUSY=2 RF_SW=5)
+   ```
+4. **Bridge setup.** A fresh or erased board first-boots into an open WiFi access point named `LoRa-Bridge-XX`; join it from a phone or laptop and any web request redirects to the config form at `192.168.4.1`. There you set device region, per-radio protocol / RF / channel, identity, and the LoRaWAN ABP devices. To re-enter the portal on a configured board, reset it and press **BOOT** or send any serial character within ~5 s (or erase it). **For the full field-by-field walkthrough — every field, its build flag, the LoRaWAN ABP details, and ready-made example setups — see the [config user manual](CONFIG-USER-MANUAL.md).**
+5. **Serial Debug Monitor.** Watch the bridge over USB serial:
+   ```bash
+   pio device monitor --port COMx
+   ```
+   Expect RX summary lines (size / RSSI / SNR), protocol-decoded summaries, bridge re-encode lines, NodeInfo broadcasts, and `loop-drop` messages when relay echoes come back to the bridge.
 
 > **Advanced — v8.4 LoRaWAN ABP uplink encoder (opt-in).** Emitting valid LoRaWAN is *keyed*. As of v8.4 the encoder **ships in the standard `xiao_esp32s3` / `xiao_esp32s3_v1_1` build** (dormant until configured — no special env needed; the `xiao_esp32s3_lwabp` env just adds the boot self-test), so configure per-source ABP identities in the captive portal's **"LoRaWAN ABP devices"** section (DevAddr + NwkSKey + AppSKey + FPort, a reboot-safe FCnt, and an optional source tag). The `BRIDGE_LW_ENC_*` build flags are a single-device fallback. Provision the matching ABP device in ChirpStack (MAC 1.0.x, ABP, Class A, ADR off) and paste [`tools/chirpstack-codec.js`](tools/chirpstack-codec.js); then a `0x34` destination radio re-emits your decoded mesh (MT/MC) — or a **Custom** raw-LoRa station's raw bytes — as ABP uplinks for a gateway to forward. The encoder is **hardware-verified on air** (MT/MC → valid ABP, decrypt + MIC checked, [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); **live-ChirpStack ingestion is the one remaining bench item** ([`BENCH-v8.4.md`](BENCH-v8.4.md)). Full design: [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
-
-### Build flags & compile-time configuration
-
-Every option below is **optional** and lives in [`platformio.ini`](platformio.ini), documented with its compiled-in default (uncomment a `-D` line to override). They are first-boot defaults / behavior tunables only — region, per-radio protocol and RF are normally set in the captive portal at runtime. Grouped by the release that introduced them:
-
-**v8.0 — per-radio RF, identity & channels** *(also the captive-portal defaults)*
-- Per radio (`*` = `1` B2B / `2` edge): `LORA_RADIO*_FREQUENCY`, `LORA_RADIO*_BANDWIDTH`, `LORA_RADIO*_SPREAD_FACTOR`, `LORA_RADIO*_CODING_RATE`, `LORA_RADIO*_TX_POWER`, `LORA_RADIO*_SYNC_WORD` (`0x2B` MT · `0x12` MC · `0x42` RNS · `0x34` LoRaWAN).
-- Global radio: `LORA_PREAMBLE_LEN` (8), `LORA_CRC` (1), `LORA_TCXO_VOLTAGE` (1.8f), `LORA_MAX_PACKET` (256).
-- Identity: `BRIDGE_MT_NODE_ID` (`0xB16B00B5u`) + matching `BRIDGE_MT_NODE_ID_STR` (`"!b16b00b5"`), `BRIDGE_MT_LONG_NAME`, `BRIDGE_MT_SHORT_NAME`.
-- Channels: `BRIDGE_MT_CHANNEL_NAME` (LongFast) + `BRIDGE_MT_PSK_B64` (blank = LongFast; decodes to a 1/16/32-byte key); `BRIDGE_MC_CHANNEL_NAME` (public) + `BRIDGE_MC_KEY_HEX` (channel-hash auto-derived from `SHA-256(key)[0]`).
-- Per-portnum bridging: `BRIDGE_MT_POSITION` (1), `BRIDGE_MT_TELEMETRY` (1); region default: `BRIDGE_REGION`.
-
-**v8.1 — build-time validation** *(automatic; no flag to set)*
-- [`src/LoraConfigCheck.h`](src/LoraConfigCheck.h) rejects an invalid `LORA_RADIO*` set at compile time (`#error` / `static_assert` on sync word, SF/CR/BW/region sanity, TX-power range) — complements the portal's runtime validation of portal-entered values.
-
-**v8.2 — RX-priority routing + source-identity preservation** *(defaults in parens)*
-- Loop/dedup: `BRIDGE_DEDUP_TTL_MS` (60000), `BRIDGE_DEDUP_TABLE_SIZE` (512).
-- Route queue (PSRAM): `BRIDGE_ROUTE_QUEUE_DEPTH` (64), `BRIDGE_ROUTE_MAX_AGE_MS` (30000).
-- TX scheduler / CAD: `BRIDGE_CAD_BACKOFF_MIN_MS` (20), `BRIDGE_CAD_BACKOFF_MAX_MS` (120), `BRIDGE_TX_INFLIGHT_TIMEOUT_MS` (10000).
-- Airtime throttle: `BRIDGE_TX_DUTY_PERCENT` (50), `BRIDGE_TX_MIN_GAP_MS` (0).
-- Identity preservation: `BRIDGE_IDENTITY_PRESERVE` (1), `BRIDGE_TAG_ORIGIN_PROTO` (1), `BRIDGE_MC_NONAME_VIRTUAL` (0), `BRIDGE_MC_NAME_MAX` (32), `BRIDGE_VIRT_NODES_MAX` (32), `BRIDGE_VIRT_NODEINFO_PERIOD_MS` (900000).
-- RNS tunnel: `BRIDGE_RNS_MAX_FRAGS` (8) — fragments paced by the airtime throttle (the old `BRIDGE_RNS_FRAG_DELAY_*` knobs were removed).
-
-**v8.3 — keyless LoRaWAN + RNS↔RNS** *(defaults in parens)*
-- LoRaWAN (sync `0x34`, keyless): `BRIDGE_LW_CAPTURE` (1 — `evt=RX proto=LW` header log), `BRIDGE_LW_SUMMARY_TO_MESH` (1 — one-line metadata summary to MT/MC), `BRIDGE_LW_RELAY` (1 — transparent LW↔LW raw repeat / dedup-bounded flood).
-- Reticulum: `BRIDGE_RNS_INPROTO_REPEAT` (1 — transparent RNS↔RNS raw repeat; `0` = pre-v8.3 tunnel-only).
-
-**v8.4 — LoRaWAN ABP uplink encoder (keyed; opt-in)** *(defaults in parens)*
-- `BRIDGE_LW_ENCODE` (**1 in the standard `xiao_esp32s3` / `xiao_esp32s3_v1_1` builds as of v8.4**; was 0) — compiles the keyed ABP encoder in. It stays **dormant** until you set a radio to LoRaWAN **and** configure an ABP device (captive portal, or build-flag keys); until then `MT/MC → LoRaWAN` is the keyless `no-lw-encoder` drop, so a stock MT/MC bridge is behaviourally unchanged (boot just adds a `[LoRaWANConfig]`/`[lw-enc]` line; +~12 KB). Set `=0` to compile it out entirely. Per-source devices + reboot-safe FCnt are portal-configured; a raw-LoRa/Custom source is handled. *(Live-ChirpStack ingestion is the one remaining bench item — [`BENCH-RESULTS.md`](BENCH-RESULTS.md).)*
-- `BRIDGE_LW_ENC_DEVADDR` (`0x01000001u` — ABP device address; the default uses a private NetID `0x01` prefix), `BRIDGE_LW_ENC_FPORT` (13).
-- `BRIDGE_LW_ENC_NWKSKEY` / `BRIDGE_LW_ENC_APPSKEY` (empty) — the 32-hex-char ABP session keys (`NwkSKey` → MIC, `AppSKey` → FRMPayload); the encoder stays **idle until both parse**. Provision the *same* DevAddr + keys in ChirpStack (MAC 1.0.x, ABP, Class A, ADR off, disable-FCnt-validation or persist).
-- `BRIDGE_LW_ENC_SELFTEST` (0) — run boot-time known-answer self-tests (RFC 4493 AES-CMAC vectors + the FRMPayload keystream + a frame round-trip) → logs `[lw-selftest] … PASS`.
-- *These build flags are the single-device fallback (in-RAM FCnt). For per-source identities + a reboot-safe NVS FCnt, use the captive-portal "LoRaWAN ABP devices" section (env `xiao_esp32s3_lwabp`). See [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).*
-
-**Bench only:** `BRIDGE_BENCH_AUTOSAVE` (set on the `bench_*` envs, incl. the new `bench_lw_enc` ABP-encoder env) makes an erased board boot pre-configured and skip the captive portal — never enable it in a release build.
-
-#### Captive-portal top-frame fields → build-flag defaults
-
-The top of the config form — the **Meshtastic identity** fields, the **Device region** selector, and the **Bridge behaviour** checkboxes — maps one-to-one onto these first-boot build flags. Every field is editable in the portal at runtime; the build flag only sets the value a fresh/erased device starts with. (Field numbers match the user manual's figures.)
-
-| # | Portal field | What it does | First-boot default — build flag (`platformio.ini`) |
-|---|---|---|---|
-| 1 | **Node ID (uint32, hex)** | The bridge's Meshtastic node number. Must encode the same value as field 2. | `0xB16B00B5` — `BRIDGE_MT_NODE_ID` |
-| 2 | **Node ID string ("!" + 8 hex)** | The same node number in Meshtastic's `!`-hex form. | `!b16b00b5` — `BRIDGE_MT_NODE_ID_STR` |
-| 3 | **Long name** | The bridge's Meshtastic long name shown in clients. | `B16B00B5 LoRa Bridge` — `BRIDGE_MT_LONG_NAME` |
-| 4 | **Short name** | The bridge's Meshtastic short name (max 8 chars). | `BR` — `BRIDGE_MT_SHORT_NAME` |
-| 5 | **Device region** | Sub-GHz band + on-save TX-power cap. 2.4 GHz radios are region-exempt; Custom/UNSET leaves frequency fully manual. | unset — `BRIDGE_REGION` (`0` = UNSET) |
-| ☑ | **Bridge Meshtastic POSITION_APP packets** | Decode + bridge Meshtastic position packets. Applies only to radios set to Meshtastic. | on — `BRIDGE_MT_POSITION` |
-| ☑ | **Bridge Meshtastic TELEMETRY_APP packets** | Decode + bridge Meshtastic telemetry packets. Applies only to radios set to Meshtastic. | on — `BRIDGE_MT_TELEMETRY` |
-
-Per-radio protocol / RF / channel fields and the LoRaWAN ABP-device section are covered field-by-field in the **WiFi Config Portal & compile-time settings** user manual (linked from the release once published).
-
-## Routing & protocol support (current functionality)
-
-The bridge dispatches by **LoRa sync word**: each radio is assigned a protocol in
-the portal, and a received packet is decoded once, run through the content-hash
-loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a
-CAD-gated non-blocking transmit (the v8.2 RX-priority pipeline). Source identity
-is preserved/reconstructed across the bridge — see [`V8.2-SPEC.md`](V8.2-SPEC.md).
-
-| Protocol | Sync | RX (decode) | Bridge / TX | Identity across the bridge |
-|----------|------|-------------|-------------|----------------------------|
-| **Meshtastic (MT)** | `0x2B` | AES-CTR + protobuf walk: `TEXT_MESSAGE_APP`, `POSITION_APP`, `TELEMETRY_APP` → text line; `NODEINFO_APP` → NodeDB (not bridged) | Re-encodes for the destination. **Same channel, different frequency → transparent raw repeat** (original bytes, `hop_limit` decremented) | **MT→MC:** body prefixed `Name@MT:` (NodeDB short-name, else `!hexid`). **MT→MT raw repeat:** original sender preserved natively |
-| **MeshCore (MC)** | `0x12` | AES-128-ECB `GRP_TXT` + 2-byte HMAC verify | Re-encodes `GRP_TXT` for the destination channel; same-channel/diff-freq → raw repeat | **MC→MT:** the `"Name: …"` sender becomes a deterministic virtual MT node `FNV-1a("MC|name")` with a synthetic NodeInfo (`Name @MC`); the name is moved into the MT header and stripped from the body |
-| **Reticulum (RNS)** | `0x42` | **Not decrypted** — frame treated as opaque bytes (the bridge holds no RNS keys) | **RNS↔RNS:** transparent byte-for-byte raw repeat (range extender, `BRIDGE_RNS_INPROTO_REPEAT`). **RNS→MT/MC:** base64-tunneled as `[rns <seq> <x>/<y>] …` text fragments (CRC-16 seq id, 8-fragment cap, airtime-throttle-paced). **MT/MC→RNS: not implemented** (log-and-drop). See the [Reticulum roadmap](#reticulum--rnode-routing) | n/a — frames opaque; RNS→MT fragments carry the bridge's own MT id |
-| **LoRaWAN (LW)** | `0x34` | **Keyless** — cleartext MAC header only (MType / DevAddr / FCtrl / FCnt / FPort / len; JoinEUI/DevEUI on joins); no key, no payload decrypt | **Capture** log + **metadata summary** to MT/MC (`BRIDGE_LW_SUMMARY_TO_MESH`); **LW↔LW transparent raw relay / dedup-bounded flood** (`BRIDGE_LW_RELAY`). **`MT/MC/Custom → LW`: keyed ABP uplink encoder (v8.4, opt-in)** — per-source ABP devices (portal-configured, reboot-safe FCnt) transcode to a valid LoRaWAN ABP uplink (CMAC MIC + AES-CTR FRMPayload + monotonic FCnt); a raw-LoRa **Custom** source sends its raw bytes (weather station). RF-re-emits for a gateway → ChirpStack (**hardware-verified on air**; only live-ChirpStack ingestion pending — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); default (no keys) stays the keyless `no-lw-encoder` drop | keyless tap: summaries carry the bridge's own MT/MC id. ABP encode: each uplink is sent under a bridge-held ABP device identity (DevAddr) |
-| **Custom** | any (portal-entered) | user-chosen sync word; **no built-in decoder** | RF-agnostic dispatch by sync word; a Custom radio with no matching decoder receives + logs but has no protocol-specific re-encode | n/a |
-| **None** | — | radio disabled (single-radio / monitor mode) | — | — |
-
-**Loop prevention** is a TTL content-hash dedup over the decoded body + sender id
-+ Meshtastic packet_id, recorded on RX *and* on every emission — so echoes and
-relayed duplicates drop while genuinely-distinct messages (incl. identical text
-with a new packet_id) bridge. All RF settings and channel keys are per-radio in
-the captive portal; compile-time defaults and the `BRIDGE_*` tunables live in
-[`platformio.ini`](platformio.ini).
 
 ## Roadmap
 
@@ -282,8 +221,8 @@ the captive portal; compile-time defaults and the `BRIDGE_*` tunables live in
 Prioritized **ahead of** the Sub-GHz↔2.4 GHz cross-band phase above, but it stays
 a firmware concern — **no RNS controls will be added to the captive portal.** The
 `0x42` sync word is wired into the dispatcher as a third protocol; as of v8.3 the
-receive half **and** transparent RNS↔RNS raw repeat are implemented (current state in [Routing & protocol
-support](#routing--protocol-support-current-functionality)):
+receive half **and** transparent RNS↔RNS raw repeat are implemented (current state in the
+[Routing & behavior](#routing--behavior) per-protocol table):
 
 | Direction | Status |
 |-----------|--------|
