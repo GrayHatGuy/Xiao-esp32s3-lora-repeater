@@ -127,7 +127,8 @@ struct RadioRf {
     uint8_t  cr;           // coding rate 5..8
     uint8_t  syncWord;     // LoRa sync word
     int8_t   txPower;      // dBm
-    uint8_t  _pad[3];
+    uint8_t  lwRegion;     // CO-9: LoRaWAN region index (was _pad[0]; 0 = unset)
+    uint8_t  _pad[2];
     float    frequency;    // MHz
     float    bandwidth;    // kHz
 };
@@ -379,6 +380,7 @@ uint8_t  radioSf(int radio)        { return s_cfg.radio[clampRadio(radio)].sf; }
 uint8_t  radioCr(int radio)        { return s_cfg.radio[clampRadio(radio)].cr; }
 uint8_t  radioSyncWord(int radio)  { return s_cfg.radio[clampRadio(radio)].syncWord; }
 int8_t   radioTxPower(int radio)   { return s_cfg.radio[clampRadio(radio)].txPower; }
+uint8_t  radioLwRegion(int radio)  { return s_cfg.radio[clampRadio(radio)].lwRegion; }
 
 void setMtNodeId(uint32_t v)           { s_cfg.mtNodeId = v; }
 void setMtNodeIdStr(const char *s)     { copyStr(s_cfg.mtNodeIdStr, sizeof(s_cfg.mtNodeIdStr), s); }
@@ -399,6 +401,7 @@ void setRadioSf(int radio, uint8_t v)       { s_cfg.radio[clampRadio(radio)].sf 
 void setRadioCr(int radio, uint8_t v)       { s_cfg.radio[clampRadio(radio)].cr        = v; }
 void setRadioSyncWord(int radio, uint8_t v) { s_cfg.radio[clampRadio(radio)].syncWord  = v; }
 void setRadioTxPower(int radio, int8_t v)   { s_cfg.radio[clampRadio(radio)].txPower   = v; }
+void setRadioLwRegion(int radio, uint8_t v) { s_cfg.radio[clampRadio(radio)].lwRegion  = v; }
 
 void debugDump() {
     Serial.printf("[BridgeConfig] v%u configured=%u region=%u\n"

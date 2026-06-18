@@ -217,6 +217,46 @@ static void appendRadio(String &page, int n) {
               "(enter your own for a private channel). "
               "Custom: per your decoder.</div></div>");
 
+    // LoRaWAN region + channel-slot picker (CO-9/10/11). Region is persisted in
+    // radio[].lwRegion; choosing a region/slot auto-fills Frequency/SF/Bandwidth
+    // below (all stay editable). Coding rate is fixed at 4/5 for LoRaWAN.
+    page += F("<div class=\"r");
+    page += n;
+    page += F("fld lw\"><label>LoRaWAN region</label><select id=\"r");
+    page += n;
+    page += F("lwreg\" name=\"r");
+    page += n;
+    page += F("lwreg\" onchange=\"lwReg(");
+    page += n;
+    page += F(")\">");
+    {
+        uint8_t curLw = BridgeConfig::radioLwRegion(idx);
+        static const struct { uint8_t v; const char *name; } kLwReg[] = {
+            { 0, "\xe2\x80\x94 select region \xe2\x80\x94" },
+            { 1, "US915 (FSB2)" },
+            { 2, "AU915 (FSB2)" },
+            { 3, "AS923" },
+            { 4, "EU868" },
+        };
+        for (auto &lr : kLwReg) {
+            page += F("<option value=\"");
+            page += lr.v;
+            page += F("\"");
+            if (lr.v == curLw) page += F(" selected");
+            page += F(">");
+            page += lr.name;
+            page += F("</option>");
+        }
+    }
+    page += F("</select><label>Channel slot</label><select id=\"r");
+    page += n;
+    page += F("lwslot\" onchange=\"lwSlot(");
+    page += n;
+    page += F(")\"></select>"
+              "<div class=\"hint\">Pick your network's region + channel to fill "
+              "Frequency / SF / Bandwidth below (still editable). Coding rate is "
+              "fixed at 4/5 for LoRaWAN.</div></div>");
+
     // Frequency (MT/MC/RNS/Custom) — editable; JS pre-fills + flags override.
     snprintf(buf, sizeof(buf), "%.3f", freq);
     page += F("<div class=\"r");
@@ -337,6 +377,20 @@ static void appendScript(String &page) {
         page += b;
     }
     page += F("};");
+    // LoRaWAN region -> default channel slots (CO-9/10/11). Each slot = [freqMHz,
+    // SF, BW_kHz] at the region's common uplink data rate; CR is always 5.
+    // US915/AU915 = FSB2 (ChirpStack us915_1/au915_1); EU868/AS923 = the
+    // mandatory default channels. SF/BW stay editable for other data rates.
+    page += F("var LW={"
+      "1:{s:[['903.9',7,125],['904.1',7,125],['904.3',7,125],['904.5',7,125],"
+            "['904.7',7,125],['904.9',7,125],['905.1',7,125],['905.3',7,125],"
+            "['904.6',8,500]]},"
+      "2:{s:[['916.8',7,125],['917.0',7,125],['917.2',7,125],['917.4',7,125],"
+            "['917.6',7,125],['917.8',7,125],['918.0',7,125],['918.2',7,125],"
+            "['917.5',8,500]]},"
+      "3:{s:[['923.2',7,125],['923.4',7,125]]},"
+      "4:{s:[['868.1',7,125],['868.3',7,125],['868.5',7,125]]}"
+      "};");
     // Auto-fill RF defaults on protocol switch (bench 2026-06-16, owner request).
     // Switching a radio's Protocol dropdown used to keep the PRIOR protocol's
     // freq/BW/SF/CR + channel key, so the operator hand-fixed every field — which
@@ -353,6 +407,7 @@ static void appendScript(String &page) {
     page += F(
       "var PC=[0,0];"                        // last computed freq per radio
       "var LASTP=[null,null];"               // last protocol per radio (autofill-on-change)
+      "var LR=[null,null];"                  // last LoRaWAN region per radio (slot-list sync)
       "function gv(i){return document.getElementById(i).value;}"
       "function djb2(s){var h=5381;for(var i=0;i<s.length;i++)"
         "h=((h*33)+s.charCodeAt(i))>>>0;return h;}"
@@ -366,6 +421,28 @@ static void appendScript(String &page) {
         "if(ff.value===''||ff.value===PC[n-1])ff.value=fs;"
         "PC[n-1]=fs;"
         "fh.textContent=lbl+': '+fs+(ff.value!==fs?' \\u2014 overridden':'');}"
+      "function lwFill(n,reg,slot){if(!LW[reg]||!LW[reg].s[slot])return;"
+        "var s=LW[reg].s[slot];"
+        "var ff=document.getElementById('r'+n+'freq');"
+        "var bw=document.getElementsByName('r'+n+'Bw')[0];"
+        "var sf=document.getElementsByName('r'+n+'Sf')[0];"
+        "var cr=document.getElementsByName('r'+n+'Cr')[0];"
+        "if(ff){ff.value=s[0];PC[n-1]=s[0];}"
+        "if(sf)sf.value=s[1];if(bw)bw.value=s[2].toFixed(1);if(cr)cr.value='5';}"
+      "function lwOpts(n){var reg=gv('r'+n+'lwreg');"
+        "var sl=document.getElementById('r'+n+'lwslot');if(!sl)return;"
+        "sl.innerHTML='';"
+        "var o=document.createElement('option');o.value='-1';"
+        "o.text='\\u2014 keep current \\u2014';sl.appendChild(o);"
+        "if(LW[reg]){var a=LW[reg].s;for(var i=0;i<a.length;i++){"
+          "var op=document.createElement('option');op.value=i;"
+          "op.text=a[i][0]+' MHz \\u00b7 SF'+a[i][1]+'/'+a[i][2]+'k';"
+          "sl.appendChild(op);}}}"
+      "function lwReg(n){lwOpts(n);LR[n-1]=gv('r'+n+'lwreg');"
+        "var sl=document.getElementById('r'+n+'lwslot');"
+        "if(sl&&sl.options.length>1){sl.selectedIndex=1;lwFill(n,gv('r'+n+'lwreg'),0);}}"
+      "function lwSlot(n){var s=parseInt(gv('r'+n+'lwslot'),10);"
+        "if(s>=0)lwFill(n,gv('r'+n+'lwreg'),s);}"
       "function upd(n){var p=gv('r'+n+'proto');"
         "var ck=document.getElementsByName('r'+n+'ChannelKey')[0];"
         "var bw=document.getElementsByName('r'+n+'Bw')[0];"
@@ -413,7 +490,8 @@ static void appendScript(String &page) {
         "else if(p==='2'){fh.textContent="
           "'MeshCore: enter the exact frequency your community uses.';}"
         "else if(p==='5'){fh.textContent="
-          "'LoRaWAN: enter the exact channel frequency + SF your devices use.';}"
+          "'LoRaWAN: enter the exact channel frequency + SF your devices use.';"
+          "if(LR[n-1]!==gv('r'+n+'lwreg')){lwOpts(n);LR[n-1]=gv('r'+n+'lwreg');}}"
         "else{fh.textContent='';}}"
       "function updAll(){upd(1);upd(2);}"
       "window.addEventListener('load',updAll);"
@@ -447,7 +525,13 @@ static void appendLoRaWANDevices(String &page) {
               "encoded as an ABP uplink under the first matching device below. Provision "
               "the SAME DevAddr + keys in your LNS (ChirpStack: MAC 1.0.x, ABP, Class A, "
               "ADR off, disable frame-counter validation or persist). Disabled slots are "
-              "skipped; build-flag creds are the fallback when no slot matches.</div>");
+              "skipped; build-flag creds are the fallback when no slot matches.</div>"
+              "<div class=\"hint\">Each slot maps a traffic <b>source</b> \xe2\x80\x94 any "
+              "source, one Meshtastic node id, or one source protocol \xe2\x80\x94 to its own "
+              "ChirpStack device; the first enabled slot that matches a packet wins. The four "
+              "slots let you forward different senders as different LoRaWAN devices. To use a "
+              "slot, tick Enabled and fill DevAddr + NwkSKey + AppSKey. See the user manual "
+              "for a full walkthrough.</div>");
     char hx[40];
     for (size_t i = 0; i < LoRaWANConfig::deviceCount(); i++) {
         const LoRaWANConfig::Device &d = LoRaWANConfig::device((int)i);
@@ -747,6 +831,11 @@ static const char *applyRadio(int n, uint8_t region) {
         // above; no channel key. Channel name is an optional display label.
         sync  = 0x34;
         chKey = "";
+        // CO-9: persist the chosen LoRaWAN region (the region/slot picker already
+        // filled Frequency/SF/BW, validated above).
+        uint8_t lwReg = (uint8_t)s_http.arg(String("r") + n + "lwreg").toInt();
+        if (lwReg > BridgeConfig::LW_REGION_EU868) lwReg = BridgeConfig::LW_REGION_UNSET;
+        BridgeConfig::setRadioLwRegion(idx, lwReg);
     } else {                                  // Reticulum
         // CO-13: BW/SF/CR are now taken from the form (read + validated above),
         // defaulting to 250/11/5. Both RNS endpoints must use the same plan.
