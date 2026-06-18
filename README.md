@@ -140,7 +140,7 @@ the serial log:
    ```ini
    -DBRIDGE_MT_NODE_ID=0xB16B00B5u
    '-DBRIDGE_MT_NODE_ID_STR="!b16b00b5"'
-   '-DBRIDGE_MT_LONG_NAME="LoRa Bridge"'
+   '-DBRIDGE_MT_LONG_NAME="B16B00B5 LoRa Bridge"'
    '-DBRIDGE_MT_SHORT_NAME="BR"'
    ```
 5. **Pick your Radio 2 variant, then clean + build.** First read the **Radio 2** module silkscreen and choose the matching build env (see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above): a **V1.0** module → `xiao_esp32s3` (default), a **V1.1** module → `xiao_esp32s3_v1_1`. Then `pio run -t clean -e <env> && pio run -e <env>` — the clean is important whenever a header changes. Building the wrong variant won't harm anything (Radio 1 still comes up and the boot log names the env to flash), but Radio 2 won't be detected until the env matches your board. The boot log echoes the active map: `[diag] R2 edge module = V1.0 (NSS=5 …)`.
@@ -188,6 +188,22 @@ Every option below is **optional** and lives in [`platformio.ini`](platformio.in
 - *These build flags are the single-device fallback (in-RAM FCnt). For per-source identities + a reboot-safe NVS FCnt, use the captive-portal "LoRaWAN ABP devices" section (env `xiao_esp32s3_lwabp`). See [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).*
 
 **Bench only:** `BRIDGE_BENCH_AUTOSAVE` (set on the `bench_*` envs, incl. the new `bench_lw_enc` ABP-encoder env) makes an erased board boot pre-configured and skip the captive portal — never enable it in a release build.
+
+#### Captive-portal top-frame fields → build-flag defaults
+
+The top of the config form — the **Meshtastic identity** fields, the **Device region** selector, and the **Bridge behaviour** checkboxes — maps one-to-one onto these first-boot build flags. Every field is editable in the portal at runtime; the build flag only sets the value a fresh/erased device starts with. (Field numbers match the user manual's figures.)
+
+| # | Portal field | What it does | First-boot default — build flag (`platformio.ini`) |
+|---|---|---|---|
+| 1 | **Node ID (uint32, hex)** | The bridge's Meshtastic node number. Must encode the same value as field 2. | `0xB16B00B5` — `BRIDGE_MT_NODE_ID` |
+| 2 | **Node ID string ("!" + 8 hex)** | The same node number in Meshtastic's `!`-hex form. | `!b16b00b5` — `BRIDGE_MT_NODE_ID_STR` |
+| 3 | **Long name** | The bridge's Meshtastic long name shown in clients. | `B16B00B5 LoRa Bridge` — `BRIDGE_MT_LONG_NAME` |
+| 4 | **Short name** | The bridge's Meshtastic short name (max 8 chars). | `BR` — `BRIDGE_MT_SHORT_NAME` |
+| 5 | **Device region** | Sub-GHz band + on-save TX-power cap. 2.4 GHz radios are region-exempt; Custom/UNSET leaves frequency fully manual. | unset — `BRIDGE_REGION` (`0` = UNSET) |
+| ☑ | **Bridge Meshtastic POSITION_APP packets** | Decode + bridge Meshtastic position packets. Applies only to radios set to Meshtastic. | on — `BRIDGE_MT_POSITION` |
+| ☑ | **Bridge Meshtastic TELEMETRY_APP packets** | Decode + bridge Meshtastic telemetry packets. Applies only to radios set to Meshtastic. | on — `BRIDGE_MT_TELEMETRY` |
+
+Per-radio protocol / RF / channel fields and the LoRaWAN ABP-device section are covered field-by-field in the **WiFi Config Portal & compile-time settings** user manual (linked from the release once published).
 
 ## Routing & protocol support (current functionality)
 
