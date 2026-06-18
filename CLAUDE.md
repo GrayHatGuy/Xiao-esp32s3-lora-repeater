@@ -17,7 +17,8 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 
 | Item | Value |
 |---|---|
-| **Production line** | `main` @ **v8.2.1** (`1ce870d`, tag `v8.2.1`, **GitHub Latest**) — "MeshCore timestamp fix" patch on v8.2 "LBT/CAD routing" (RX-priority routing + source-identity preservation). Bench-verified + published 2026-06-13. v8.1 = prior dual-SX1262 baseline. |
+| **Production line** | `main` @ **v8.4** (`99c544b`, tag `v8.4-ABP-lorawan`, **GitHub Latest**) — "LoRaWAN ABP uplink encoder (keyed)", shipped & contest-submitted 2026-06-17. Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 module-revision variants → v8.4 ABP encoder. v8.1 = prior dual-SX1262 baseline. |
+| **Active cycle** | **v8.4.1 "UI_UM_config"** — captive-portal look-and-feel cleanup (Phase 1, owner-approval-gated) + a WiFi-config-portal user manual PDF (Phase 2). |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -131,12 +132,23 @@ Finish/skip the OPEN bench items, then: ff-merge `v8.3-dev`→`main`, annotated 
 draft GitHub release notes + bins for owner review. **NEVER force-push `main`.** RNS↔RNS + the deferred
 items can ship code-verified with full on-air bench in the 8.3.x patch, per owner's framing.
 
-## 🔧 ABP LoRaWAN uplink encoder + ChirpStack ingestion — branch `dev-ABP-lorawan` (IN PROGRESS)
+## ✅ v8.4 — ABP LoRaWAN uplink encoder + ChirpStack ingestion (SHIPPED 2026-06-17)
 
-Branch **`dev-ABP-lorawan`** (off `main`, pushed); **targets the v8.4 release** (the "v8.3.1" slot was
-reassigned to a v8.3 Radio2-pin-defines patch, separate session). Scope: mint valid LoRaWAN **ABP**
-uplinks so a raw-LoRa source (canonical: a weather station) is ingested by a ChirpStack LNS. **OTAA
-dropped; MT/MC→RNS coding deferred** (owner). Design of record: `ABP-LORAWAN-SPEC.md`.
+**SHIPPED & SUBMITTED 2026-06-17 (verified on disk + GitHub).** `dev-ABP-lorawan` ff-merged → `main` with
+v8.3.1 (R2 V1.0/V1.1 module-revision variants) already integrated; final commit **`99c544b`** "feat(build):
+ship the ABP encoder in the standard V1.0 + V1.1 builds". **`origin/main` = `main` = `dev-ABP-lorawan` =
+`99c544b`**, annotated tag **`v8.4-ABP-lorawan`**. GitHub release **"v8.4 — LoRaWAN ABP uplink encoder
+(keyed)" = Latest** (4 bins: v1.0/v1.1 × `app` + `vanilla-factory`):
+https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan . Contest issue #2
+updated to v8.4. **Bench 12/16 PASS** — Tier A+B core proven on silicon 2026-06-16 (A1 self-test / A2 dwell /
+A5 stock do-no-harm / B1 MT→ABP emit / B2 FCnt reboot-safe / B5 offline `lw-verify.py` MIC+decrypt); **only
+Tier C (colleague's ChirpStack) remains** = LW-P1-ACCEPT + LW-P3-WEATHER + codec/tag (give the colleague
+DevAddr `0x01000001` + bench keys, edit `decodeStation()` to real station bytes for C2). Solo portal/WiFi
+bench items are written up in `BENCH-SOLO.md`.
+
+Scope: mint valid LoRaWAN **ABP** uplinks so a raw-LoRa source (canonical: a weather station) is ingested by
+a ChirpStack LNS. **OTAA dropped; MT/MC→RNS coding deferred** (owner). Design of record: `ABP-LORAWAN-SPEC.md`;
+bench protocol `BENCH-v8.4.md`. The implementation history below is retained for reference.
 
 **Owner decisions (locked 2026-06-15, SPEC §0.0):** raw-LoRa **Fork B** · delivery **B1 (RF re-emit)**,
 no WiFi · device model **M1 (per-source)**.
