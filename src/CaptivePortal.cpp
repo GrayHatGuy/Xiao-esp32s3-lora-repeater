@@ -205,7 +205,7 @@ static void appendRadio(String &page, int n) {
     page += F("fld mt mc custom\"><label>Channel key</label>"
               "<input type=\"text\" name=\"r");
     page += n;
-    page += F("ChannelKey\" maxlength=\"47\" value=\"");
+    page += F("ChannelKey\" maxlength=\"47\" oninput=\"updAll()\" value=\"");
     // CO-4: a Meshtastic radio with no custom key shows the LongFast default AQ==.
     if (proto == BridgeConfig::PROTO_MT && (!chKey || chKey[0] == '\0'))
         page += F("AQ==");
@@ -472,8 +472,15 @@ static void appendScript(String &page) {
         "if(bw)bw.readOnly=mt;if(sf)sf.readOnly=mt;if(cr)cr.readOnly=mt;"
         // CO-8/CO-14: channel name is locked to N/A for LoRaWAN and defaults to
         // N/A (editable) for Custom; cleared when returning to a named protocol.
-        "if(nm){"
+        "if(nm){var ckv=ck?ck.value:'';"
           "if(p==='5'){nm.value='N/A';nm.readOnly=true;nm.classList.add('na');}"
+          "else if(p==='1'){"        // Meshtastic: name follows the preset until the key is custom
+            "if(ckv===''||ckv==='AQ=='){nm.value=PN[ps];nm.readOnly=true;nm.classList.add('na');}"
+            "else{nm.readOnly=false;nm.classList.remove('na');}}"
+          "else if(p==='2'){"        // MeshCore: name locked to 'public' until the key is custom
+            "if(ckv.toLowerCase()==='8b3387e9c5cdea6ac9e5edbaa115cd72'){"
+              "nm.value='public';nm.readOnly=true;nm.classList.add('na');}"
+            "else{nm.readOnly=false;nm.classList.remove('na');}}"
           "else{nm.readOnly=false;nm.classList.remove('na');"
             "if(nm.value==='N/A'&&p!=='4')nm.value='';"
             "if(p==='4'&&nm.value==='')nm.value='N/A';}"

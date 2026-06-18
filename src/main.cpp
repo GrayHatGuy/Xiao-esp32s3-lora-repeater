@@ -73,8 +73,20 @@ static void deriveMacIdentity()
     snprintf(idStr, sizeof(idStr), "!%08lx", (unsigned long)id);
     BridgeConfig::setMtNodeId(id);
     BridgeConfig::setMtNodeIdStr(idStr);
-    Serial.printf("[setup] MAC-derived identity: 0x%08lX (%s)\n",
-                  (unsigned long)id, idStr);
+
+    // Derive the display names from the per-device node ID too (owner request,
+    // v8.4.1): long name "<ID-hex> LoRa Bridge", short name "BR" + the ID's low
+    // byte — so a fresh board shows e.g. "1DE9DC80 LoRa Bridge" / "BR80" instead
+    // of the shared build-flag default. The user can still override both.
+    char longName[BridgeConfig::MT_LONG_NAME_MAX + 1];
+    snprintf(longName, sizeof(longName), "%08lX LoRa Bridge", (unsigned long)id);
+    char shortName[BridgeConfig::MT_SHORT_NAME_MAX + 1];
+    snprintf(shortName, sizeof(shortName), "BR%02lX", (unsigned long)(id & 0xFFu));
+    BridgeConfig::setMtLongName(longName);
+    BridgeConfig::setMtShortName(shortName);
+
+    Serial.printf("[setup] MAC-derived identity: 0x%08lX (%s) \"%s\" / \"%s\"\n",
+                  (unsigned long)id, idStr, longName, shortName);
 }
 
 // ============================================================
