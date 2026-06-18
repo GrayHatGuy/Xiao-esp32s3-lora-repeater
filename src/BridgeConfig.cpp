@@ -208,6 +208,25 @@ static void loadDefaults() {
                         s_cfg.r2ChannelName, sizeof(s_cfg.r2ChannelName),
                         s_cfg.r2ChannelKey,  sizeof(s_cfg.r2ChannelKey));
 
+    // Optional PER-RADIO channel name/key first-boot overrides (v8.4.1). The
+    // global BRIDGE_MT_*/BRIDGE_MC_* defaults above are picked by each radio's
+    // sync word, so two radios on the SAME protocol (e.g. MT public -> MT
+    // private) would otherwise share one channel. Defining these lets each radio
+    // preload a distinct channel from platformio.ini. Do-no-harm: only applied
+    // when the macro is defined (otherwise the sync-word default above stands).
+#ifdef LORA_RADIO1_CHANNEL_NAME
+    copyStr(s_cfg.r1ChannelName, sizeof(s_cfg.r1ChannelName), LORA_RADIO1_CHANNEL_NAME);
+#endif
+#ifdef LORA_RADIO1_CHANNEL_KEY
+    copyStr(s_cfg.r1ChannelKey,  sizeof(s_cfg.r1ChannelKey),  LORA_RADIO1_CHANNEL_KEY);
+#endif
+#ifdef LORA_RADIO2_CHANNEL_NAME
+    copyStr(s_cfg.r2ChannelName, sizeof(s_cfg.r2ChannelName), LORA_RADIO2_CHANNEL_NAME);
+#endif
+#ifdef LORA_RADIO2_CHANNEL_KEY
+    copyStr(s_cfg.r2ChannelKey,  sizeof(s_cfg.r2ChannelKey),  LORA_RADIO2_CHANNEL_KEY);
+#endif
+
     s_cfg.radio[0].syncWord  = (uint8_t)LORA_RADIO1_SYNC_WORD;
     s_cfg.radio[0].protocol  = protocolFromSync((uint8_t)LORA_RADIO1_SYNC_WORD);
     s_cfg.radio[0].frequency = (float)(LORA_RADIO1_FREQUENCY);
