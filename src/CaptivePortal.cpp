@@ -191,6 +191,14 @@ static void appendRadio(String &page, int n) {
     page += htmlEscape(chName);
     page += F("\"></div>");
 
+    // CO-7: a custom Meshtastic PSK only decodes a private channel whose NAME
+    // matches; surfaced as an MT-only hint right under the channel name.
+    page += F("<div class=\"r");
+    page += n;
+    page += F("fld mt\"><div class=\"hint\">If you enter a custom PSK below, the "
+              "Channel name must exactly match the private channel you are "
+              "joining.</div></div>");
+
     // Channel key (MT/MC/Custom).
     page += F("<div class=\"r");
     page += n;
@@ -198,9 +206,16 @@ static void appendRadio(String &page, int n) {
               "<input type=\"text\" name=\"r");
     page += n;
     page += F("ChannelKey\" maxlength=\"47\" value=\"");
-    page += htmlEscape(chKey);
-    page += F("\"><div class=\"hint\">Meshtastic: base64 PSK (blank = LongFast). "
-              "MeshCore: 32 hex chars. Custom: per your decoder.</div></div>");
+    // CO-4: a Meshtastic radio with no custom key shows the LongFast default AQ==.
+    if (proto == BridgeConfig::PROTO_MT && (!chKey || chKey[0] == '\0'))
+        page += F("AQ==");
+    else
+        page += htmlEscape(chKey);
+    page += F("\"><div class=\"hint\">Meshtastic: base64 PSK \xe2\x80\x94 "
+              "AQ== is the LongFast default (blank works too). "
+              "MeshCore: 32 hex chars \xe2\x80\x94 the public key starts 8b... "
+              "(enter your own for a private channel). "
+              "Custom: per your decoder.</div></div>");
 
     // Frequency (MT/MC/RNS/Custom) — editable; JS pre-fills + flags override.
     snprintf(buf, sizeof(buf), "%.3f", freq);
@@ -237,16 +252,23 @@ static void appendRadio(String &page, int n) {
               "(0x2B Meshtastic, 0x12 MeshCore, 0x42 Reticulum); an "
               "unrecognised sync word receives RF but cannot be decoded.</div></div>");
 
-    // BW / SF / CR — editable for MeshCore AND Custom. MeshCore has no
-    // universal regional presets: each mesh community picks its own RF
-    // (e.g. 62.5 kHz / SF7, or 250 kHz / SF11). These MUST match the
-    // MeshCore network you are bridging or nothing decodes.
+    // BW / SF / CR. Editable for MeshCore / Custom / LoRaWAN / Reticulum; for
+    // Meshtastic they are shown READ-ONLY because the modem preset sets them
+    // (CO-5). Reticulum is now user-editable, defaulting to 250/11/5 (CO-13) —
+    // both RNS endpoints must match. MeshCore has no universal presets: each
+    // community picks its own RF (e.g. 62.5 kHz / SF7, or 250 kHz / SF11).
     page += F("<div class=\"r");
     page += n;
-    page += F("fld custom mc lw\">");
-    page += F("<div class=\"hint\">Set BW/SF/CR to match the exact LoRa settings of "
-              "the network you are bridging (MeshCore: your community's; "
-              "LoRaWAN: your channel's).</div>");
+    page += F("fld custom mc lw mt rns\">");
+    page += F("<div class=\"hint r");
+    page += n;
+    page += F("fld custom mc lw rns\">Set BW/SF/CR to match the exact LoRa settings "
+              "of the network you are bridging (MeshCore: your community's; "
+              "LoRaWAN: your channel's; Reticulum: both ends must match).</div>");
+    page += F("<div class=\"hint r");
+    page += n;
+    page += F("fld mt\">Bandwidth / SF / CR are set by the modem preset above "
+              "(shown for reference).</div>");
 
     page += F("<label>Bandwidth (kHz)</label><input type=\"text\" name=\"r");
     page += n;
@@ -292,12 +314,14 @@ static void appendScript(String &page) {
     }
     page += F("};");
     // Preset bandwidth (kHz) table.
+    // Preset RF table: { presetVal: [bw_kHz, sf, cr] }. Drives the read-only
+    // Meshtastic BW/SF/CR display + preset-change auto-fill (CO-5/CO-6).
     page += F("var PRE={");
     for (uint8_t p = 0; p <= RegionPreset::PRESET_LONG_TURBO; p++) {
         float pbw; uint8_t psf, pcr;
         RegionPreset::modemPresetParams(p, pbw, psf, pcr);
-        char b[24];
-        snprintf(b, sizeof(b), "%u:%.1f,", p, pbw);
+        char b[32];
+        snprintf(b, sizeof(b), "%u:[%.1f,%u,%u],", p, pbw, (unsigned)psf, (unsigned)pcr);
         page += b;
     }
     page += F("};");
@@ -343,32 +367,47 @@ static void appendScript(String &page) {
         "PC[n-1]=fs;"
         "fh.textContent=lbl+': '+fs+(ff.value!==fs?' \\u2014 overridden':'');}"
       "function upd(n){var p=gv('r'+n+'proto');"
+        "var ck=document.getElementsByName('r'+n+'ChannelKey')[0];"
+        "var bw=document.getElementsByName('r'+n+'Bw')[0];"
+        "var sf=document.getElementsByName('r'+n+'Sf')[0];"
+        "var cr=document.getElementsByName('r'+n+'Cr')[0];"
+        "var nm=document.getElementsByName('r'+n+'ChannelName')[0];"
+        "var ff=document.getElementById('r'+n+'freq');"
+        "var ps=gv('r'+n+'preset');"
         // Fill the new protocol's RF defaults ONLY when the dropdown actually
         // changes (not on page load or channel-name keystrokes), so a value the
         // user typed for the current protocol is never overwritten.
         "if(LASTP[n-1]!==null&&LASTP[n-1]!==p){"
-          "var ck=document.getElementsByName('r'+n+'ChannelKey')[0];"
-          "var bw=document.getElementsByName('r'+n+'Bw')[0];"
-          "var sf=document.getElementsByName('r'+n+'Sf')[0];"
-          "var cr=document.getElementsByName('r'+n+'Cr')[0];"
-          "var ff=document.getElementById('r'+n+'freq');"
           "if(p==='2'){"                       // MeshCore: build-flag defaults
             "if(ck)ck.value='8b3387e9c5cdea6ac9e5edbaa115cd72';"
             "if(bw)bw.value='62.5';if(sf)sf.value='7';if(cr)cr.value='5';"
             "if(ff){ff.value='910.525';PC[n-1]='910.525';}"   // sync PC so a later MT switch recomputes
-          "}else if(p==='1'){"                 // Meshtastic: LongFast PSK blank
-            "if(ck)ck.value='';"
+          "}else if(p==='1'){"                 // Meshtastic: default LongFast PSK (CO-4)
+            "if(ck)ck.value='AQ==';"
           "}"
         "}"
         "LASTP[n-1]=p;"
+        // CO-5/CO-6: Meshtastic BW/SF/CR follow the modem preset and are shown
+        // read-only; every other protocol keeps them editable.
+        "var mt=(p==='1');"
+        "if(mt&&PRE[ps]){if(bw)bw.value=PRE[ps][0].toFixed(1);"
+          "if(sf)sf.value=PRE[ps][1];if(cr)cr.value=PRE[ps][2];}"
+        "if(bw)bw.readOnly=mt;if(sf)sf.readOnly=mt;if(cr)cr.readOnly=mt;"
+        // CO-8/CO-14: channel name is locked to N/A for LoRaWAN and defaults to
+        // N/A (editable) for Custom; cleared when returning to a named protocol.
+        "if(nm){"
+          "if(p==='5'){nm.value='N/A';nm.readOnly=true;nm.classList.add('na');}"
+          "else{nm.readOnly=false;nm.classList.remove('na');"
+            "if(nm.value==='N/A'&&p!=='4')nm.value='';"
+            "if(p==='4'&&nm.value==='')nm.value='N/A';}"
+        "}"
         "var tok={'1':'mt','2':'mc','3':'rns','4':'custom','5':'lw','0':'none'}[p];"
         "var fl=document.querySelectorAll('.r'+n+'fld');"
         "for(var i=0;i<fl.length;i++){"
           "var sh=(p!=='0')&&fl[i].classList.contains(tok);"
           "fl[i].style.display=sh?'':'none';}"
         "var fh=document.getElementById('r'+n+'fhint');"
-        "if(p==='1'){var ps=gv('r'+n+'preset');"
-          "setF(n,slot(gv('region'),PN[ps],PRE[ps]),'computed');}"
+        "if(p==='1'){setF(n,slot(gv('region'),PN[ps],PRE[ps][0]),'computed');}"
         "else if(p==='3'){var r=REG[gv('region')];"
           "setF(n,(r&&r[1]>r[0])?(r[0]+(r[1]-r[0])/2):0,'band default');}"
         "else if(p==='2'){fh.textContent="
@@ -544,6 +583,7 @@ static String renderForm(const char *flash = nullptr) {
               "input[type=text],select{width:100%;padding:.4em;font-family:ui-monospace,Consolas,monospace;font-size:.95em;box-sizing:border-box}"
               "input[type=checkbox]{transform:scale(1.2);margin-right:.4em}"
               ".hint{font-size:.85em;color:#555;margin-top:.1em}"
+              "input.na{background:#eee;color:#777;cursor:not-allowed}"
               ".warn{font-size:.85em;padding:.5em;margin:.5em 0;background:#fff0f0;border:1px solid #d08080;border-radius:4px;color:#a00}"
               ".flash{padding:.6em;margin:.6em 0;background:#fffae6;border:1px solid #e0c070;border-radius:4px}"
               "button{margin-top:1.2em;padding:.6em 1.2em;font-size:1em;background:#0066cc;color:#fff;border:0;border-radius:4px;cursor:pointer}"
@@ -580,20 +620,24 @@ static String renderForm(const char *flash = nullptr) {
     page += F("\" required>");
 
     appendRegionSelect(page);
+
+    // Bridge behaviour — Meshtastic-specific, so grouped with identity/region in
+    // the top frame (CO-1), with a note about its scope (CO-2).
+    page += F("<h2>Bridge behaviour</h2>");
+    page += F("<div class=\"hint\">Applies only to radios set to the Meshtastic "
+              "protocol.</div>");
+    page += F("<label><input type=\"checkbox\" name=\"positionEnabled\" value=\"1\"");
+    if (BridgeConfig::positionEnabled()) page += F(" checked");
+    page += F(">Bridge Meshtastic POSITION_APP packets</label>");
+    page += F("<label><input type=\"checkbox\" name=\"telemetryEnabled\" value=\"1\"");
+    if (BridgeConfig::telemetryEnabled()) page += F(" checked");
+    page += F(">Bridge Meshtastic TELEMETRY_APP packets</label>");
+
     appendRadio(page, 1);
     appendRadio(page, 2);
 #if defined(BRIDGE_LW_ENCODE) && BRIDGE_LW_ENCODE
     appendLoRaWANDevices(page);
 #endif
-
-    page += F("<h2>Bridge behaviour</h2>");
-    page += F("<label><input type=\"checkbox\" name=\"positionEnabled\" value=\"1\"");
-    if (BridgeConfig::positionEnabled()) page += F(" checked");
-    page += F(">Bridge Meshtastic POSITION_APP packets</label>");
-
-    page += F("<label><input type=\"checkbox\" name=\"telemetryEnabled\" value=\"1\"");
-    if (BridgeConfig::telemetryEnabled()) page += F(" checked");
-    page += F(">Bridge Meshtastic TELEMETRY_APP packets</label>");
 
     page += F("<button type=\"submit\">Save &amp; reboot</button>"
               "</form>"
@@ -662,7 +706,7 @@ static const char *applyRadio(int n, uint8_t region) {
     // BW/SF/CR are read from the form for Custom AND MeshCore (MeshCore has
     // no universal presets — community-specific RF).
     if (proto == BridgeConfig::PROTO_CUSTOM || proto == BridgeConfig::PROTO_MC ||
-        proto == BridgeConfig::PROTO_LORAWAN) {
+        proto == BridgeConfig::PROTO_LORAWAN || proto == BridgeConfig::PROTO_RNS) {
         bw = s_http.arg(String("r") + n + "Bw").toFloat();
         sf = (uint8_t)s_http.arg(String("r") + n + "Sf").toInt();
         cr = (uint8_t)s_http.arg(String("r") + n + "Cr").toInt();
@@ -704,8 +748,9 @@ static const char *applyRadio(int n, uint8_t region) {
         sync  = 0x34;
         chKey = "";
     } else {                                  // Reticulum
+        // CO-13: BW/SF/CR are now taken from the form (read + validated above),
+        // defaulting to 250/11/5. Both RNS endpoints must use the same plan.
         sync = 0x42;
-        bw = 250.0f; sf = 11; cr = 5;
     }
 
     // Region-aware TX power cap.
