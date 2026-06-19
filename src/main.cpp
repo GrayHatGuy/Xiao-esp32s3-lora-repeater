@@ -42,9 +42,13 @@
 #include "VirtualNodeMap.h"    // MC->MT source-identity (virtual MT nodes)
 #include "RegionPreset.h"
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
+#include "UartLink.h"          // inter-XIAO UART crossover transport (v8.5)
+#include "RemoteRadio.h"       // R3/R4 = SX1262 on the second XIAO over the link
 #include <esp_mac.h>
 
-// Build a LoraConfig for one radio (index 0 or 1) from the live BridgeConfig.
+// Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
+// BridgeConfig. For a remote radio (R3/R4) it is carried to the co-processor in
+// the CFG_RADIO frame; tcxoVoltage is then a no-op (the co-proc owns its TCXO).
 static LoraConfig makeLoraConfig(int radio)
 {
     LoraConfig c;
@@ -191,15 +195,35 @@ static void deriveMacIdentity()
 SemaphoreHandle_t spiMutex = NULL;
 
 // ============================================================
-//  Radio table. Both local (XIAO SPI). Constructed in setup() once the mutex /
-//  SPI bus are ready.
+//  Radio table. R1/R2 are LOCAL (XIAO SPI, WioSX1262); R3/R4 are SX1262 on a
+//  SECOND XIAO reached over the UART crossover (RemoteRadio over g_link).
+//  Constructed in setup() once the mutex / SPI bus / link are ready. (v8.5)
 // ============================================================
-static constexpr int NR = 2;
+static constexpr int NR = 4;
 
-LoraRadio   *g_radio[NR]        = { nullptr, nullptr };
+LoraRadio   *g_radio[NR]        = { nullptr, nullptr, nullptr, nullptr };
 RadioChannel g_chan[NR];
-bool         g_radioEnabled[NR] = { false, false };
-static const char *kTag[NR]     = { "R1", "R2" };
+bool         g_radioEnabled[NR] = { false, false, false, false };
+static const char *kTag[NR]     = { "R1", "R2", "R3", "R4" };
+
+// Per-radio routing matrix (v8.5): g_routeMask[src] bit j set => a packet RX'd
+// on radio src is bridged to radio j. Loaded from BridgeConfig in setup(); the
+// default (R1<->R2) preserves the historical 2-radio crossover behaviour.
+static uint8_t g_routeMask[NR]  = { 0, 0, 0, 0 };
+
+// Inter-XIAO UART crossover link to the second board's SX1262 (R3/R4). Opened in
+// setup() only when R3 or R4 is enabled, so a single-board build never touches
+// Serial1. Pins/baud are build-flag overridable (wire D6/D7 CROSSED to the peer).
+#ifndef BRIDGE_LINK_TX_PIN
+  #define BRIDGE_LINK_TX_PIN 43        // D6 — to the peer's RX (its D7)
+#endif
+#ifndef BRIDGE_LINK_RX_PIN
+  #define BRIDGE_LINK_RX_PIN 44        // D7 — from the peer's TX (its D6)
+#endif
+#ifndef BRIDGE_LINK_BAUD
+  #define BRIDGE_LINK_BAUD   460800UL
+#endif
+static UartLink g_link(Serial1);
 
 // ============================================================
 //  RX-priority routing state (V8.2-SPEC.md)
@@ -213,11 +237,11 @@ static const char *kTag[NR]     = { "R1", "R2" };
 RouteQueue g_routeQ[NR];
 
 // Per-radio TX-scheduler state (owned by that radio's task).
-static bool                g_txBusy[NR]         = { false, false };
-static uint32_t            g_txStartMs[NR]      = { 0, 0 };
-static uint32_t            g_txBackoffUntil[NR] = { 0, 0 };
-static uint32_t            g_nextTxAllowedMs[NR]= { 0, 0 };  // airtime throttle
-static bool                g_txPendingValid[NR] = { false, false };
+static bool                g_txBusy[NR]         = { false, false, false, false };
+static uint32_t            g_txStartMs[NR]      = { 0, 0, 0, 0 };
+static uint32_t            g_txBackoffUntil[NR] = { 0, 0, 0, 0 };
+static uint32_t            g_nextTxAllowedMs[NR]= { 0, 0, 0, 0 };  // airtime throttle
+static bool                g_txPendingValid[NR] = { false, false, false, false };
 static RouteQueue::Entry   g_txPending[NR];
 
 // Route-queue depth (PSRAM-backed) and the max age past which a queued packet
@@ -1005,6 +1029,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         for (int j = 0; j < NR; j++) {
             if (j == srcIdx) continue;
             if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (!(g_routeMask[srcIdx] & (1u << j))) continue;   // routing matrix
             // In-protocol RNS -> RNS is a transparent raw repeat (V8.2-SPEC §5.1
             // same-channel model, extended to Reticulum): re-transmit the
             // PHYPayload byte-for-byte so the far side sees the original frame
@@ -1078,6 +1103,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
             for (int j = 0; j < NR; j++) {
                 if (j == srcIdx) continue;
                 if (!g_radioEnabled[j] || !g_radio[j]) continue;
+                if (!(g_routeMask[srcIdx] & (1u << j))) continue;   // routing matrix
                 uint8_t dp = g_chan[j].protocol;
                 if (dp == MeshDecoderDebug::SYNC_WORD_MESHTASTIC ||
                     dp == MeshDecoderDebug::SYNC_WORD_MESHCORE)
@@ -1089,6 +1115,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         for (int j = 0; j < NR; j++) {
             if (j == srcIdx) continue;
             if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (!(g_routeMask[srcIdx] & (1u << j))) continue;   // routing matrix
             if (g_chan[j].protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN)
                 rawRepeatForDest(g_chan[j], j, srcTag, /*srcId=*/0, buf, len);
         }
@@ -1111,6 +1138,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
         for (int j = 0; j < NR; j++) {
             if (j == srcIdx) continue;
             if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (!(g_routeMask[srcIdx] & (1u << j))) continue;   // routing matrix
             if (g_chan[j].protocol == MeshDecoderDebug::SYNC_WORD_LORAWAN)
                 any |= enqueueAbpUplink(srcChan, /*srcId=*/0, j, srcTag, buf, len, "custom-raw");
         }
@@ -1251,6 +1279,7 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     for (int j = 0; j < NR; j++) {
         if (j == srcIdx) continue;
         if (!g_radioEnabled[j] || !g_radio[j]) continue;
+        if (!(g_routeMask[srcIdx] & (1u << j))) continue;   // routing matrix
         if (BRIDGE_IDENTITY_PRESERVE && sameChannel(srcChan, g_chan[j]))
             rawRepeatForDest(g_chan[j], j, srcTag, srcId, buf, len);
         else
@@ -1582,15 +1611,15 @@ void setup()
             Serial.printf("[setup] Radio%d protocol = None — disabled\n", i + 1);
     }
 
-    // Resolve each enabled radio's channel into g_chan[] before any RX.
-    if (g_radioEnabled[0])
-        resolveRadioChannel(BridgeConfig::radioSyncWord(0),
-                            BridgeConfig::radio1ChannelName(),
-                            BridgeConfig::radio1ChannelKey(), g_chan[0]);
-    if (g_radioEnabled[1])
-        resolveRadioChannel(BridgeConfig::radioSyncWord(1),
-                            BridgeConfig::radio2ChannelName(),
-                            BridgeConfig::radio2ChannelKey(), g_chan[1]);
+    // Resolve each enabled radio's channel into g_chan[] before any RX, and load
+    // the per-radio routing matrix (v8.5). Generalized to all NUM_RADIOS radios.
+    for (int i = 0; i < NR; i++) {
+        if (g_radioEnabled[i])
+            resolveRadioChannel(BridgeConfig::radioSyncWord(i),
+                                BridgeConfig::radioChannelName(i),
+                                BridgeConfig::radioChannelKey(i), g_chan[i]);
+        g_routeMask[i] = BridgeConfig::radioRouteMask(i);
+    }
 
     // NodeDB is populated from received NodeInfo. With clean far-side bodies
     // (V8.2-SPEC §3.1) it is currently consulted only by the identity layer;
@@ -1644,6 +1673,21 @@ void setup()
         g_radio[1] = new WioSX1262(R2_NSS, R2_DIO1, R2_RESET, R2_BUSY,
                                    R2_ANT_SW, spi, spiMutex, "Radio2-Edge",
                                    makeLoraConfig(1));
+
+    // R3/R4 — SX1262 on the SECOND XIAO, reached over the UART crossover. They
+    // are RemoteRadio (no local SPI): construct them first (each registers its
+    // RX queue with g_link), then open the link so its RX service task can
+    // deliver inbound packets to those queues. The link is opened only when R3
+    // or R4 is enabled, so a single-board build never touches Serial1. (v8.5)
+    const bool linkNeeded = g_radioEnabled[2] || g_radioEnabled[3];
+    if (g_radioEnabled[2])
+        g_radio[2] = new RemoteRadio(g_link, /*co-proc R1*/ 0, kTag[2],
+                                     makeLoraConfig(2), LinkProtocol::BAND_SUBGHZ);
+    if (g_radioEnabled[3])
+        g_radio[3] = new RemoteRadio(g_link, /*co-proc R2*/ 1, kTag[3],
+                                     makeLoraConfig(3), LinkProtocol::BAND_SUBGHZ);
+    if (linkNeeded)
+        g_link.begin(BRIDGE_LINK_BAUD, BRIDGE_LINK_RX_PIN, BRIDGE_LINK_TX_PIN);
 
     // HARDENING: hold Radio 2 in hardware RESET (NRESET low) for the WHOLE of
     // Radio 1's probe + begin(). A chip held in reset tri-states its SPI pins,
@@ -1730,6 +1774,17 @@ void setup()
                 WIO_SX1262_REV_STR);
             g_radioEnabled[1] = false;
         }
+    }
+
+    // R3/R4 (remote SX1262 on the second XIAO): push their RF config to the
+    // co-processor over the now-open link. RemoteRadio::begin() sends
+    // CFG_RADIO + START_RX; a "false" return only means the UART write failed —
+    // co-processor liveness is tracked via MSG_READY/PONG, not gated here, so a
+    // missing peer just leaves R3/R4 silent (non-fatal). (v8.5)
+    for (int i = 2; i < NR; i++) {
+        if (g_radioEnabled[i] && g_radio[i] && !g_radio[i]->begin())
+            Serial.printf("[WARN] Radio%d (remote) link write failed — check the "
+                          "UART crossover to the second XIAO.\n", i + 1);
     }
 
     // Start enabled radios listening
