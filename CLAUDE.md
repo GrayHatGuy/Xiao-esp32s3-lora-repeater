@@ -18,7 +18,7 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 | Item | Value |
 |---|---|
 | **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`). Combine TWO Xiao dual-SX1262 bridges into ONE 4-radio bridge over a UART crossover (host + co-processor). Stages A+B done & build-green; see the v8.5 section below. **OTAA deferred** until after this. |
+| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `0795538`). Combine TWO Xiao dual-SX1262 bridges into ONE 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done & all envs build green; HOLDING for the owner to define bench-verification testing before Stage F** (docs+bench+tag). See the v8.5 section below. **OTAA deferred** until after this. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -41,7 +41,7 @@ Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx12
 - **UART crossover:** both boards' UART1 D6 (GPIO43, TX) / D7 (GPIO44, RX) @ 460800, wired CROSSED
   (A.D6→B.D7, A.D7→B.D6, GND↔GND). Same firmware pin defaults both ends; the cable does the crossover.
 
-**Stages (mirrors the reference A–F; both done so far are build-green `pio run -e xiao_esp32s3`):**
+**Stages (mirrors the reference A–F; A–E done & build-green across all host + co-proc envs):**
 - ✅ **A — schema (`edddada`, Flash 25.1%):** `BridgeConfig` v4→**v5**. `NUM_RADIOS=4`; new `PersistedV5`
   with `RadioSlot radio[4]` (channel name/key moved INTO the slot); per-radio `routeMask` reuses a v4 pad
   byte; v8.4.1's `lwRegion` (CO-9) + `PROTO_LORAWAN` kept; the reference's `chip`/`band` enums dropped.
@@ -52,18 +52,35 @@ Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx12
 - ✅ **B — UART transport (`abc9a62`, Flash 25.4%):** ported `LinkProtocol.h` / `UartLink.{h,cpp}` /
   `RemoteRadio.{h,cpp}` from the reference verbatim (chip-agnostic; `RemoteRadio` matches our `LoraRadio`).
   Standalone — not yet referenced by `main.cpp`, so do-no-harm.
-- ⏳ **C — bridge core (NEXT, biggest):** `main.cpp` `NR=2`→4 + extend all `[NR]` arrays; `WioSX1262.cpp`
-  ISR trampoline `_inst[2]`→`[4]`; build R3/R4 as `RemoteRadio` over a shared `UartLink g_link(Serial1)`
-  (opened only if R3/R4 enabled); replace the implicit fan-out loop in `ingestAndFanout()` with a
-  `routeMask` check; pass `LinkProtocol::BAND_SUBGHZ`.
-- ⏳ **D — portal:** `CaptivePortal` is already parameterized (`appendRadio(n)`/`applyRadio(n)`); add
-  R3/R4, extend the JS arrays + guards, add the routing-matrix UI; `applyRadio` channel setters → the
-  generic `setRadioChannelName(n-1,…)`.
-- ⏳ **E — co-processor firmware:** a new minimal image for Board B (2× `WioSX1262` + a `LinkProtocol`
-  slave loop), new env `xiao_coproc_sx1262`.
-- ⏳ **F — docs + accuracy sweep:** README dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + matrix,
-  CHANGELOG, spec; sweep the ported files' comments (T-Lora-Dual/LR1121/2.4 GHz → second-XIAO/SX1262/
-  sub-GHz). Then build all envs + bench on the 2-board rig + tag `v8.5` (owner-gated).
+- ✅ **C — bridge core (`9556477`, Flash 25.8%):** `main.cpp` `NR=2`→4 + all `[NR]` arrays widened
+  (kTag gained "R3"/"R4"); R3/R4 = `RemoteRadio` over a shared `UartLink g_link(Serial1)`, opened only if
+  R3/R4 enabled (single-board never touches Serial1); every `ingestAndFanout()` fan-out loop now gates on
+  `g_routeMask[srcIdx] & (1<<j)` (loaded from `radioRouteMask()`); `LinkProtocol::BAND_SUBGHZ`;
+  `BRIDGE_LINK_TX/RX_PIN/BAUD` (43/44/460800). `WioSX1262` ISR `_inst[2]` left as-is (only R1/R2 are
+  local). Do-no-harm: R3/R4 default PROTO_NONE + default routeMask R1↔R2.
+- ✅ **D — portal (`3d39209`, Flash 25.9%):** `renderForm` loops `appendRadio` over NUM_RADIOS; R3/R4 carry
+  a "second XIAO" hint; **routing-matrix UI** ("Bridge received traffic to" `rN routeTo j` checkboxes) +
+  parse → `setRadioRouteMask`; fixed the R3/R4 channel accessor bug (was `(n==1)?r1:r2`); generic
+  `setRadioChannelName(idx)`; `handleSave` loops applyRadio + the self-bridge guard is now routeMask-aware
+  over all pairs; JS arrays/updAll widened to 4. (lwabp + v1_1 envs also green.)
+- ✅ **E — co-processor firmware (`0795538`, Flash 9.6%):** self-contained subproject
+  `coproc-xiao-sx1262/` (envs `xiao_coproc_sx1262` + `_v1_1`). Reuses `LinkProtocol.h`/`LoraRadio.h`/
+  `WioSX1262.h` via `-I ../src` (LinkProtocol stays single-source) + compiles `../src/WioSX1262.cpp` via
+  `build_src_filter` (no duplication). `coproc_main.cpp` = UART slave (framing mirror + CFG_RADIO/TX/
+  START_RX/PING/RESET ↔ RX/TX_DONE/READY/LOG/PONG) + non-blocking CAD-gated TX; link on Serial1 D6/D7.
+  Added `WioSX1262::setConfig()` for in-place re-tune on CFG_RADIO (no reconstruction).
+- ⏳ **F — HELD (owner: define bench tests first).** All host+coproc envs build green; NOT yet run on the
+  two-board rig. Pending: owner defines the bench-verification test plan, THEN F = run it + docs (README
+  dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + matrix, CHANGELOG, spec) + comment-accuracy sweep
+  (the ported `LinkProtocol`/`UartLink`/`RemoteRadio` still say T-Lora-Dual/LR1121/2.4 GHz) + tag `v8.5`.
+
+**▶ CURRENT HOLD (2026-06-18):** Stages A–E complete & committed on `dev-2xiao-4sx1262` (tip `0795538`),
+all envs build green. **Holding for the owner to define bench-verification testing before Stage F.** A
+suggested two-board bench matrix to react to: (1) link-up — power both boards, host sees `[UartLink]
+co-processor READY` + the coproc's `R3/R4 cfg ok`; (2) R3/R4 RX — a node TX's on R3's channel → host
+`evt=RX radio=R3`; (3) routing — set the portal matrix so R1→R3, send on R1 → it egresses on R3 (coproc
+TX); (4) per-radio routeMask isolation; (5) do-no-harm — a single-board (R3/R4=None) build behaves exactly
+like v8.4.1. Nothing un-benchable in the design (all SX1262, all on the owner's rig). NOT pushed/tagged.
 
 ## ⭐ v8.2 / v8.2.1 — "LBT/CAD routing" (SHIPPED 2026-06-13)
 
