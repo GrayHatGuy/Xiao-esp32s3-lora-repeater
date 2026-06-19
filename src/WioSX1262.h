@@ -27,6 +27,11 @@ public:
     bool    txDone() override;
     void    finishTransmit() override;
 
+    // Replace the RF plan for a runtime re-tune, then call begin() to apply it.
+    // Used by the SX1262 co-processor (v8.5) when a CFG_RADIO frame arrives: the
+    // static ISR registration done in the ctor is preserved (no reconstruction).
+    void    setConfig(const LoraConfig &config) { _config = config; }
+
     // Written by the IRAM ISR trampoline; read by the polling task. The same
     // DIO1 line signals both RxDone and TxDone; _txInFlight tells them apart.
     volatile bool _rxFlag = false;
