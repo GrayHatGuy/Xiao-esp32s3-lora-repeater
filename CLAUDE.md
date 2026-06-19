@@ -80,13 +80,27 @@ Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx12
   (README dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + routing matrix, CHANGELOG) + tag **v8.5**
   (owner-gated; NEVER force-push main).
 
-**▶ STATUS (2026-06-18):** Stages A–E + the Stage-F scrub done on `dev-2xiao-4sx1262` (tip `fbd64e3`),
-all envs build green. v8.5 is **sub-GHz only** (4× SX1262) — every 2.4 GHz/LR1121/T-Lora-Dual reference
-scrubbed (`6cce3da`, incl. the wire `band` field; band was always SUBGHZ so do-no-harm). **`BENCH-v8.5.md`
-is the bench plan** (owner finalizes the list + gating, then runs it on the 2-board rig: bridges on
-COM6/13/14 + MT/MC nodes + 1 spare bridge as a LoRaWAN `bench_lw_sniffer`). **Release set = 4 envs**
-(host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*` envs are dev/bench, kept intentionally
-(owner Option A) so anyone can recreate the bench. After the gating bench passes → remaining docs
+**▶⭐ HARDWARE BENCH 2026-06-19 — TEST 0.1 (LINK UP) PASSED on the real 2-board rig** (host COM13 +
+co-proc COM6, UART crossover). After a long wiring debug, the host↔co-proc link is **fully working**:
+COM13 shows `[UartLink] co-processor READY` (timing-dependent) + `[coproc] R3 cfg ok: 905.000 MHz…` +
+`[coproc] R4 cfg ok: 909.000 MHz…` and `evt=TX_DONE radio=R3 result=done` — i.e. a packet went host →
+UART link → co-proc → R3 transmit → confirmed (no more `timeout-recovered`). The 4-radio bridge is alive
+on silicon. **Root cause of the link failure = a wiring crossover error** (owner originally had no
+crossover on the co-proc→host return line; host→co-proc worked the whole time). DIAGNOSIS METHOD (Claude
+drove flashing + serial capture on the owner's machine via `C:\Users\6r4yh\cap.py` = pyserial RTS-reset +
+read): proved host→co-proc good via a co-proc debug build (`-DCOPROC_PLAINTEXT_DEBUG`) that hex-dumped the
+link RX — saw a clean `AA 55 02 00 3B …` MSG_TX frame arriving — then proved co-proc→host dead (host saw
+nothing on a co-proc reset), pinpointing the return wire. ⚠️ **Known bring-up friction (carry to bench):**
+the host sends R3/R4 CFG **once at boot**, so after any co-proc reset you must reboot the host (or it stays
+"idle until CFG"); the **`re-send CFG on co-proc READY`** robustness tweak (offered, not yet built) would
+self-heal this — RECOMMENDED before heavier bench. Co-proc flashed back to the CLEAN release build (no
+debug). **Still pending:** the actual mesh-bridging tests (Test A/B) — the routing logic was already proven
+in earlier captures (MC "Hello" → MT translate → QUEUE R1/R3/R4 → R1 TX done); now that R3/R4 work, repeat
+to confirm R3/R4 egress `result=done`. v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
+refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
+0.1-0.3+A1+A2+B1). **Release set = 4 envs** (host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*`
+envs are dev/bench, kept intentionally (owner Option A) so anyone can recreate the bench. After the gating
+bench passes → remaining docs
 (README dual-Xiao wiring, `CONFIG-USER-MANUAL.md`, CHANGELOG) + tag v8.5. **NOT pushed/tagged.**
 
 ## ⭐ v8.2 / v8.2.1 — "LBT/CAD routing" (SHIPPED 2026-06-13)
