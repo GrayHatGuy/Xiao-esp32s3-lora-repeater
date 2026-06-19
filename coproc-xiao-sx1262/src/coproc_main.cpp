@@ -229,6 +229,11 @@ static uint8_t  s_buf[MAX_PAYLOAD + CRC_LEN];
 enum class PSt : uint8_t { PRE0, PRE1, HDR, PAYLOAD };
 static PSt s_st = PSt::PRE0;
 
+#ifdef COPROC_PLAINTEXT_DEBUG
+static uint32_t g_linkRxBytes = 0;   // total bytes seen on the link RX pin (diag)
+static uint32_t g_lastDiagMs  = 0;
+#endif
+
 static void feedByte(uint8_t b) {
     switch (s_st) {
         case PSt::PRE0:
@@ -320,7 +325,20 @@ void setup() {
 
 void loop() {
     // Drain inbound host frames first — keeps running while a radio is on-air.
-    while (LinkSerial.available() > 0) feedByte((uint8_t)LinkSerial.read());
+    while (LinkSerial.available() > 0) {
+        uint8_t b = (uint8_t)LinkSerial.read();
+#ifdef COPROC_PLAINTEXT_DEBUG
+        g_linkRxBytes++;
+        Serial.printf("%02X ", b);   // raw hex of every link RX byte (diag)
+#endif
+        feedByte(b);
+    }
+#ifdef COPROC_PLAINTEXT_DEBUG
+    if ((uint32_t)(millis() - g_lastDiagMs) > 3000) {
+        g_lastDiagMs = millis();
+        Serial.printf("[diag] link RX bytes total=%lu\n", (unsigned long)g_linkRxBytes);
+    }
+#endif
 
     for (int i = 0; i < 2; i++) {
         WioSX1262 *r = g_radio[i];

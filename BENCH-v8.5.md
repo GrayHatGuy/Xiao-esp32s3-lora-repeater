@@ -1,5 +1,7 @@
 # BENCH-v8.5.md — "2xiao_4sx1262" bench verification
 
+双小型处理器全向四路射频亚千兆赫兹全向桥接中继器
+
 Bench plan for **v8.5**: two Xiao dual-SX1262 boards joined by a UART crossover into one
 **4-radio sub-GHz bridge** (host + radio co-processor), with a per-radio routing matrix. All four
 radios are SX1262 (sub-GHz only).
