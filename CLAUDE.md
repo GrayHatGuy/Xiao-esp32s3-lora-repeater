@@ -18,7 +18,7 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 | Item | Value |
 |---|---|
 | **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `0795538`). Combine TWO Xiao dual-SX1262 bridges into ONE 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done & all envs build green; HOLDING for the owner to define bench-verification testing before Stage F** (docs+bench+tag). See the v8.5 section below. **OTAA deferred** until after this. |
+| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `fbd64e3`). Combine TWO Xiao dual-SX1262 bridges into ONE **sub-GHz** 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done + the F scrub done; all envs build green.** `BENCH-v8.5.md` is the bench plan. Awaiting: owner finalizes the bench list + runs it → remaining docs + tag v8.5 (owner-gated). See the v8.5 section below. **OTAA deferred** until after this. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -69,18 +69,25 @@ Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx12
   `build_src_filter` (no duplication). `coproc_main.cpp` = UART slave (framing mirror + CFG_RADIO/TX/
   START_RX/PING/RESET ↔ RX/TX_DONE/READY/LOG/PONG) + non-blocking CAD-gated TX; link on Serial1 D6/D7.
   Added `WioSX1262::setConfig()` for in-place re-tune on CFG_RADIO (no reconstruction).
-- ⏳ **F — HELD (owner: define bench tests first).** All host+coproc envs build green; NOT yet run on the
-  two-board rig. Pending: owner defines the bench-verification test plan, THEN F = run it + docs (README
-  dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + matrix, CHANGELOG, spec) + comment-accuracy sweep
-  (the ported `LinkProtocol`/`UartLink`/`RemoteRadio` still say T-Lora-Dual/LR1121/2.4 GHz) + tag `v8.5`.
+- 🔄 **F — IN PROGRESS.** ✅ **Scrub DONE (`6cce3da`):** removed ALL 2.4 GHz / LR1121 / T-Lora-Dual /
+  S-band refs — incl. the `LinkProtocol::Band` enum AND the `band` wire field of CfgRadio (RemoteRadio
+  band param/member gone too). v8.5 is **sub-GHz only**; band was always SUBGHZ so no functional change;
+  host+coproc rebuilt consistently. ✅ **`BENCH-v8.5.md` written (`fbd64e3`):** bench plan — Group 0
+  (link/config/do-no-harm), A (full-mesh A1 / restricted-matrix A2 + cross-board + dedup), B (uplink
+  encode+sniffer-decode B1 / 2 devices + **B3 RX2 923.3/SF12 downlink-listener** + B4 mesh-board +
+  LoRaWAN-board split), C (link resilience / load); gating = 0.1-0.3+A1+A2+B1; OTAA-downlink rationale.
+  **Remaining:** owner finalizes the bench list + runs it on the 2-board rig → then the rest of the docs
+  (README dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + routing matrix, CHANGELOG) + tag **v8.5**
+  (owner-gated; NEVER force-push main).
 
-**▶ CURRENT HOLD (2026-06-18):** Stages A–E complete & committed on `dev-2xiao-4sx1262` (tip `0795538`),
-all envs build green. **Holding for the owner to define bench-verification testing before Stage F.** A
-suggested two-board bench matrix to react to: (1) link-up — power both boards, host sees `[UartLink]
-co-processor READY` + the coproc's `R3/R4 cfg ok`; (2) R3/R4 RX — a node TX's on R3's channel → host
-`evt=RX radio=R3`; (3) routing — set the portal matrix so R1→R3, send on R1 → it egresses on R3 (coproc
-TX); (4) per-radio routeMask isolation; (5) do-no-harm — a single-board (R3/R4=None) build behaves exactly
-like v8.4.1. Nothing un-benchable in the design (all SX1262, all on the owner's rig). NOT pushed/tagged.
+**▶ STATUS (2026-06-18):** Stages A–E + the Stage-F scrub done on `dev-2xiao-4sx1262` (tip `fbd64e3`),
+all envs build green. v8.5 is **sub-GHz only** (4× SX1262) — every 2.4 GHz/LR1121/T-Lora-Dual reference
+scrubbed (`6cce3da`, incl. the wire `band` field; band was always SUBGHZ so do-no-harm). **`BENCH-v8.5.md`
+is the bench plan** (owner finalizes the list + gating, then runs it on the 2-board rig: bridges on
+COM6/13/14 + MT/MC nodes + 1 spare bridge as a LoRaWAN `bench_lw_sniffer`). **Release set = 4 envs**
+(host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*` envs are dev/bench, kept intentionally
+(owner Option A) so anyone can recreate the bench. After the gating bench passes → remaining docs
+(README dual-Xiao wiring, `CONFIG-USER-MANUAL.md`, CHANGELOG) + tag v8.5. **NOT pushed/tagged.**
 
 ## ⭐ v8.2 / v8.2.1 — "LBT/CAD routing" (SHIPPED 2026-06-13)
 
