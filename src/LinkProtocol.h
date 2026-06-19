@@ -1,9 +1,8 @@
 // LinkProtocol.h
 // ---------------------------------------------------------------------------
-// Wire protocol for the XIAO host <-> T-Lora-Dual co-processor UART link
-// (QUAD-SPEC §"Inter-board UART link"). Shared by BOTH firmwares — include
-// this identical header on the host and on the co-processor so the two ends
-// never drift.
+// Wire protocol for the host XIAO <-> co-processor XIAO UART crossover link.
+// Shared by BOTH firmwares — include this identical header on the host and on
+// the co-processor so the two ends never drift.
 //
 // Frame:
 //   [0] 0xAA  [1] 0x55      preamble
@@ -51,18 +50,10 @@ enum Type : uint8_t {
     MSG_PONG      = 0x85,   // payload = uint32 uptime ms (optional)
 };
 
-// Radio band. Values match BridgeConfig::Band so the host can pass them
-// straight through. S-band is accepted but the co-processor refuses to key up.
-enum Band : uint8_t {
-    BAND_SUBGHZ = 0,
-    BAND_2G4    = 1,
-    BAND_SBAND  = 2,
-};
-
-// CFG_RADIO payload — one radio's full plan. Packed; little-endian.
+// CFG_RADIO payload — one radio's full plan. Packed; little-endian. All radios
+// are SX1262 (sub-GHz), so there is no band field.
 struct __attribute__((packed)) CfgRadio {
     uint8_t  enable;       // 1 = configure + begin, 0 = leave disabled
-    uint8_t  band;         // LinkProtocol::Band
     float    frequency;    // MHz
     float    bandwidth;    // kHz
     uint8_t  sf;           // spreading factor 5..12

@@ -1,6 +1,6 @@
 // UartLink.h
 // ---------------------------------------------------------------------------
-// Host side of the XIAO <-> T-Lora-Dual co-processor UART link. Owns one
+// Host side of the host XIAO <-> co-processor XIAO UART link. Owns one
 // HardwareSerial, frames/deframes the LinkProtocol wire format, and runs a
 // FreeRTOS service task that:
 //   - reassembles inbound frames and validates the CRC,

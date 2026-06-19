@@ -2,9 +2,9 @@
 // ---------------------------------------------------------------------------
 // Abstract interface for a LoRa radio wrapper, plus the shared LoraConfig
 // struct and the compile-time board constants. Lets the bridge pipeline hold
-// radios as LoraRadio* without knowing the underlying chip — WioSX1262 (and,
-// on the quad line, WioLR1121/RemoteRadio) implement this. The bridge
-// dispatcher is RF-agnostic: it branches on the LoRa sync word, not the chip.
+// radios as LoraRadio* without knowing where the radio lives — WioSX1262 (a
+// local SX1262) and RemoteRadio (an SX1262 on the co-processor XIAO) implement
+// this. The bridge dispatcher is RF-agnostic: it branches on the LoRa sync word.
 // ---------------------------------------------------------------------------
 
 #pragma once
@@ -19,9 +19,6 @@
 #ifndef LORA_TCXO_VOLTAGE
   #define LORA_TCXO_VOLTAGE   1.8f     // Wio SX1262 module TCXO
 #endif
-#ifndef LR1121_TCXO_VOLTAGE
-  #define LR1121_TCXO_VOLTAGE 3.0f     // inert here (SX1262-only build); kept
-#endif                                 // for parity with the quad line
 #ifndef LORA_MAX_PACKET
   #define LORA_MAX_PACKET     256
 #endif

@@ -137,8 +137,7 @@ static void linkLog(const char *s) {
 // disabled — never halts (a co-processor must stay responsive).
 static int16_t applyCfg(int i, const CfgRadio &c) {
     if (!g_radio[i]) { linkLog("CFG for an absent radio"); return RADIOLIB_ERR_UNKNOWN; }
-    // SX1262 is sub-GHz only; the band field is informational here (the host
-    // always sends BAND_SUBGHZ for a 2xiao_4sx1262 build).
+    // SX1262 is sub-GHz only.
     LoraConfig cfg;
     cfg.frequency    = c.frequency;
     cfg.bandwidth    = c.bandwidth;

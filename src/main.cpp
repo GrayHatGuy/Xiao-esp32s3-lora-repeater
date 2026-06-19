@@ -1682,10 +1682,10 @@ void setup()
     const bool linkNeeded = g_radioEnabled[2] || g_radioEnabled[3];
     if (g_radioEnabled[2])
         g_radio[2] = new RemoteRadio(g_link, /*co-proc R1*/ 0, kTag[2],
-                                     makeLoraConfig(2), LinkProtocol::BAND_SUBGHZ);
+                                     makeLoraConfig(2));
     if (g_radioEnabled[3])
         g_radio[3] = new RemoteRadio(g_link, /*co-proc R2*/ 1, kTag[3],
-                                     makeLoraConfig(3), LinkProtocol::BAND_SUBGHZ);
+                                     makeLoraConfig(3));
     if (linkNeeded)
         g_link.begin(BRIDGE_LINK_BAUD, BRIDGE_LINK_RX_PIN, BRIDGE_LINK_TX_PIN);
 

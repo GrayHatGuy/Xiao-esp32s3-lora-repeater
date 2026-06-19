@@ -108,8 +108,8 @@ static void appendRegionSelect(String &page) {
         page += F("</option>");
     }
     page += F("</select>"
-              "<div class=\"hint\">2.4 GHz radios are region-exempt. "
-              "Custom/UNSET leaves frequency entirely manual.</div>");
+              "<div class=\"hint\">Custom/UNSET leaves frequency entirely "
+              "manual.</div>");
 }
 
 // One radio's full config section: protocol picker + modem preset + channel

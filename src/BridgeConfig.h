@@ -39,8 +39,7 @@ constexpr size_t RADIO_CHANNEL_NAME_MAX = 23;   // per-radio channel display nam
 constexpr size_t RADIO_CHANNEL_KEY_MAX  = 47;   // 32-hex MC key or ~44-char base64 MT PSK
 
 // Per-radio protocol. A radio set to PROTO_NONE is disabled (skipped at
-// setup()); useful as a single-radio debug mode or to park a slot for a
-// future 2.4 GHz radio.
+// setup()); useful as a single-radio debug mode or to park an unused slot.
 enum Protocol : uint8_t {
     PROTO_NONE   = 0,
     PROTO_MT     = 1,   // Meshtastic   (sync 0x2B)
@@ -50,8 +49,7 @@ enum Protocol : uint8_t {
     PROTO_LORAWAN = 5,  // LoRaWAN      (sync 0x34) — keyless capture/relay/mesh (v8.3)
 };
 
-// Global device region — governs the sub-GHz band. A 2.4 GHz radio is
-// region-exempt (ISM 2400-2483.5 MHz, licence-free worldwide).
+// Global device region — governs the sub-GHz band (all radios are SX1262).
 enum Region : uint8_t {
     REGION_UNSET  = 0,
     REGION_US     = 1,

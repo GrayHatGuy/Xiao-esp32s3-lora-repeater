@@ -5,9 +5,8 @@
 #include <string.h>
 
 RemoteRadio::RemoteRadio(UartLink &link, int localRadio, const char *name,
-                         const LoraConfig &config, uint8_t band)
-    : _link(link), _localRadio(localRadio), _name(name),
-      _config(config), _band(band)
+                         const LoraConfig &config)
+    : _link(link), _localRadio(localRadio), _name(name), _config(config)
 {
     _rxQueue = xQueueCreate(RX_QUEUE_DEPTH, sizeof(RxPacket));
     configASSERT(_rxQueue != nullptr);
@@ -23,7 +22,6 @@ bool RemoteRadio::begin()
 {
     LinkProtocol::CfgRadio cfg;
     cfg.enable      = 1;
-    cfg.band        = _band;
     cfg.frequency   = _config.frequency;
     cfg.bandwidth   = _config.bandwidth;
     cfg.sf          = _config.spreadFactor;
@@ -39,10 +37,10 @@ bool RemoteRadio::begin()
                         nullptr, 0);
 
     Serial.printf("[%s] remote begin -> %s  %.3f MHz BW%.1f SF%u CR4/%u "
-                  "%ddBm sync 0x%02X band%u\n",
+                  "%ddBm sync 0x%02X\n",
                   _name, ok ? "sent" : "LINK FAIL",
                   _config.frequency, _config.bandwidth, _config.spreadFactor,
-                  _config.codingRate, _config.txPower, _config.syncWord, _band);
+                  _config.codingRate, _config.txPower, _config.syncWord);
     return ok;
 }
 

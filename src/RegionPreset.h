@@ -80,7 +80,7 @@ static inline bool regionHasBand(uint8_t region) {
     return r.freqEnd > r.freqStart;
 }
 
-// Resolve a modem preset to its non-wideLora BW(kHz)/SF/CR bundle. Verbatim
+// Resolve a modem preset to its BW(kHz)/SF/CR bundle. Verbatim
 // from meshtastic/firmware MeshRadio.h modemPresetToParams().
 static inline void modemPresetParams(uint8_t preset, float &bwKHz,
                                      uint8_t &sf, uint8_t &cr) {
