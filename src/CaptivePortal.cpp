@@ -124,16 +124,17 @@ static void appendRadio(String &page, int n) {
     uint8_t  sync  = BridgeConfig::radioSyncWord(idx);
     int8_t   txp   = BridgeConfig::radioTxPower(idx);
     uint8_t  preset= presetFromParams(bw, sf, cr);
-    const char *chName = (n == 1) ? BridgeConfig::radio1ChannelName()
-                                  : BridgeConfig::radio2ChannelName();
-    const char *chKey  = (n == 1) ? BridgeConfig::radio1ChannelKey()
-                                  : BridgeConfig::radio2ChannelKey();
+    const char *chName = BridgeConfig::radioChannelName(idx);
+    const char *chKey  = BridgeConfig::radioChannelKey(idx);
 
     char buf[16];
 
     page += F("<h2>Radio ");
     page += n;
     page += F("</h2>");
+    if (n >= 3)
+        page += F("<div class=\"hint\">On the SECOND XIAO (radio co-processor), "
+                  "reached over the UART crossover link.</div>");
 
     // Protocol picker.
     page += F("<label>Protocol</label><select id=\"r");
@@ -339,6 +340,28 @@ static void appendRadio(String &page, int n) {
     page += F("Sync\" value=\"");
     page += buf;
     page += F("\"></div>");
+
+    // Routing matrix (v8.5) — which other radios this one bridges its RX to.
+    // Hidden when the radio is disabled (shares the protocol-class show/hide).
+    page += F("<div class=\"r");
+    page += n;
+    page += F("fld mt mc rns custom lw\"><label>Bridge received traffic to</label>");
+    uint8_t routeMask = BridgeConfig::radioRouteMask(idx);
+    for (int j = 1; j <= BridgeConfig::NUM_RADIOS; j++) {
+        if (j == n) continue;
+        page += F("<label style=\"font-weight:400;display:inline-block;margin-right:1em\">"
+                  "<input type=\"checkbox\" name=\"r");
+        page += n;
+        page += F("routeTo");
+        page += j;
+        page += F("\" value=\"1\"");
+        if (routeMask & (uint8_t)(1u << (j - 1))) page += F(" checked");
+        page += F(">R");
+        page += j;
+        page += F("</label>");
+    }
+    page += F("<div class=\"hint\">Cross-protocol translation is automatic per "
+              "destination; loops are dropped by content-hash dedup.</div></div>");
 }
 
 // Inline JS: region table, preset bandwidths, djb2 + slot formula, show/hide.
@@ -405,9 +428,9 @@ static void appendScript(String &page) {
     //   - Meshtastic: blank PSK (LongFast); freq stays preset-computed.
     //   - Custom / LoRaWAN: left manual (community/channel-specific by design).
     page += F(
-      "var PC=[0,0];"                        // last computed freq per radio
-      "var LASTP=[null,null];"               // last protocol per radio (autofill-on-change)
-      "var LR=[null,null];"                  // last LoRaWAN region per radio (slot-list sync)
+      "var PC=[0,0,0,0];"                    // last computed freq per radio
+      "var LASTP=[null,null,null,null];"     // last protocol per radio (autofill-on-change)
+      "var LR=[null,null,null,null];"        // last LoRaWAN region per radio (slot-list sync)
       "function gv(i){return document.getElementById(i).value;}"
       "function djb2(s){var h=5381;for(var i=0;i<s.length;i++)"
         "h=((h*33)+s.charCodeAt(i))>>>0;return h;}"
@@ -503,7 +526,7 @@ static void appendScript(String &page) {
           "'LoRaWAN: enter the exact channel frequency + SF your devices use.';"
           "if(LR[n-1]!==gv('r'+n+'lwreg')){lwOpts(n);LR[n-1]=gv('r'+n+'lwreg');}}"
         "else{fh.textContent='';}}"
-      "function updAll(){upd(1);upd(2);}"
+      "function updAll(){upd(1);upd(2);upd(3);upd(4);}"
       "window.addEventListener('load',updAll);"
       "</script>");
 }
@@ -727,8 +750,8 @@ static String renderForm(const char *flash = nullptr) {
     if (BridgeConfig::telemetryEnabled()) page += F(" checked");
     page += F(">Bridge Meshtastic TELEMETRY_APP packets</label>");
 
-    appendRadio(page, 1);
-    appendRadio(page, 2);
+    for (int n = 1; n <= BridgeConfig::NUM_RADIOS; n++)
+        appendRadio(page, n);
 #if defined(BRIDGE_LW_ENCODE) && BRIDGE_LW_ENCODE
     appendLoRaWANDevices(page);
 #endif
@@ -868,13 +891,17 @@ static const char *applyRadio(int n, uint8_t region) {
     BridgeConfig::setRadioCr(idx, cr);
     BridgeConfig::setRadioSyncWord(idx, sync);
     BridgeConfig::setRadioTxPower(idx, txp);
-    if (n == 1) {
-        BridgeConfig::setRadio1ChannelName(chName.c_str());
-        BridgeConfig::setRadio1ChannelKey(chKey.c_str());
-    } else {
-        BridgeConfig::setRadio2ChannelName(chName.c_str());
-        BridgeConfig::setRadio2ChannelKey(chKey.c_str());
+    BridgeConfig::setRadioChannelName(idx, chName.c_str());
+    BridgeConfig::setRadioChannelKey(idx, chKey.c_str());
+
+    // Routing matrix (v8.5): which other radios this one bridges its RX to.
+    uint8_t routeMask = 0;
+    for (int j = 1; j <= BridgeConfig::NUM_RADIOS; j++) {
+        if (j == n) continue;
+        if (s_http.arg(String("r") + n + "routeTo" + j) == "1")
+            routeMask |= (uint8_t)(1u << (j - 1));
     }
+    BridgeConfig::setRadioRouteMask(idx, routeMask);
     return nullptr;
 }
 
@@ -913,40 +940,50 @@ static void handleSave() {
     uint8_t region = (uint8_t)s_http.arg("region").toInt();
     if (region >= RegionPreset::kRegionCount) region = BridgeConfig::REGION_UNSET;
 
-    // --- per-radio protocol / RF / channel ---
-    const char *e1 = applyRadio(1, region);
-    if (e1) { fail(e1); return; }
-    const char *e2 = applyRadio(2, region);
-    if (e2) { fail(e2); return; }
-
-    uint8_t p1 = BridgeConfig::radioProtocol(0);
-    uint8_t p2 = BridgeConfig::radioProtocol(1);
+    // --- per-radio protocol / RF / channel / routing (all NUM_RADIOS radios) ---
+    for (int n = 1; n <= BridgeConfig::NUM_RADIOS; n++) {
+        const char *e = applyRadio(n, region);
+        if (e) { fail(e); return; }
+    }
 
     // At least one radio must be active.
-    if (p1 == BridgeConfig::PROTO_NONE && p2 == BridgeConfig::PROTO_NONE) {
-        fail("At least one radio must have a protocol (both set to None).");
+    int activeCount = 0;
+    for (int i = 0; i < BridgeConfig::NUM_RADIOS; i++)
+        if (BridgeConfig::radioProtocol(i) != BridgeConfig::PROTO_NONE) activeCount++;
+    if (activeCount == 0) {
+        fail("At least one radio must have a protocol (all set to None).");
         return;
     }
 
-    // Same-protocol SELF-bridge guard (freq-aware — V8.2-SPEC §2 A4 / §5.1).
-    // Reject only when the two radios share channel name+key AND frequency —
-    // i.e. literally the same RF channel bridged to itself. Same channel on a
-    // DIFFERENT frequency is a valid cross-frequency relay: the identity layer
-    // raw-repeats it preserving the original sender, and loop safety comes from
-    // the content-hash dedup (DedupCache), not from the channels differing.
-    if (p1 != BridgeConfig::PROTO_NONE && p1 == p2 &&
-        (p1 == BridgeConfig::PROTO_MT || p1 == BridgeConfig::PROTO_MC)) {
-        float df = BridgeConfig::radioFrequency(0) - BridgeConfig::radioFrequency(1);
-        if (df < 0) df = -df;
-        bool sameFreq = df < 0.001f;
-        if (sameFreq &&
-            strcmp(BridgeConfig::radio1ChannelName(),
-                   BridgeConfig::radio2ChannelName()) == 0 &&
-            strcmp(BridgeConfig::radio1ChannelKey(),
-                   BridgeConfig::radio2ChannelKey()) == 0) {
-            fail("Both radios run the same protocol, channel AND frequency "
-                 "\xe2\x80\x94 that bridges a channel to itself.");
-            return;
+    // Same-protocol SELF-bridge guard (freq-aware — V8.2-SPEC §2 A4 / §5.1),
+    // routeMask-aware: reject a ROUTED pair (i -> j) of same-protocol MT/MC radios
+    // only when they share channel name+key AND frequency — i.e. literally the
+    // same RF channel bridged to itself. Same channel on a DIFFERENT frequency is
+    // a valid cross-frequency relay (loop-safe via the content-hash dedup), and
+    // cross-band same-protocol relay between two distinct radios is allowed.
+    for (int i = 0; i < BridgeConfig::NUM_RADIOS; i++) {
+        uint8_t pi = BridgeConfig::radioProtocol(i);
+        if (pi != BridgeConfig::PROTO_MT && pi != BridgeConfig::PROTO_MC) continue;
+        uint8_t mask = BridgeConfig::radioRouteMask(i);
+        for (int j = 0; j < BridgeConfig::NUM_RADIOS; j++) {
+            if (j == i) continue;
+            if (!(mask & (uint8_t)(1u << j))) continue;
+            if (BridgeConfig::radioProtocol(j) != pi) continue;
+            float df = BridgeConfig::radioFrequency(i) - BridgeConfig::radioFrequency(j);
+            if (df < 0) df = -df;
+            if (df < 0.001f &&
+                strcmp(BridgeConfig::radioChannelName(i),
+                       BridgeConfig::radioChannelName(j)) == 0 &&
+                strcmp(BridgeConfig::radioChannelKey(i),
+                       BridgeConfig::radioChannelKey(j)) == 0) {
+                char sbMsg[128];
+                snprintf(sbMsg, sizeof(sbMsg),
+                         "Radio %d routes to Radio %d on the same channel AND "
+                         "frequency \xe2\x80\x94 that bridges a channel to itself.",
+                         i + 1, j + 1);
+                fail(sbMsg);
+                return;
+            }
         }
     }
     (void)syncForProtocol;   // reserved for future per-protocol checks
