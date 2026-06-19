@@ -94,9 +94,14 @@ nothing on a co-proc reset), pinpointing the return wire. ⚠️ **Known bring-u
 the host sends R3/R4 CFG **once at boot**, so after any co-proc reset you must reboot the host (or it stays
 "idle until CFG"); the **`re-send CFG on co-proc READY`** robustness tweak (offered, not yet built) would
 self-heal this — RECOMMENDED before heavier bench. Co-proc flashed back to the CLEAN release build (no
-debug). **Still pending:** the actual mesh-bridging tests (Test A/B) — the routing logic was already proven
-in earlier captures (MC "Hello" → MT translate → QUEUE R1/R3/R4 → R1 TX done); now that R3/R4 work, repeat
-to confirm R3/R4 egress `result=done`. v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
+debug). **⭐ TEST A (4-RADIO MESH BRIDGE) ALSO PASSED 2026-06-19** — owner sent an MT text "Whoooooo" on R1;
+COM13: `QUEUE radio=R1 dst=R2 (MT→MC) / dst=R3 (raw MT) / dst=R4 (MT→MC)` then **`TX_DONE radio=R2 result=done`
++ `TX_DONE radio=R4 result=done` + `TX_DONE radio=R3 result=done`** — a real mesh message bridged host →
+UART → co-proc → transmitted on BOTH R3 and R4 (full mesh, cross-protocol translate + raw repeat), all
+`result=done`. Loop-dup guard also confirmed (the node's own re-broadcasts dropped `drop=loop-dup`). So
+Group 0 (0.1 link-up) + the core of Group A are PROVEN on silicon. **Still pending:** the rest of the
+finer Test A cases (A2 routeMask isolation, etc.) + **Test B (LoRaWAN)** incl. the B3 RX2 downlink-listener.
+v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
 refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
 0.1-0.3+A1+A2+B1). **Release set = 4 envs** (host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*`
 envs are dev/bench, kept intentionally (owner Option A) so anyone can recreate the bench. After the gating
