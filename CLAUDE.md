@@ -210,6 +210,67 @@ multi-device / redeploy / tagged paths. Fixes folded in (build-green `xiao_esp32
 - **NOT fixed (non-gating, deferred):** per-DR payload cap (242 B absolute + dwell only); `FPort==0`/`srcSel`
   portal guards; `nextFcnt()` mutex (only if NR grows — T_LORA_QUAD); portal FCnt display.
 
+## ✅ v8.4.1 — captive-portal UI cleanup + user manual + ChirpStack tooling (SHIPPED 2026-06-18)
+
+**SHIPPED 2026-06-18.** ff-merged `dev-v8.4.1-UI_UM_config` → `main` (clean ff, no force); annotated tag
+**`v8.4.1-UI_UM_config`** → `d098420` (`origin/main` now `b85fa1a` incl. this doc); **GitHub release Latest**
+(4 bins v1.0/v1.1 × app + vanilla-factory):
+https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4.1-UI_UM_config . **UI / docs /
+tooling only — no protocol/routing/on-air change; `BridgeConfig` schema v4 unchanged** (the new per-radio
+LoRaWAN region reuses a spare `RadioRf` byte). Builds green `xiao_esp32s3` / `xiao_esp32s3_v1_1` /
+`xiao_esp32s3_lwabp`.
+
+**What shipped:**
+- **Captive-portal cleanup** (`src/CaptivePortal.cpp`): bridge-behaviour toggles moved into the top identity
+  frame; Meshtastic `AQ==` default key; MT BW/SF/CR shown read-only from the modem preset; MeshCore "public
+  key `8b…`" hint; Channel name `N/A` for LoRaWAN/Custom; custom-PSK/channel-name warning.
+- **LoRaWAN region/slot picker** — per-radio region (US915/AU915/AS923/EU868) + channel-slot dropdown
+  auto-fills freq/SF/BW (CR fixed 4/5) from RP002-1.0.3; region **persisted** in `RadioRf.lwRegion` (renamed
+  `_pad[0]`, no schema bump; new `BridgeConfig::LwRegion` enum + `radioLwRegion()`/`setRadioLwRegion()`).
+- **MAC-derived identity** (`deriveMacIdentity()` in `main.cpp`): long name `<NodeID> LoRa Bridge`, short
+  `BR<low-byte>`. The residual `BRIDGE_MT_NODE_ID/_STR/_LONG_NAME/_SHORT_NAME` flags were **removed** from
+  `platformio.ini` (always overridden by the MAC derivation; `BridgeConfig.cpp` `#ifndef` fallbacks remain).
+- **Protocol-switch autofill:** preset change sets the MT Channel name (until a custom key unlocks it; same
+  on MeshCore); Reticulum auto-fills RNode defaults (914.875 / 125k / SF8 / CR5); RNS BW/SF/CR now editable.
+- **User manual `CONFIG-USER-MANUAL.md`** (linked from README Instructions) — field-by-field for all 10
+  portal screens (`images/manual/`), each field → its build flag, the ABP Applies-to-source / source-tag
+  detail, 3 example setups, and **the full build-flag catalog. ⚠️ Build flags are documented HERE now, NOT
+  in the README** (README's "Build flags" + "Captive-portal top-frame fields" sections were deleted).
+- **ChirpStack tooling `tools/chirpstack/`** — importable device-profile templates (US915/AU915/AS923/EU868
+  ABP profiles + vendor/device manifests + codec test vectors) + the hardened `tools/chirpstack-codec.js`
+  decoder (UTF-8, `warnings`/`errors`, device-variable-driven source tag).
+- **Compile-time preloading:** new per-radio channel flags `LORA_RADIO{1,2}_CHANNEL_NAME` / `_KEY` + three
+  commented "scenario" blocks in `platformio.ini` (MT↔MC, MT→LoRaWAN, MT public→private). README trimmed
+  8→5 install steps; per-protocol table merged into "Routing & behavior".
+
+**Release-bin recipe (next release).** Build `xiao_esp32s3` + `xiao_esp32s3_v1_1`, then per env:
+`<penv-py> <tool-esptoolpy>/esptool.py --chip esp32s3 merge_bin -o factory.bin --flash_mode keep
+--flash_freq keep --flash_size keep 0x0 bootloader.bin 0x8000 partitions.bin 0xe000
+<framework-arduinoespressif32>/tools/partitions/boot_app0.bin 0x10000 firmware.bin` (app bin =
+`.pio/build/<env>/firmware.bin`). esptool isn't on PATH → use
+`C:\Users\6r4yh\.platformio\penv\Scripts\python.exe`. Factory = the 0x10000 boot region + app, NOT
+full-flash-padded (v8.4.1: app 839664 B / factory 905200 B). Bins + `RELEASE_NOTES_*.md` are gitignored;
+publish via `gh release create … --latest <4 bins>`.
+
+## Open work (priority order) — start here next session
+
+1. **(MED) Close the v8.4 Tier-C ChirpStack gate** — the only open v8.4 bench item, no firmware needed.
+   Give the colleague DevAddr `0x01000001` + the bench `NwkSKey`/`AppSKey` + `tools/chirpstack/` (templates +
+   codec); they provision a device (MAC 1.0.x, ABP, Class A, ADR off, FCnt-validation off) and confirm
+   LW-P1-ACCEPT (a minted MT/MC uplink ingests + the codec shows the text) + LW-P3-WEATHER.
+2. **(HIGH — owner-gated, own release) v8.5 OTAA** — LoRaWAN join (DevEUI / JoinEUI / AppKey) alongside ABP.
+   HIGH→VERY-HIGH: the crux is receiving the **JoinAccept downlink in a Class-A RX1/RX2 window** — a new
+   downlink-RX subsystem (`LoraRadio` has **no runtime retune** today; RF is fixed at `begin()`) that's
+   **un-benchable without a downlink-capable gateway**. ~8–12+ sessions; make the **build-vs-adopt** call
+   (hand-roll on `WioSX1262` vs adopt RadioLib `LoRaWANNode` / LMIC) early — it swings the effort ~3×.
+   Crypto + NVS substrate already exist (`LoRaWANCrypto.h` CMAC/AES-ECB; `LoRaWANConfig` FCnt pattern).
+3. **(LOW — blocked on owner) Weather-station decoder** — `decodeStation()` in `tools/chirpstack-codec.js`
+   is a placeholder; fill it once the station HW + byte layout are chosen.
+4. **(LOW-MED) Reticulum `MT/MC → RNS` encoder** + fragment reassembly — `encodeReticulum()` is a stub
+   returning false (`src/MeshEncoderDebug.h`); the only un-implemented bridge direction.
+5. **(ON HOLD) LR1121 Phase 1 (sub-GHz ↔ 2.4 GHz)** — hardware-blocked on Seeed's reply (see Phase status +
+   Decision tree below). No firmware action while waiting.
+
 ## Phase status
 
 - **Phase 0 (v8.1)** — ✅ Shipped. Dual-SX1262 multi-protocol bridge. The contest deliverable.
