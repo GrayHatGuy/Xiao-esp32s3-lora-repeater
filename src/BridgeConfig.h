@@ -27,6 +27,11 @@
 
 namespace BridgeConfig {
 
+// Number of radio slots. 0/1 = local SX1262 on THIS XIAO (direct SPI); 2/3 =
+// SX1262 on the SECOND XIAO ("radio co-processor"), reached over the UART
+// crossover link (these are R3/R4). Indices are 0..NUM_RADIOS-1. (v8.5)
+constexpr int    NUM_RADIOS             = 4;
+
 constexpr size_t MT_NODE_ID_STR_MAX     = 15;   // "!12345678" plus null
 constexpr size_t MT_LONG_NAME_MAX       = 39;   // Meshtastic long_name canonical max 40
 constexpr size_t MT_SHORT_NAME_MAX      = 8;    // Meshtastic short_name typical 4
@@ -82,6 +87,10 @@ uint32_t    mtNodeId();
 const char *mtNodeIdStr();
 const char *mtLongName();
 const char *mtShortName();
+// Per-radio channel name/key. The indexed form (radio 0..NUM_RADIOS-1) is the
+// canonical API; the radio1/radio2 helpers are thin wrappers for existing callers.
+const char *radioChannelName(int radio);
+const char *radioChannelKey(int radio);
 const char *radio1ChannelName();
 const char *radio1ChannelKey();
 const char *radio2ChannelName();
@@ -89,7 +98,7 @@ const char *radio2ChannelKey();
 bool        positionEnabled();
 bool        telemetryEnabled();
 
-// Region + per-radio protocol/RF. Radio index is 0 or 1.
+// Region + per-radio protocol/RF. Radio index is 0..NUM_RADIOS-1.
 uint8_t  region();
 uint8_t  radioProtocol(int radio);
 float    radioFrequency(int radio);
@@ -99,12 +108,15 @@ uint8_t  radioCr(int radio);
 uint8_t  radioSyncWord(int radio);
 int8_t   radioTxPower(int radio);
 uint8_t  radioLwRegion(int radio);   // CO-9: LoRaWAN region index (0 = unset)
+uint8_t  radioRouteMask(int radio);  // v8.5: bit j set => bridge this radio's RX to radio j
 
 // Setters — used by the captive portal. Bounds-clamp + null-terminate only.
 void setMtNodeId(uint32_t v);
 void setMtNodeIdStr(const char *s);
 void setMtLongName(const char *s);
 void setMtShortName(const char *s);
+void setRadioChannelName(int radio, const char *s);
+void setRadioChannelKey(int radio, const char *s);
 void setRadio1ChannelName(const char *s);
 void setRadio1ChannelKey(const char *s);
 void setRadio2ChannelName(const char *s);
@@ -121,6 +133,7 @@ void setRadioCr(int radio, uint8_t v);
 void setRadioSyncWord(int radio, uint8_t v);
 void setRadioTxPower(int radio, int8_t v);
 void setRadioLwRegion(int radio, uint8_t v);
+void setRadioRouteMask(int radio, uint8_t v);
 
 void debugDump();
 
