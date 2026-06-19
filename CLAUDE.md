@@ -9,7 +9,7 @@
 Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, MeshCore, and (stub) Reticulum networks across two radios sharing one SPI bus.
 
 - **Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
-- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater - main dev-ABP-lorawan` (note: contains spaces)
+- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater – dev_2xiao_4sx1262` (note: spaces + an en-dash `–`; renamed 2026-06-18 from `…- main dev-ABP-lorawan`)
 - **Owner:** GrayHatGuy — `grayhatguyllc@protonmail.com`
 - **Contest:** Seeed/Meshtastic Build-Off 2026, issue #2 at `Seeed-Projects/meshtastic-build-off-2026`
 
@@ -18,11 +18,52 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 | Item | Value |
 |---|---|
 | **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | none — v8.4.1 shipped. Next candidate: **v8.5 OTAA** (LoRaWAN join support; HIGH/VERY-HIGH — needs a Class-A downlink-RX subsystem + a downlink-capable gateway to bench; deferred, owner-gated). |
+| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`). Combine TWO Xiao dual-SX1262 bridges into ONE 4-radio bridge over a UART crossover (host + co-processor). Stages A+B done & build-green; see the v8.5 section below. **OTAA deferred** until after this. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
 | **Default build flag** | `LR1121_RX_AUDIT_RUN=0` in `platformio.ini` (clean state) |
+
+## ⭐ v8.5 — "2xiao_4sx1262" (IN PROGRESS, started 2026-06-18)
+
+Combine **two Xiao dual-SX1262 bridges** into **one 4-radio bridge**, the two Xiaos joined by a **UART
+crossover**. Reuses the UART crossover from the abandoned `T_LORA_QUAD_ROUTE` branch (which paired a Xiao
+with a T-Lora-Dual/LR1121 — abandoned on the LR1121 RX deficit; the UART half is reused, the LR1121 half
+dropped). Because all 4 radios are now **SX1262 sub-GHz**, the exact risk that killed the reference is gone.
+Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx1262"`** (owner-gated).
+
+**Architecture (owner-decided 2026-06-18):**
+- **Host + co-processor** (NOT symmetric peers). Board A = full bridge brain (routing, dedup, captive
+  portal, config for all 4 radios); R1/R2 = its local SX1262. Board B = a dumb SX1262 radio head running a
+  small co-processor firmware (reuses `WioSX1262` + a `LinkProtocol` slave loop), driving its two SX1262 as
+  R3/R4, configured/driven by the host over UART. Board B has no portal.
+- **Routing = per-radio routing matrix** (`routeMask`, a portal "bridge to" grid) — not all-to-all.
+- **UART crossover:** both boards' UART1 D6 (GPIO43, TX) / D7 (GPIO44, RX) @ 460800, wired CROSSED
+  (A.D6→B.D7, A.D7→B.D6, GND↔GND). Same firmware pin defaults both ends; the cable does the crossover.
+
+**Stages (mirrors the reference A–F; both done so far are build-green `pio run -e xiao_esp32s3`):**
+- ✅ **A — schema (`edddada`, Flash 25.1%):** `BridgeConfig` v4→**v5**. `NUM_RADIOS=4`; new `PersistedV5`
+  with `RadioSlot radio[4]` (channel name/key moved INTO the slot); per-radio `routeMask` reuses a v4 pad
+  byte; v8.4.1's `lwRegion` (CO-9) + `PROTO_LORAWAN` kept; the reference's `chip`/`band` enums dropped.
+  Real v4→v5 migration preserves R1/R2 RF+channels+lwRegion + the R1↔R2 crossover; R3/R4 default
+  `PROTO_NONE` (single-board build = byte-identical behaviour). Generic `radioChannelName/Key(idx)` +
+  `radioRouteMask(idx)` + setters; `radio1/2*` kept as wrappers. `platformio.ini`: cloned R1/R2 flags →
+  `LORA_RADIO3/4_*` + documented `BRIDGE_LINK_TX/RX_PIN/BAUD`.
+- ✅ **B — UART transport (`abc9a62`, Flash 25.4%):** ported `LinkProtocol.h` / `UartLink.{h,cpp}` /
+  `RemoteRadio.{h,cpp}` from the reference verbatim (chip-agnostic; `RemoteRadio` matches our `LoraRadio`).
+  Standalone — not yet referenced by `main.cpp`, so do-no-harm.
+- ⏳ **C — bridge core (NEXT, biggest):** `main.cpp` `NR=2`→4 + extend all `[NR]` arrays; `WioSX1262.cpp`
+  ISR trampoline `_inst[2]`→`[4]`; build R3/R4 as `RemoteRadio` over a shared `UartLink g_link(Serial1)`
+  (opened only if R3/R4 enabled); replace the implicit fan-out loop in `ingestAndFanout()` with a
+  `routeMask` check; pass `LinkProtocol::BAND_SUBGHZ`.
+- ⏳ **D — portal:** `CaptivePortal` is already parameterized (`appendRadio(n)`/`applyRadio(n)`); add
+  R3/R4, extend the JS arrays + guards, add the routing-matrix UI; `applyRadio` channel setters → the
+  generic `setRadioChannelName(n-1,…)`.
+- ⏳ **E — co-processor firmware:** a new minimal image for Board B (2× `WioSX1262` + a `LinkProtocol`
+  slave loop), new env `xiao_coproc_sx1262`.
+- ⏳ **F — docs + accuracy sweep:** README dual-Xiao wiring, `CONFIG-USER-MANUAL.md` R3/R4 + matrix,
+  CHANGELOG, spec; sweep the ported files' comments (T-Lora-Dual/LR1121/2.4 GHz → second-XIAO/SX1262/
+  sub-GHz). Then build all envs + bench on the 2-board rig + tag `v8.5` (owner-gated).
 
 ## ⭐ v8.2 / v8.2.1 — "LBT/CAD routing" (SHIPPED 2026-06-13)
 
