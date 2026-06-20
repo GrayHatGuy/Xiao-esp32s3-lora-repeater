@@ -134,8 +134,24 @@ lock-ordering inversion / co-proc unaffected / `setTxBufferSize`-before-`begin` 
 de-garble can't be fault-injected on the bench (needs concurrent dual-radio MT+MC traffic) → **owner to
 eyeball `pio device monitor` during traffic** to confirm lines stop interleaving. (My pyserial multi-reset
 tally is NOT a valid garble/drop instrument — its `READY 1/5` etc. are DTR/open-close capture artifacts,
-unchanged by the buffer; the prints provably execute. Use a real monitor.) **Still pending (gating): Test
-B (LoRaWAN)** incl. the B3 RX2 downlink-listener.
+unchanged by the buffer; the prints provably execute. Use a real monitor.)
+
+**▶⭐⭐ B1 (LoRaWAN uplink encode+decode) PASSED 2026-06-19 — v8.5 GATING SET COMPLETE** (`e52bc41`).
+Proved the real v8.5 path: an MT text is encoded to a keyed LoRaWAN ABP uplink and TRANSMITTED ON THE
+REMOTE radio R3 (co-proc) over the UART link. Rig: host COM13 (`bench_lw_enc_r3`) + co-proc COM6
+(`xiao_coproc_sx1262`) + sniffer COM14 (`bench_lw_sniffer`). 7 MT texts on LongFast → host
+`QUEUE radio=R1 dst=R3 dstproto=LW devaddr=01000001 fcnt=0..6 fport=13 cred=flag` → `TX_DONE radio=R3` →
+sniffer `evt=RX proto=LW mtype=UnconfDataUp devaddr=0x01000001 fcnt=N` + `evt=LWRAW raw=…`.
+`tools/lw-verify.py` on 3 frames: **MIC PASS + FRMPayload decrypts to the exact text** ("Hello"/"B1
+test"/"B1 test decrypt peers"), FCnt monotonic. New bench infra (committed): `[env:bench_lw_enc_r3]` +
+two do-no-harm BridgeConfig build-flag hooks (`LORA_RADIO{3,4}_ENABLE`, `LORA_RADIO{1..4}_ROUTE_MASK`)
+so a bench env can stand up a 4-radio config + routing without the portal (stock build unchanged).
+**Gotcha learned:** an autosave/erased build leaves the MT channel key EMPTY (`BRIDGE_MT_PSK_B64`
+default ""), so R1 can't decrypt LongFast → set `LORA_RADIO1_CHANNEL_KEY="AQ=="` (done in the env).
+**GATING: 0.1 ✓ · 0.2 ✓ · 0.3 (do-no-harm, code-verified) · A1 ✓ · A2 ✓ · B1 ✓ — ALL MET.**
+Remaining = recommended-not-gating (A3 cross-board, B3 RX2 923.3/SF12 downlink-listener) + remaining docs
+(README dual-Xiao wiring, CONFIG-USER-MANUAL R3/R4 + routing matrix, CHANGELOG) → then tag **v8.5**
+(owner-gated; never force-push main).
 v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
 refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
 0.1-0.3+A1+A2+B1). **Release set = 4 envs** (host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*`
