@@ -2,6 +2,7 @@
 
 #include "LoRaWANConfig.h"
 #include "BridgeConfig.h"   // Protocol enum (SRC_PROTO matching)
+#include "SerialLog.h"      // serialized console path (anti-garble); FCnt errs run in radioTask
 
 #include <Preferences.h>
 #include <string.h>
@@ -156,14 +157,14 @@ static uint32_t advanceFcnt(uint32_t devAddr, uint32_t &fcnt, uint32_t &persiste
     uint32_t v = fcnt;
     if (v >= persisted) {                              // v not yet durably reserved
         if (v > UINT32_MAX - 1 - FCNT_RESERVE) {       // would wrap → space exhausted
-            Serial.printf("[LoRaWANConfig] FCNT_EXHAUSTED addr=0x%08lx (rejoin/rekey)\n",
-                          (unsigned long)devAddr);
+            SerialLog::logf("[LoRaWANConfig] FCNT_EXHAUSTED addr=0x%08lx (rejoin/rekey)\n",
+                            (unsigned long)devAddr);
             return FCNT_INVALID;
         }
         uint32_t nr = v + 1 + FCNT_RESERVE;
         if (!persistReservedForAddr(devAddr, nr)) {
-            Serial.printf("[LoRaWANConfig] FCNT_PERSIST_FAIL addr=0x%08lx — dropping uplink\n",
-                          (unsigned long)devAddr);
+            SerialLog::logf("[LoRaWANConfig] FCNT_PERSIST_FAIL addr=0x%08lx — dropping uplink\n",
+                            (unsigned long)devAddr);
             return FCNT_INVALID;                        // fail closed: caller drops
         }
         persisted = nr;

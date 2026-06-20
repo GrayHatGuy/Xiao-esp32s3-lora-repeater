@@ -44,6 +44,7 @@
 #include "LoraConfigCheck.h"   // compile-time validation of LORA_RADIO* flags
 #include "UartLink.h"          // inter-XIAO UART crossover transport (v8.5)
 #include "RemoteRadio.h"       // R3/R4 = SX1262 on the second XIAO over the link
+#include "SerialLog.h"         // one serialized console path (anti-garble)
 #include <esp_mac.h>
 
 // Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
@@ -315,8 +316,6 @@ static RouteQueue::Entry   g_txPending[NR];
 //  decoder dump (MeshDecoderDebug::print) stays its own multi-line block,
 //  anchored by the preceding evt=RX line.
 // ============================================================
-static SemaphoreHandle_t logMutex = nullptr;
-
 static void blogf(const char *fmt, ...)
 {
     char line[300];
@@ -324,9 +323,12 @@ static void blogf(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    if (logMutex) xSemaphoreTake(logMutex, portMAX_DELAY);
+    // Share the one recursive console lock (SerialLog) so an evt= line never
+    // interleaves with the multi-line decoder dump or a status print from the
+    // other core-pinned task.
+    SerialLog::lock();
     Serial.print(line);
-    if (logMutex) xSemaphoreGive(logMutex);
+    SerialLog::unlock();
 }
 
 // Short protocol tag for the proto= field.
@@ -1375,7 +1377,13 @@ void radioTask(void *pvParameters)
                 blogf("ts=%lu evt=RX radio=%s proto=%s len=%u rssi=%.1f snr=%.1f\n",
                       (unsigned long)millis(), tag, protoTag(g_chan[i].protocol),
                       (unsigned)len, rssi, snr);
+                // The decoder emits a multi-line block via raw Serial; bracket
+                // it so the other task's output can't split it mid-block. (The
+                // lock is released before ingestAndFanout, which logs its own
+                // atomic evt= lines and can run long.)
+                SerialLog::lock();
                 MeshDecoderDebug::print(buf, len, g_chan[i], tag);
+                SerialLog::unlock();
                 ingestAndFanout(i, buf, len);
             } else if (state != RADIOLIB_ERR_NONE) {
                 blogf("ts=%lu evt=DROP radio=%s drop=rx-error rc=%d\n",
@@ -1502,6 +1510,10 @@ void radioTask(void *pvParameters)
 // ============================================================
 void setup()
 {
+    // Enlarge the USB-CDC TX ring so a burst of output (e.g. the co-proc-reboot
+    // recovery, or both radios decoding at once) is buffered instead of dropped.
+    // Must be set BEFORE begin(), mirroring UartLink's RX-side setRxBufferSize.
+    Serial.setTxBufferSize(4096);
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
     Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
@@ -1517,9 +1529,11 @@ void setup()
     (void)lwSelfOk;
 #endif
 
-    // Serialises whole log lines across the two core-pinned radio tasks (§13).
-    // Created first so every later blogf() is atomic.
-    logMutex = xSemaphoreCreateMutex();
+    // One recursive lock serialises ALL console output (blogf evt= lines, the
+    // per-packet decoder dump, and the link/status prints) across the two
+    // core-pinned radio tasks + the link task. Created first so every later log
+    // is atomic.
+    SerialLog::begin();
 
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
@@ -1831,8 +1845,8 @@ void loop()
         for (int i = 2; i < NR; i++) {
             if (g_radioEnabled[i] && g_radio[i] && g_radio[i]->begin()) n++;
         }
-        Serial.printf("[link] co-proc READY gen=%lu -> re-pushed config to %d "
-                      "remote radio(s)\n", (unsigned long)gen, n);
+        SerialLog::logf("[link] co-proc READY gen=%lu -> re-pushed config to %d "
+                        "remote radio(s)\n", (unsigned long)gen, n);
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));

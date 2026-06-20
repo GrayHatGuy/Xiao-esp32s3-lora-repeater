@@ -1,6 +1,7 @@
 // RemoteRadio.cpp — see RemoteRadio.h.
 
 #include "RemoteRadio.h"
+#include "SerialLog.h"    // serialized console path (anti-garble)
 #include <RadioLib.h>     // RADIOLIB_ERR_* status codes
 #include <string.h>
 
@@ -36,11 +37,11 @@ bool RemoteRadio::begin()
         _link.sendFrame(LinkProtocol::MSG_START_RX, (uint8_t)_localRadio,
                         nullptr, 0);
 
-    Serial.printf("[%s] remote begin -> %s  %.3f MHz BW%.1f SF%u CR4/%u "
-                  "%ddBm sync 0x%02X\n",
-                  _name, ok ? "sent" : "LINK FAIL",
-                  _config.frequency, _config.bandwidth, _config.spreadFactor,
-                  _config.codingRate, _config.txPower, _config.syncWord);
+    SerialLog::logf("[%s] remote begin -> %s  %.3f MHz BW%.1f SF%u CR4/%u "
+                    "%ddBm sync 0x%02X\n",
+                    _name, ok ? "sent" : "LINK FAIL",
+                    _config.frequency, _config.bandwidth, _config.spreadFactor,
+                    _config.codingRate, _config.txPower, _config.syncWord);
     return ok;
 }
 

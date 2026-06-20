@@ -1,6 +1,7 @@
 // UartLink.cpp — see UartLink.h.
 
 #include "UartLink.h"
+#include "SerialLog.h"   // serialized console path (anti-garble)
 #include <string.h>
 
 using namespace LinkProtocol;
@@ -127,13 +128,13 @@ void UartLink::handleFrame(uint8_t type, uint8_t radio,
             break;
         }
         case MSG_LOG:
-            Serial.printf("[coproc] %.*s\n", (int)len, (const char *)payload);
+            SerialLog::logf("[coproc] %.*s\n", (int)len, (const char *)payload);
             break;
         case MSG_READY:
             _ready = true;
             _readyGen++;   // co-proc (re)booted — host re-pushes CFG on this edge
-            Serial.printf("[UartLink] co-processor READY (%u B info)\n",
-                          (unsigned)len);
+            SerialLog::logf("[UartLink] co-processor READY (%u B info)\n",
+                            (unsigned)len);
             break;
         case MSG_PONG:
             _lastPongMs = millis();

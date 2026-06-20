@@ -1,6 +1,7 @@
 // NodeDB.cpp — see NodeDB.h for design notes.
 
 #include "NodeDB.h"
+#include "SerialLog.h"   // serialized console path (anti-garble); upsert runs in radioTask
 
 #include <Preferences.h>
 #include <string.h>
@@ -137,9 +138,9 @@ bool upsert(uint32_t nodeId, const char *shortName, const char *longName) {
             for (size_t i = 1; i < s_count; i++) {
                 if (s_table[i].lastSeenMs < s_table[slot].lastSeenMs) slot = i;
             }
-            Serial.printf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
-                          (unsigned long)s_table[slot].nodeId,
-                          (unsigned long)nodeId);
+            SerialLog::logf("[NodeDB] evicting !%08lX to make room for !%08lX\n",
+                            (unsigned long)s_table[slot].nodeId,
+                            (unsigned long)nodeId);
         }
         s_table[slot].nodeId = nodeId;
         strncpy(s_table[slot].shortName, shortName, MAX_SHORT_NAME);
