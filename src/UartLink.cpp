@@ -131,6 +131,7 @@ void UartLink::handleFrame(uint8_t type, uint8_t radio,
             break;
         case MSG_READY:
             _ready = true;
+            _readyGen++;   // co-proc (re)booted — host re-pushes CFG on this edge
             Serial.printf("[UartLink] co-processor READY (%u B info)\n",
                           (unsigned)len);
             break;

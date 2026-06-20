@@ -1813,5 +1813,27 @@ void setup()
 // ============================================================
 void loop()
 {
+    // Self-heal the co-processor link. The co-proc sends MSG_READY at every boot
+    // and then sits idle until it receives CFG_RADIO. If it resets (brown-out,
+    // re-flash, reseated cable) after we already configured it at startup, it
+    // would otherwise stay silent until the HOST is rebooted. So whenever we see
+    // a NEW READY (the generation count moved since we last configured it),
+    // re-push each remote radio's CFG_RADIO + START_RX. The very first READY
+    // after our own boot also lands here, which harmlessly re-sends config and
+    // closes the boot-time race where setup() may have sent CFG before the
+    // co-proc was listening. On a single-board build the link is never opened, so
+    // readyGen() stays 0 and this is a no-op (do-no-harm). (v8.5)
+    static uint32_t s_lastReadyGen = 0;
+    uint32_t gen = g_link.readyGen();
+    if (gen != s_lastReadyGen) {
+        s_lastReadyGen = gen;
+        int n = 0;
+        for (int i = 2; i < NR; i++) {
+            if (g_radioEnabled[i] && g_radio[i] && g_radio[i]->begin()) n++;
+        }
+        Serial.printf("[link] co-proc READY gen=%lu -> re-pushed config to %d "
+                      "remote radio(s)\n", (unsigned long)gen, n);
+    }
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

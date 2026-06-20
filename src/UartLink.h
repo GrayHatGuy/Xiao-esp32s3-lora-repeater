@@ -62,6 +62,10 @@ public:
     int16_t txStatus(int localRadio) const;
 
     bool     isReady()    const { return _ready; }
+    // Monotonic count of MSG_READY frames seen. The co-processor emits one at
+    // every boot, so a change here means it (re)booted — the host watches this
+    // to re-push R3/R4 config after a co-proc reset. (v8.5)
+    uint32_t readyGen()   const { return _readyGen; }
     uint32_t lastPongMs() const { return _lastPongMs; }
 
 private:
@@ -75,6 +79,8 @@ private:
     TaskHandle_t      _taskHandle  = nullptr;
     QueueHandle_t     _rxQueues[MAX_REMOTE_RADIOS] = { nullptr, nullptr };
     volatile bool     _ready       = false;
+    volatile uint32_t _readyGen    = 0;   // bumped on every MSG_READY (co-proc (re)boot);
+                                          // written ONLY by the RX task (single writer)
     volatile uint32_t _lastPongMs  = 0;
     // TX_DONE backpressure state, one slot per remote radio. Written by the RX
     // service task (MSG_TX_DONE), read by RemoteRadio::txDone() on the radio task.
