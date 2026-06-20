@@ -99,8 +99,28 @@ COM13: `QUEUE radio=R1 dst=R2 (MT→MC) / dst=R3 (raw MT) / dst=R4 (MT→MC)` th
 + `TX_DONE radio=R4 result=done` + `TX_DONE radio=R3 result=done`** — a real mesh message bridged host →
 UART → co-proc → transmitted on BOTH R3 and R4 (full mesh, cross-protocol translate + raw repeat), all
 `result=done`. Loop-dup guard also confirmed (the node's own re-broadcasts dropped `drop=loop-dup`). So
-Group 0 (0.1 link-up) + the core of Group A are PROVEN on silicon. **Still pending:** the rest of the
-finer Test A cases (A2 routeMask isolation, etc.) + **Test B (LoRaWAN)** incl. the B3 RX2 downlink-listener.
+Group 0 (0.1 link-up) + the core of Group A are PROVEN on silicon.
+
+**▶⭐ A2 (routeMask isolation) PASSED 2026-06-19.** Owner set the restricted matrix via the portal —
+R1 route=0x2 (→R2 only), R2 route=0x1 (→R1), R3 route=0x8 (→R4), R4 route=0x4 (→R3) — and sourced
+traffic. An MT "Hello" on R1 queued **`dst=R2` only** (vs Test A's full-mesh fan-out to R2+R3+R4);
+an MC "Yo" on R2 queued **`dst=R1` only**. Same radios, same traffic, different mask → different
+fan-out = isolation proven (the generic `g_routeMask[src] & (1<<j)` gate). Gap: no node sits on R3/R4's
+freqs (905.0/909.0), so the R3→R4-only half is proven by the shared code path, not on-air (optional).
+
+**▶⭐ C1 (link resilience) PASSED 2026-06-19 + auto-resend tweak shipped (`4025d60`).** Added "re-send
+R3/R4 config when the host sees a new co-proc READY": `UartLink` counts `MSG_READY` edges (`readyGen()`);
+host `loop()` re-pushes CFG_RADIO+START_RX to the enabled remote radios when that count moves. The first
+READY after boot also re-pushes (closes the setup()-sent-CFG-before-coproc-listening race); single-board
+builds never open the link so `readyGen` stays 0 → no-op (do-no-harm). Builds green all 4 envs;
+adversarial review clean. **Bench: 5× co-proc reset → host stayed up 5/5, R3 re-applied 5/5, R4
+re-applied 4/5; host NEVER rebooted.** Co-proc *debug build* (COM6 hex) confirmed both R3+R4 CFG frames
+arrive and BOTH apply. The intermittent missing console line is purely a **USB-CDC console-output drop
+under the reboot burst** (proof: `READY` line printed only 1/5 yet the re-push — gated on that very
+READY — fired 5/5), NOT a link or recovery failure → confirm C1 recovery by the `cfg ok` lines that DO
+arrive / by traffic, not by every status line. An experimental 3 s settle delay was tried and reverted
+(unnecessary — the host→co-proc config direction is reliable without it). **Still pending (gating): Test
+B (LoRaWAN)** incl. the B3 RX2 downlink-listener.
 v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
 refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
 0.1-0.3+A1+A2+B1). **Release set = 4 envs** (host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*`
