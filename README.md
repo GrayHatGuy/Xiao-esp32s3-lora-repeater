@@ -134,6 +134,110 @@ the serial log:
 [diag] R2 edge module = V1.0  (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)
 ```
 
+## Four radios — two Xiao boards (optional)
+
+> **A single Xiao is still the original 2-radio bridge.** Everything in this
+> section is **opt-in**. Flash one Xiao with the standard env (`xiao_esp32s3` /
+> `xiao_esp32s3_v1_1`), leave Radio 3 / Radio 4 at **None** (their default),
+> attach **no** co-processor, and it runs exactly as the dual-SX1262
+> Meshtastic ↔ MeshCore bridge documented above — same portal, same compile-time
+> config. **Existing 2-radio users upgrade with no changes.** Read on only if you
+> want four radios.
+
+### What it is
+
+You can grow the bridge from two radios to **four sub-GHz SX1262 radios** by
+pairing **two Xiao boards** over a short UART cable:
+
+- **HOST** — the full bridge brain. It owns routing, dedup, the captive portal,
+  and the config for **all four** radios. Its two stacked SX1262 shields are
+  **Radio 1 / Radio 2** (local, exactly as in the 2-radio build).
+- **CO-PROCESSOR** — a second Xiao running a small radio-head firmware. Its two
+  stacked SX1262 shields are **Radio 3 / Radio 4**, driven by the HOST over the
+  UART link. The co-processor has **no portal of its own** — the HOST pushes its
+  RF config across the link at boot.
+
+All four radios are bridged by a **per-radio routing matrix** (a "bridge to" grid
+in the portal), so you choose which radios relay to which — it is not a fixed
+all-to-all mesh.
+
+### Wiring the two boards
+
+Both boards run the same firmware UART pin defaults (each uses **UART1 TX = D6 /
+GPIO43**, **RX = D7 / GPIO44**, **460800 baud**), so the **cable does the
+crossover** — TX on one board must reach RX on the other:
+
+| HOST pin | → | CO-PROCESSOR pin |
+|----------|---|------------------|
+| **D6** (TX) | → | **D7** (RX) |
+| **D7** (RX) | ← | **D6** (TX) |
+| **GND**     | — | **GND** |
+
+That's three wires: D6↔D7 **crossed** both ways, plus a common ground. Each board
+keeps its own two stacked SX1262 shields and its own pair of antennas — **four
+antennas total**. Connect every antenna before powering on.
+
+> ⚠️ A swapped (un-crossed) data pair is the #1 bring-up mistake: the HOST→co-proc
+> direction can look fine while the return line is dead. Double-check HOST **D6** →
+> co-proc **D7** *and* HOST **D7** → co-proc **D6**.
+
+### Flashing both boards
+
+The co-processor firmware is a **separate PlatformIO subproject** in
+[`coproc-xiao-sx1262/`](coproc-xiao-sx1262/); build it with `-d` pointing at that
+folder. **Each board's Radio-2 edge module has its own silkscreen revision**
+([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11)) — pick the
+matching env per board.
+
+```bash
+# --- HOST Xiao (the bridge brain, Radio 1/2 local) ---
+pio run -e xiao_esp32s3      -t upload --upload-port COM_HOST   # V1.0 Radio-2 module
+pio run -e xiao_esp32s3_v1_1 -t upload --upload-port COM_HOST   # V1.1 Radio-2 module
+
+# --- CO-PROCESSOR Xiao (Radio 3/4 radio head) ---
+pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262      -t upload --upload-port COM_COPROC   # V1.0
+pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262_v1_1 -t upload --upload-port COM_COPROC   # V1.1
+```
+
+The co-processor is silent on its own USB port by design — its status is relayed
+to the HOST and printed in the HOST's serial log. When the link comes up the HOST
+prints:
+
+```
+[link] co-proc READY gen=1 -> re-pushed config to 2 remote radio(s)
+[coproc] R3 cfg ok: 905.000 MHz ...
+[coproc] R4 cfg ok: 909.000 MHz ...
+```
+
+> The HOST sends Radio 3 / Radio 4's config when it sees the co-processor come
+> READY, and re-sends it automatically whenever the co-processor reboots — so the
+> power-on order doesn't matter and a co-proc reset self-heals.
+
+### Configuring Radio 3 / Radio 4 + the routing matrix
+
+Everything is set on the **HOST's** captive portal (the co-processor has none):
+
+1. Bring up the HOST portal as usual (fresh/erased board, or reset and press
+   **BOOT** / send a serial char within ~5 s) and join its `LoRa-Bridge-XX` AP.
+2. Radio 3 and Radio 4 now appear alongside Radio 1 / Radio 2, each flagged as a
+   **second-XIAO** radio. Pick a protocol (Meshtastic / MeshCore / Reticulum /
+   LoRaWAN / Custom) and set its RF / channel — leaving a radio on **None** keeps
+   it disabled.
+3. Use the **"Bridge received traffic to"** grid to choose, per source radio,
+   which other radios it relays to. (You can also pre-seed all of this at compile
+   time — see the 4-radio scenario in [`platformio.ini`](platformio.ini) and
+   [§4.8–4.9 of the config manual](CONFIG-USER-MANUAL.md).)
+4. **Save & reboot.** The HOST applies Radio 1 / Radio 2 locally and pushes
+   Radio 3 / Radio 4's config to the co-processor over the link.
+
+### Going back to two radios
+
+Set Radio 3 / Radio 4 to **None** (or just don't attach a co-processor) and the
+HOST is again a plain 2-radio bridge — it never opens the UART link when no remote
+radio is enabled, so there is nothing to undo. The standard single-Xiao image is
+fully backwards compatible: a 2-radio user who flashes this firmware keeps working
+with no co-processor and no config changes.
+
 ## Instructions
 
 > **Fastest path (no toolchain).** **First check your Radio 2 module's silkscreen revision** ([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above) and download the **matching** `vanilla-factory` bin from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest): `…-v1.0-vanilla-factory.bin` for a **V1.0** Radio-2 module, `…-v1.1-vanilla-factory.bin` for **V1.1**. Connect both antennas and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 <bin>`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 4** (bridge setup). The numbered steps below are for building from source.

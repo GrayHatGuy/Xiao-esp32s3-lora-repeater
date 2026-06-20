@@ -15,6 +15,8 @@ and [§8](#8-preloading-with-compile-time-build-flags) shows ready-made example 
 2. [How to read this manual](#2-how-to-read-this-manual)
 3. [Top frame — identity, region & bridge behaviour](#3-top-frame--identity-region--bridge-behaviour)
 4. [Per-radio configuration](#4-per-radio-configuration)
+   - [4.8 Radio 3 & Radio 4 (the second XIAO)](#48-radio-3--radio-4-the-second-xiao)
+   - [4.9 Routing matrix — "Bridge received traffic to"](#49-routing-matrix--bridge-received-traffic-to)
 5. [LoRaWAN ABP devices](#5-lorawan-abp-devices)
 6. [Saving](#6-saving)
 7. [Example setups](#7-example-setups)
@@ -35,7 +37,9 @@ and [§8](#8-preloading-with-compile-time-build-flags) shows ready-made example 
   web request is redirected to the single-page form at **`192.168.4.1`**.
 
 The form is one long page: **identity → device region → bridge behaviour → Radio 1
-→ Radio 2 → LoRaWAN ABP devices → Save**. Hit **Save & reboot** to apply.
+→ Radio 2 → Radio 3 → Radio 4 → LoRaWAN ABP devices → Save**. Each radio also has a
+**routing matrix** row. Hit **Save & reboot** to apply. (On a single Xiao, leave Radio 3
+and Radio 4 set to `None`.)
 
 ---
 
@@ -84,15 +88,22 @@ The form is one long page: **identity → device region → bridge behaviour →
 
 ## 4. Per-radio configuration
 
-The bridge has two radios. **Radio 1** is the B2B shield; **Radio 2** is the edge
-module. Each radio picks a **Protocol**, which shows/hides the fields below.
+A single Xiao has two radios: **Radio 1** (the B2B shield) and **Radio 2** (the edge
+module). Adding a second Xiao as a **radio co-processor** over a UART crossover gives you
+**Radio 3** and **Radio 4** as well (see [§4.8](#48-radio-3--radio-4-the-second-xiao)).
+Each radio picks a **Protocol**, which shows/hides the fields below.
+
+> **Classic 2-radio bridge:** leave **Radio 3** and **Radio 4** set to **`None`** (their
+> default) and you have the original two-radio Meshtastic ↔ MeshCore bridge — no second
+> Xiao, no UART link, no behaviour change. The Radio 3/4 fields and the routing matrix
+> below simply do nothing, and existing saved configs upgrade unchanged.
 
 ### 4.1 Fields common to every radio
 
 These appear (in this order) for most protocols; each protocol section notes which
 it shows and any special behaviour.
 
-| Field | What it is | Build flag (per radio `N` = 1 or 2) |
+| Field | What it is | Build flag (per radio `N` = 1–4) |
 |---|---|---|
 | **Protocol** | What the radio speaks: `Meshtastic`, `MeshCore`, `Reticulum`, `LoRaWAN`, `Custom`, or `None`. Picking it sets the LoRa **sync word** automatically (except Custom). | `LORA_RADIO N _SYNC_WORD` (0x2B MT · 0x12 MC · 0x42 RNS · 0x34 LoRaWAN) |
 | **Channel name** | A display/label for the channel. For Meshtastic it is also part of the channel hash, so it matters on air (see §4.2). Locked or `N/A` for some protocols. | `LORA_RADIO N _CHANNEL_NAME` (or the global `BRIDGE_MT_CHANNEL_NAME` / `BRIDGE_MC_CHANNEL_NAME`) |
@@ -181,6 +192,69 @@ it shows and any special behaviour.
 
 - **`None (disable radio)`** turns the radio off (single-radio / monitor mode). No
   other fields are shown. At least one radio must be active.
+
+### 4.8 Radio 3 & Radio 4 (the second XIAO)
+
+Radio 3 and Radio 4 are the two SX1262 radios on an **optional second Xiao** wired as a
+**radio co-processor**. The main (host) Xiao runs the whole bridge — routing, dedup, this
+portal, and the config for *all four* radios — and drives Radio 3 / Radio 4 over a **UART
+crossover link** to the co-processor. The second Xiao has no portal of its own; you
+configure R3/R4 here, on the host.
+
+- **Same fields as Radio 1 / Radio 2.** Protocol, Channel name/key, Frequency, TX power,
+  Bandwidth/SF/CR and Sync word behave exactly as in [§4.1](#41-fields-common-to-every-radio)
+  and the per-protocol sections above — being remote changes nothing about how you fill them.
+- **The "second XIAO" hint.** In the portal the Radio 3 / Radio 4 headings carry a reminder
+  that they live on the second Xiao, reached over the UART crossover link.
+- **Default = `None`.** Out of the box both R3/R4 are **`None (disable radio)`**, so a lone
+  host Xiao never opens the UART link and behaves as the classic 2-radio bridge. Set a
+  protocol on R3 and/or R4 only when the co-processor board is attached.
+- **Wiring + flashing.** Both boards' UART1 — **D6 (TX) ↔ D7 (RX)**, wired **crossed**
+  (host D6 → co-proc D7, host D7 → co-proc D6, GND ↔ GND) at **460800 baud**. Flash the
+  co-processor firmware from [`coproc-xiao-sx1262/`](coproc-xiao-sx1262/) (env
+  `xiao_coproc_sx1262` or `…_v1_1`). See the
+  [README](README.md#four-radios--two-xiao-boards-optional) for the full wiring + flashing steps.
+
+> **Reboot the host after resetting the co-processor.** The host pushes the R3/R4 config on
+> link-up and re-sends it automatically when it sees the co-processor come back.
+
+**Compile-time defaults** (per radio `N` = 3 or 4; mirror the R1/R2 flags in
+[§8](#8-preloading-with-compile-time-build-flags)):
+
+| Build flag | What it is |
+|---|---|
+| `LORA_RADIO N _ENABLE` | Promotes the slot off `None` at first boot (otherwise R3/R4 default to `None`). |
+| `LORA_RADIO N _FREQUENCY` / `_BANDWIDTH` / `_SPREAD_FACTOR` / `_CODING_RATE` / `_TX_POWER` / `_SYNC_WORD` | Same RF fields as R1/R2 ([§4.1](#41-fields-common-to-every-radio)). |
+| `LORA_RADIO N _CHANNEL_NAME` / `_CHANNEL_KEY` | Per-radio channel preload (same as R1/R2). |
+| `LORA_RADIO N _ROUTE_MASK` | Pre-seed this radio's routing-matrix row (see [§4.9](#49-routing-matrix--bridge-received-traffic-to)). |
+| `BRIDGE_LINK_TX_PIN` (43 = D6) / `BRIDGE_LINK_RX_PIN` (44 = D7) / `BRIDGE_LINK_BAUD` (460800) | The host↔co-processor UART crossover link; change only if you re-pin the cable. |
+
+### 4.9 Routing matrix — "Bridge received traffic to"
+
+Each radio has a **"Bridge received traffic to"** row: one checkbox per *other* radio.
+Ticking a box means *traffic this radio receives is forwarded out that radio* (with
+cross-protocol translation applied automatically per destination). This is the **per-radio
+routing matrix** — you decide exactly which radios feed which.
+
+- Each radio shows checkboxes for every radio **except itself** (a radio never bridges to
+  itself). With four radios active you get up to three checkboxes per radio.
+- **Cross-protocol translation is automatic** — if R1 is Meshtastic and you tick R2
+  (MeshCore), MT → MC translation happens on that hop. Loops are dropped by the content-hash
+  dedup, so it is safe to tick generously.
+- **Default = the classic R1 ↔ R2 crossover.** On a fresh board R1 bridges to R2 and R2 to
+  R1; R3/R4 bridge to nothing (they are `None`). So the default 2-radio bridge routes exactly
+  as it always did.
+
+| You want | Set the checkboxes |
+|---|---|
+| Classic 2-radio bridge (default) | R1 → R2, R2 → R1; R3/R4 = `None`. |
+| Full 4-radio mesh | On each radio, tick all three other radios. |
+| Two independent pairs | R1 ↔ R2 only, and R3 ↔ R4 only. |
+| One-way feed (monitor R3 onto the R1 mesh) | Tick **R1** on Radio 3; don't tick R3 on Radio 1. |
+
+> **Same-channel guard:** if a *routed* pair would put two Meshtastic (or two MeshCore)
+> radios on the identical channel + frequency, Save rejects it — give them different
+> frequencies or don't route between them.
 
 ---
 
@@ -310,8 +384,8 @@ To change anything later, re-enter the portal ([§1](#1-reaching-the-config-port
 
 ## 7. Example setups
 
-Three common bridges. Set Radio 1 and Radio 2 as shown, then **Save & reboot**.
-Each can also be **preloaded at compile time** — see [§8](#8-preloading-with-compile-time-build-flags).
+Four common bridges. Set the radios as shown, then **Save & reboot**. Each can also be
+**preloaded at compile time** — see [§8](#8-preloading-with-compile-time-build-flags).
 
 ### A. Meshtastic ↔ MeshCore  *(the shipped default)*
 
@@ -354,6 +428,22 @@ Bridges a public Meshtastic channel to a private one. The two radios must be on
 rejected). Enter the private channel's name + PSK on Radio 2 (entering a custom PSK
 unlocks the Channel name field).
 
+### D. Four-radio bridge (second XIAO)  *(v9.0)*
+
+Attach a second Xiao as the radio co-processor ([§4.8](#48-radio-3--radio-4-the-second-xiao)),
+then configure all four radios — for example R1 Meshtastic, R2 MeshCore, R3 Reticulum,
+R4 LoRaWAN.
+
+| | Radio 1 | Radio 2 | Radio 3 (2nd Xiao) | Radio 4 (2nd Xiao) |
+|---|---|---|---|---|
+| Protocol | Meshtastic | MeshCore | Reticulum | LoRaWAN |
+| Bridge received traffic to | R2, R3, R4 | R1, R3, R4 | R1, R2 | R1, R2 |
+
+Use the **routing matrix** ([§4.9](#49-routing-matrix--bridge-received-traffic-to)) to pick
+which radios feed which — the table above is a full 4-way mesh; tick fewer boxes for
+independent pairs or one-way feeds. **Leaving R3/R4 = `None` gives you example A again**
+(the classic 2-radio bridge), no second Xiao required.
+
 ---
 
 ## 8. Preloading with compile-time build flags
@@ -367,6 +457,9 @@ above as commented `-D` blocks.
 - **Scenario A** is the active default — nothing to do.
 - For **Scenario B** or **C**: comment out the active *Radio 1/2 settings* block and
   uncomment the scenario block, then `pio run -e xiao_esp32s3` (or `…_v1_1`).
+- For **Scenario D (4-radio)**: uncomment the **"v9.0 — READY-MADE 4-RADIO (DUAL-XIAO)
+  SCENARIO"** block higher up in `platformio.ini` to enable + route R3/R4, then flash the
+  second Xiao with the co-processor env (see [§4.8](#48-radio-3--radio-4-the-second-xiao)).
 - **Per-radio channels:** `LORA_RADIO1_CHANNEL_NAME` / `LORA_RADIO1_CHANNEL_KEY` and
   the Radio 2 equivalents let each radio preload a *distinct* channel (needed for
   Scenario C, where both radios are Meshtastic on different channels).
@@ -431,7 +524,7 @@ sanity, and TX-power range).
 
 ---
 
-*This manual covers firmware v8.4.1. For protocol/routing internals see
+*This manual covers firmware v9.0. For protocol/routing internals see
 [README.md](README.md#routing--protocol-support-current-functionality); for the
 LoRaWAN ABP encoder design see [ABP-LORAWAN-SPEC.md](ABP-LORAWAN-SPEC.md); for
 ChirpStack integration see [tools/chirpstack/README.md](tools/chirpstack/README.md).*
