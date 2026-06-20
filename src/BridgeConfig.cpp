@@ -322,6 +322,17 @@ static void loadDefaults() {
               (uint8_t)(LORA_RADIO4_CODING_RATE), (int8_t)(LORA_RADIO4_TX_POWER),
               PROTO_NONE);
 
+    // Optional first-boot ENABLE of R3/R4 (v8.5 bench): the remote slots seed to
+    // PROTO_NONE for do-no-harm; defining these promotes a slot to the protocol
+    // implied by its sync word, so a bench env can stand up a 4-radio config
+    // without the captive portal. Do-no-harm: only applied when the macro is set.
+#ifdef LORA_RADIO3_ENABLE
+    s_cfg.radio[2].protocol = protocolFromSync((uint8_t)LORA_RADIO3_SYNC_WORD);
+#endif
+#ifdef LORA_RADIO4_ENABLE
+    s_cfg.radio[3].protocol = protocolFromSync((uint8_t)LORA_RADIO4_SYNC_WORD);
+#endif
+
     // Optional PER-RADIO channel name/key first-boot overrides (v8.4.1 for R1/R2,
     // extended to R3/R4 in v8.5). The BRIDGE_MT_*/BRIDGE_MC_* defaults above are
     // shared by protocol, so two same-protocol radios would otherwise collide on
@@ -356,6 +367,23 @@ static void loadDefaults() {
     // routes until enabled + configured in the portal.
     s_cfg.radio[0].routeMask = (uint8_t)(1u << 1);   // R1 -> R2
     s_cfg.radio[1].routeMask = (uint8_t)(1u << 0);   // R2 -> R1
+
+    // Optional per-radio routeMask first-boot override (v8.5 bench): bit j => this
+    // radio bridges its RX to radio j (bit0=R1 … bit3=R4). Lets a bench env set
+    // routing the portal would otherwise own (e.g. R1->R3 = 0x04). Do-no-harm:
+    // only applied when the macro is defined.
+#ifdef LORA_RADIO1_ROUTE_MASK
+    s_cfg.radio[0].routeMask = (uint8_t)(LORA_RADIO1_ROUTE_MASK);
+#endif
+#ifdef LORA_RADIO2_ROUTE_MASK
+    s_cfg.radio[1].routeMask = (uint8_t)(LORA_RADIO2_ROUTE_MASK);
+#endif
+#ifdef LORA_RADIO3_ROUTE_MASK
+    s_cfg.radio[2].routeMask = (uint8_t)(LORA_RADIO3_ROUTE_MASK);
+#endif
+#ifdef LORA_RADIO4_ROUTE_MASK
+    s_cfg.radio[3].routeMask = (uint8_t)(LORA_RADIO4_ROUTE_MASK);
+#endif
 }
 
 static void terminateAll() {
