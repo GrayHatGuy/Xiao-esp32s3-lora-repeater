@@ -18,7 +18,7 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 | Item | Value |
 |---|---|
 | **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `fbd64e3`). Combine TWO Xiao dual-SX1262 bridges into ONE **sub-GHz** 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done + the F scrub done; all envs build green.** `BENCH-v8.5.md` is the bench plan. Awaiting: owner finalizes the bench list + runs it → remaining docs + tag v8.5 (owner-gated). See the v8.5 section below. **OTAA deferred** until after this. |
+| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `fbd64e3`). Combine TWO Xiao dual-SX1262 bridges into ONE **sub-GHz** 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done + the F scrub done; all envs build green.** `BENCH-v9.0.md` is the bench plan. Awaiting: owner finalizes the bench list + runs it → remaining docs + tag v8.5 (owner-gated). See the v8.5 section below. **OTAA deferred** until after this. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -72,7 +72,7 @@ Branch `dev-2xiao-4sx1262` off `main`@`0a036d0`. Target tag **`v8.5 "2xiao_4sx12
 - 🔄 **F — IN PROGRESS.** ✅ **Scrub DONE (`6cce3da`):** removed ALL 2.4 GHz / LR1121 / T-Lora-Dual /
   S-band refs — incl. the `LinkProtocol::Band` enum AND the `band` wire field of CfgRadio (RemoteRadio
   band param/member gone too). v8.5 is **sub-GHz only**; band was always SUBGHZ so no functional change;
-  host+coproc rebuilt consistently. ✅ **`BENCH-v8.5.md` written (`fbd64e3`):** bench plan — Group 0
+  host+coproc rebuilt consistently. ✅ **`BENCH-v9.0.md` written (`fbd64e3`):** bench plan — Group 0
   (link/config/do-no-harm), A (full-mesh A1 / restricted-matrix A2 + cross-board + dedup), B (uplink
   encode+sniffer-decode B1 / 2 devices + **B3 RX2 923.3/SF12 downlink-listener** + B4 mesh-board +
   LoRaWAN-board split), C (link resilience / load); gating = 0.1-0.3+A1+A2+B1; OTAA-downlink rationale.
@@ -153,7 +153,7 @@ Remaining = recommended-not-gating (A3 cross-board, B3 RX2 923.3/SF12 downlink-l
 (README dual-Xiao wiring, CONFIG-USER-MANUAL R3/R4 + routing matrix, CHANGELOG) → then tag **v8.5**
 (owner-gated; never force-push main).
 v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
-refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
+refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v9.0.md`** = the bench plan (gating =
 0.1-0.3+A1+A2+B1). **Release set = 4 envs** (host V1.0/V1.1 + coproc V1.0/V1.1); the `_lwabp` + `bench_*`
 envs are dev/bench, kept intentionally (owner Option A) so anyone can recreate the bench. After the gating
 bench passes → remaining docs

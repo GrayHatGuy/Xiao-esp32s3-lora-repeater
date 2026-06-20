@@ -1,4 +1,4 @@
-# BENCH-v8.5.md — "2xiao_4sx1262" bench verification
+# BENCH-v9.0.md — "2xiao_4sx1262" bench verification
 
 双小型处理器全向四路射频亚千兆赫兹全向桥接中继器
 

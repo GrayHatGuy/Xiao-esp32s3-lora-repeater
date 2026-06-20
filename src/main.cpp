@@ -1516,7 +1516,7 @@ void setup()
     Serial.setTxBufferSize(4096);
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
-    Serial.println("\n=== XIAO ESP32S3 Dual SX1262 Cross-Protocol Bridge (v8.2) ===");
+    Serial.println("\n=== XIAO ESP32S3 SX1262 Cross-Protocol Bridge (v9.0) ===");
 
 #if BRIDGE_LW_ENC_SELFTEST
     // ABP P1/#2: prove the ABP encoder crypto on-device before it ever emits. A

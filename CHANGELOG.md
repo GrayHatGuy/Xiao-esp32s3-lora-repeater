@@ -1,5 +1,43 @@
 # Changelog
 
+## v9.0 — four-radio bridge (2xiao_4sx1262)
+
+**Status: SHIPPED 2026-06-20 (tag `v9.0`).** Two Xiao boards can now be linked over a UART
+crossover into one **four-radio** sub-GHz bridge — a *master* (R1/R2 local) plus a *radio
+co-processor* (R3/R4) — driven by a per-radio routing matrix. **Fully backwards compatible:**
+a single Xiao still runs as the original two-radio Meshtastic ↔ MeshCore bridge with no
+changes (Radio 3 / Radio 4 default to disabled, no co-processor, no UART link opened), and
+existing 2-radio configs migrate unchanged (`BridgeConfig` schema **v4 → v5**). Builds green:
+`xiao_esp32s3` / `xiao_esp32s3_v1_1` (master) + `xiao_coproc_sx1262` / `xiao_coproc_sx1262_v1_1`
+(co-processor). Bench: the gating set (0.1–0.3 / A1 / A2 / B1) PASSED on the 2-board rig —
+see [`BENCH-v9.0.md`](BENCH-v9.0.md).
+
+- **Four radios over a UART crossover.** A second Xiao runs a lightweight **radio
+  co-processor** firmware ([`coproc-xiao-sx1262/`](coproc-xiao-sx1262/)) driving its two SX1262
+  as Radio 3 / Radio 4; the master Xiao owns routing, dedup, the captive portal, and the config
+  for all four radios and drives R3/R4 over the link. Crossover wiring: master `D6` (GPIO43, TX)
+  ↔ co-proc `D7` (GPIO44, RX), master `D7` ↔ co-proc `D6`, GND ↔ GND, 460800 baud — the cable
+  does the crossover.
+- **Per-radio routing matrix.** A portal "bridge received traffic to" grid picks, per radio,
+  which of the others it relays to (`R1→R2/R3/R4`, etc.) — a full four-way mesh, independent
+  pairs, or one-way feeds rather than a fixed all-to-all. `BridgeConfig` schema **v4 → v5**
+  (4-radio table + per-radio `routeMask`); a clean v2/v3/v4 → v5 migration preserves R1/R2 + the
+  R1↔R2 crossover and defaults R3/R4 off.
+- **The master self-heals the link.** It pushes R3/R4 config when it sees the co-processor come
+  up and re-pushes automatically on a co-processor reboot; if R3/R4 are *enabled* but no
+  co-processor is attached, remote transmits fail fast instead of stalling — a single-board
+  build is never slowed.
+- **Console logging serialized.** All task-context serial output now goes through one shared
+  lock, so the two radio tasks + the link task no longer interleave (garble) mid-line on the USB
+  console; the USB TX buffer was enlarged to absorb bursts.
+- **Co-processor V1.0 / V1.1 variants.** The co-processor ships in both Radio-2 edge-module
+  revisions (`xiao_coproc_sx1262` / `_v1_1`), matching the master's V1.0/V1.1 split.
+- **Docs.** README gains the four-radio wiring / parts / build / routing content woven into the
+  existing sections; [`CONFIG-USER-MANUAL.md`](CONFIG-USER-MANUAL.md) gains §4.8 (Radio 3/4) +
+  §4.9 (routing matrix) + a four-radio example; `platformio.ini` gains a commented "Scenario D"
+  four-radio compile-time preset plus bench-config flags (`LORA_RADIO{3,4}_ENABLE`,
+  `LORA_RADIO{1..4}_ROUTE_MASK`).
+
 ## v8.4.1 — captive-portal UI cleanup + user manual + ChirpStack tooling (UI_UM_config)
 
 **Status: SHIPPED 2026-06-18 (tag `v8.4.1-UI_UM_config`).** A UI / docs / tooling

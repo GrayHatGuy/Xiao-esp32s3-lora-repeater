@@ -1,14 +1,18 @@
 # Xiao-esp32s3-lora-repeater
 
-Xiao ESP32S3 with dual SX1262 radio SPI cross-band repeater.
+Xiao ESP32S3 LoRa cross-band repeater — **two SX1262 radios on one Xiao**, or **four** by linking a second Xiao over a UART crossover.
 
-<img width="50%" alt="PXL_20260507_021829300~2" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
+<img width="50%" alt="Two SX1262 radios stacked on a single Xiao ESP32S3 (2-radio bridge)" src="https://github.com/user-attachments/assets/b9e68624-3cb4-46a3-9c2f-4927e6a8fdf2" />
 
-###### *touched by claude but not by epstein*
+*2-radio bridge — two SX1262 shields on one Xiao.*
+
+<img width="50%" alt="Four-radio bridge — two Xiao ESP32S3 boards, each with stacked SX1262 shields, joined by a UART crossover on a breadboard" src="images/4-radio-dual-xiao.jpg" />
+
+*4-radio bridge — two Xiao linked by a UART crossover (optional).*
 
 ## Introduction / Background
 
-A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles.
+A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles. **Optionally, two of these boards can be linked over a short UART crossover to expand the bridge to four radios** — one Xiao acts as the *master* (its captive portal owns the config for all four radios) and the second as a *radio co-processor* — for a four-radio omnidirectional repeater. A single Xiao still runs as the original two-radio bridge with no changes; see **Parts**, **Wiring**, and the [config user manual](CONFIG-USER-MANUAL.md) for the four-radio option.
 
 Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (e.g. Meshtastic↔MeshCore) or *same-protocol between two channels* (e.g. a private channel bridged to the public one). Each radio runs one of six protocols: **Meshtastic**, **MeshCore**, **Reticulum**, **LoRaWAN** (keyless tap + keyed ABP uplink encoder), **Custom** (any user-defined RF plan / sync word), or **None** (radio disabled). Everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal; see the **[config user manual](CONFIG-USER-MANUAL.md)** for a field-by-field walkthrough and compile-time preloading. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy.
 
@@ -30,12 +34,13 @@ Every received packet is decoded once, run through a content-hash loop/dup guard
 - **Real timestamps without an RTC (clock-learn).** The bridge has no RTC/NTP, so it *learns* wall-clock time — from inbound MeshCore packet timestamps (**v8.2.1**) and from Meshtastic `POSITION_APP` time (**v8.3**) — and stamps that real Unix time onto bridged MeshCore `GRP_TXT` (surfaced as `mcts=` and a one-time `evt=CLOCK`). Before this, `MT→MC` / `RNS→MC` hardcoded the timestamp to 0 and clients showed *1969*. A cold boot still stamps `0` only until the first timestamped packet calibrates it (inherent without an RTC).
 - **Same-protocol transparent repeat spans every protocol.** Two radios on the *same* protocol + channel at *different* frequencies raw-repeat byte-for-byte — a range extender — for Meshtastic, MeshCore, **Reticulum (`RNS↔RNS`, v8.3)** and **LoRaWAN (`LW↔LW`, v8.3)**. The RNS / LoRaWAN repeats are byte-exact (no header mutation — a LoRaWAN MIC would break otherwise), loop-bounded by the shared content-hash dedup + the airtime throttle.
 - **LoRaWAN: keyless tap, plus a keyed encoder (v8.4).** A `0x34` radio runs a keyless capture / metadata-summary / `LW↔LW` relay tap (**v8.3**). **v8.4** adds an opt-in **keyed ABP uplink encoder**: with ABP credentials set, `MT/MC → LoRaWAN` becomes a real ABP-uplink encode that RF-re-emits to a gateway → ChirpStack LNS (**hardware-verified on air** — MT *and* MC frames decrypt back, MIC valid; only the live-ChirpStack ingestion bench is open — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)); with no keys it stays the keyless `no-lw-encoder` drop. The two modes are mutually exclusive per radio, selected by ABP config — and as of v8.4 the encoder ships in the standard V1.0/V1.1 build (dormant until configured), so a stock MT/MC bridge is **behaviourally** unaffected.
+- **Per-radio routing matrix (4-radio).** With a second Xiao linked over the UART crossover you get four radios, and each one picks which of the others it bridges its received traffic to — a **"bridge received traffic to"** grid in the portal: `R1 → R2/R3/R4`, `R2 → R1/R3/R4`, `R3 → R1/R2/R4`, `R4 → R1/R2/R3`, each destination selectable independently. So you choose the topology — full four-way mesh, two independent pairs, or a one-way feed — rather than a fixed all-to-all. The default two-radio bridge is just `R1 ↔ R2` with R3/R4 disabled; cross-protocol translation and the loop/dup guard apply on every hop exactly as above.
 
 **Everything above is tunable at compile time.** All flags are optional, each documented with its compiled-in default in [`platformio.ini`](platformio.ini); see the **[config user manual](CONFIG-USER-MANUAL.md)** for the full build-flag catalog.
 
 All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependencies beyond `jgromes/RadioLib` (pinned `7.7.0`).
 
-**What's new in each release:** see [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. The latest is the **v8.4 LoRaWAN ABP uplink encoder** ([v8.4 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan)) — **hardware-verified on air** (Meshtastic *and* MeshCore → valid ABP uplinks, decrypt-verified, MIC-valid; **12/16 bench tests pass**, only live-ChirpStack ingestion remaining — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)), plus a captive-portal **auto-fill of RF defaults on protocol switch** UX fix. Built on the **[v8.3.1 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3.1)** (Radio-2 V1.0/V1.1 fix). Design + bench docs: [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md), [`BENCH-v8.4.md`](BENCH-v8.4.md), [`BENCH-RESULTS.md`](BENCH-RESULTS.md).
+**What's new in each release:** see [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. The latest is **v9.0 — the optional four-radio bridge**: link a second Xiao over a UART crossover for **four sub-GHz SX1262 radios** driven by a per-radio routing matrix, while a single Xiao stays **fully backwards-compatible** as the original two-radio bridge (R3/R4 default to disabled — see **[Wiring](#wiring)** and the [config user manual](CONFIG-USER-MANUAL.md)). It builds on the **v8.4 LoRaWAN ABP uplink encoder** ([v8.4 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan)) — **hardware-verified on air** (Meshtastic *and* MeshCore → valid ABP uplinks, decrypt-verified, MIC-valid; only live-ChirpStack ingestion remaining — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)) — and the **[v8.3.1 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3.1)** (Radio-2 V1.0/V1.1 fix). Design + bench docs: [`CONFIG-USER-MANUAL.md`](CONFIG-USER-MANUAL.md), [`BENCH-v9.0.md`](BENCH-v9.0.md) (four-radio bench), [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
 
 **Per-protocol summary** — the bridge dispatches by **LoRa sync word**; each radio is assigned a protocol in the portal, and a received packet is decoded once, run through the content-hash loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a CAD-gated non-blocking transmit. Source identity is preserved/reconstructed across the bridge (see [`V8.2-SPEC.md`](V8.2-SPEC.md)).
 
@@ -58,6 +63,8 @@ Per-radio fields, the LoRaWAN ABP-device section and every build flag are docume
 | [Wio SX1262 for Xiao (edge-pin)](https://www.seeedstudio.com/Wio-SX1262-for-XIAO-p-6379.html) | Radio 2, sits on the Xiao's edge-pin header |
 | 2 × LoRa antennas tuned for your ISM band | **Don't skip this.** Running an SX1262 at +20 dBm into a missing antenna kills your TX range and risks the PA |
 | USB-C cable | Power, programming, serial monitor |
+
+**Optional — four-radio bridge.** Add a **second** of everything above: another *Wio SX1262 with Xiao (B2B)* kit and a *Wio SX1262 for Xiao (edge)* for Radios 3/4, plus **two more antennas**. The two boards are joined with **3 jumper wires** (TX, RX, GND) for the UART crossover; power each board from its own USB-C, or jumper a shared 3V3 rail (see [Wiring](#wiring)). A small breadboard makes the crossover tidy.
 
 *Some assembly required.*
 
@@ -87,6 +94,27 @@ The table shows Radio 2 for **both module revisions** — build the env that mat
 | VCC        | 3V3         | 3V3            | 3V3            | |
 | GND        | GND         | GND            | GND            | |
 
+**Optional — four-radio UART crossover.** For the four-radio bridge the two Xiao
+boards are joined on their `Serial1` UART (`D6`/`D7`). Both boards run the same
+firmware pin defaults, so **the cable does the crossover** — TX on one must reach
+RX on the other:
+
+| Master Xiao | → | Co-processor Xiao | Notes |
+|-------------|---|-------------------|-------|
+| **D6** / GPIO43 (TX) | → | **D7** / GPIO44 (RX) | crossed |
+| **D7** / GPIO44 (RX) | ← | **D6** / GPIO43 (TX) | crossed |
+| **GND** | — | **GND** | **required** — common ground |
+| *3V3 or 5V* | — | *3V3 or 5V* | *only if powering both from one supply (see below)* |
+
+- **Link speed** 460800 baud (override `BRIDGE_LINK_TX_PIN` / `_RX_PIN` / `_BAUD`).
+- **Power:** simplest is a **separate USB-C to each board**. To run both from one
+  supply, also jumper a **shared 3V3 (or 5V) rail** between them in addition to GND.
+- Each board keeps its own two SX1262 shields + antennas — **four antennas total**.
+
+> ⚠️ The data pair must be **crossed**: Master **D6 → co-proc D7** *and* Master
+> **D7 → co-proc D6**. An un-crossed pair often looks half-working — one direction
+> fine, the return line dead.
+
 **Key points**
 
 - The two radios **share one SPI bus** (SCK/MOSI/MISO); the firmware serializes
@@ -97,6 +125,12 @@ The table shows Radio 2 for **both module revisions** — build the env that mat
 - The TCXO is internal to each Wio SX1262 module (1.8 V) — not wired to a GPIO.
 - **Connect both u.FL antennas before power-on** — transmitting into a missing
   antenna risks the PA.
+- **Four-radio option:** the second Xiao runs a small co-processor firmware and
+  has **no portal of its own** — the master Xiao owns the config for all four
+  radios and pushes Radio 3 / Radio 4's RF to the co-processor over the UART link
+  at boot (and re-pushes automatically if the co-processor reboots). Leave Radio 3
+  / Radio 4 **disabled** (the default) and the master never opens the link — it's a
+  plain two-radio bridge.
 
 ### Radio 2 module revision (V1.0 vs V1.1)
 
@@ -127,6 +161,17 @@ pio run -e xiao_esp32s3      -t upload --upload-port COMx
 pio run -e xiao_esp32s3_v1_1 -t upload --upload-port COMx
 ```
 
+For the **optional four-radio bridge**, the second (co-processor) Xiao is its own
+PlatformIO sub-project — build it with `-d coproc-xiao-sx1262`, picking the env that
+matches *that board's* Radio-2 silkscreen:
+
+```bash
+# Co-processor — V1.0 edge module:
+pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262      -t upload --upload-port COMx
+# Co-processor — V1.1 edge module:
+pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262_v1_1 -t upload --upload-port COMx
+```
+
 The firmware prints the revision it was built for at boot, so you can confirm from
 the serial log:
 
@@ -142,14 +187,14 @@ the serial log:
 2. **Install [PlatformIO](https://platformio.org/install)** — the VS Code extension is the easiest path.
 3. **Build, flash & monitor.** Read the **Radio 2** silkscreen and pick the matching env (see [Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above): **V1.0** → `xiao_esp32s3` (default), **V1.1** → `xiao_esp32s3_v1_1`. Then erase, clean-build, flash and open the serial monitor (replace `COMx` with your port):
    ```bash
-   # --- V1.0 Radio-2 module (default) ---
+   # --- MASTER Xiao — V1.0 Radio-2 module (default) ---
    pio run -e xiao_esp32s3 -t erase --upload-port COMx     # wipe flash + NVS (boots into the portal)
    pio run -e xiao_esp32s3 -t clean
    pio run -e xiao_esp32s3
    pio run -e xiao_esp32s3 -t upload --upload-port COMx
    pio device monitor --port COMx
 
-   # --- V1.1 Radio-2 module ---
+   # --- MASTER Xiao — V1.1 Radio-2 module ---
    pio run -e xiao_esp32s3_v1_1 -t erase --upload-port COMx
    pio run -e xiao_esp32s3_v1_1 -t clean
    pio run -e xiao_esp32s3_v1_1
@@ -161,8 +206,21 @@ the serial log:
    default (V1.0): [diag] R2 edge module = V1.0 (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)
    V1.1:           [diag] R2 edge module = V1.1 (NSS=4 DIO1=1 RST=3 BUSY=2 RF_SW=5)
    ```
+   **Four-radio bridge — also flash the co-processor.** The second Xiao is a
+   separate sub-project; build it with `-d coproc-xiao-sx1262` and the env matching
+   *its own* Radio-2 silkscreen, on its own COM port:
+   ```bash
+   # Co-processor — V1.0 edge module (use xiao_coproc_sx1262_v1_1 for a V1.1 module)
+   pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262 -t erase  --upload-port COM_COPROC
+   pio run -d coproc-xiao-sx1262 -e xiao_coproc_sx1262 -t upload --upload-port COM_COPROC
+   ```
+   The co-processor has no portal and is **silent on its own USB** — it relays its
+   status to the master's serial log. With the UART crossover wired, the master
+   prints `[coproc] R3 cfg ok …` / `R4 cfg ok …` once the link comes up.
 4. **Bridge setup.** A fresh or erased board first-boots into an open WiFi access point named `LoRa-Bridge-XX`; join it from a phone or laptop and any web request redirects to the config form at `192.168.4.1`. There you set device region, per-radio protocol / RF / channel, identity, and the LoRaWAN ABP devices. To re-enter the portal on a configured board, reset it and press **BOOT** or send any serial character within ~5 s (or erase it). **For the full field-by-field walkthrough — every field, its build flag, the LoRaWAN ABP details, and ready-made example setups — see the [config user manual](CONFIG-USER-MANUAL.md).**
-5. **Serial Debug Monitor.** Watch the bridge over USB serial:
+5. **Serial Debug Monitor.** Watch the bridge over USB serial. On a four-radio
+   bridge, **monitor the master Xiao** — the co-processor relays its logs to the
+   master (as `[coproc] …`), so its own USB port stays quiet:
    ```bash
    pio device monitor --port COMx
    ```

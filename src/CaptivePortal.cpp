@@ -349,6 +349,9 @@ static void appendRadio(String &page, int n) {
     uint8_t routeMask = BridgeConfig::radioRouteMask(idx);
     for (int j = 1; j <= BridgeConfig::NUM_RADIOS; j++) {
         if (j == n) continue;
+        // Skip a disabled (None) destination: routing to it is a runtime no-op,
+        // so a 2-radio build (R3/R4 = None) shows no dead R3/R4 checkboxes. (v9.0)
+        if (BridgeConfig::radioProtocol(j - 1) == BridgeConfig::PROTO_NONE) continue;
         page += F("<label style=\"font-weight:400;display:inline-block;margin-right:1em\">"
                   "<input type=\"checkbox\" name=\"r");
         page += n;

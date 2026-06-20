@@ -41,6 +41,10 @@ The form is one long page: **identity → device region → bridge behaviour →
 **routing matrix** row. Hit **Save & reboot** to apply. (On a single Xiao, leave Radio 3
 and Radio 4 set to `None`.)
 
+> **Four-radio (two-Xiao) setups:** only the **master** Xiao runs this portal. It holds
+> the WiFi config and the settings for *all four* radios, and programs **Radio 3 / Radio 4**
+> on the co-processor Xiao over the UART link — the co-processor has no portal of its own.
+
 ---
 
 ## 2. How to read this manual
@@ -97,6 +101,10 @@ Each radio picks a **Protocol**, which shows/hides the fields below.
 > default) and you have the original two-radio Meshtastic ↔ MeshCore bridge — no second
 > Xiao, no UART link, no behaviour change. The Radio 3/4 fields and the routing matrix
 > below simply do nothing, and existing saved configs upgrade unchanged.
+
+> **The figures below show Radio 1 / Radio 2**, but the same fields and behaviour apply
+> to **Radio 3 / Radio 4** — they are configured identically, just hosted on the second
+> (co-processor) Xiao.
 
 ### 4.1 Fields common to every radio
 

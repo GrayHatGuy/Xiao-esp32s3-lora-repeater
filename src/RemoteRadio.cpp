@@ -94,6 +94,14 @@ int16_t RemoteRadio::scanChannel()
 
 int16_t RemoteRadio::startTransmit(const uint8_t *buf, size_t len)
 {
+    // If the co-processor has NEVER checked in (no MSG_READY ever seen), the link
+    // is down -- e.g. a 2-radio build that left R3/R4 enabled with no second board
+    // attached. Fail fast so the scheduler drops this packet immediately
+    // (drop=tx-startfail) instead of arming a multi-second in-flight wait that
+    // would back the per-radio queue up (~10 s per packet). A working co-proc
+    // latches _ready=true on its first READY, so this is a no-op on a healthy
+    // link (no false drops). (v9.0 backwards-compat / 2-radio accommodation.)
+    if (!_link.isReady()) return RADIOLIB_ERR_UNKNOWN;
     // Arm the backpressure gate BEFORE sending so a fast MSG_TX_DONE can't be
     // missed, then hand the frame to the co-processor.
     _link.armTx(_localRadio);
