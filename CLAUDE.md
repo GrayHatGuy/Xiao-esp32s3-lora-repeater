@@ -17,14 +17,28 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 
 | Item | Value |
 |---|---|
-| **Production line** | `main` @ **v8.4.1** (`d098420`, tag `v8.4.1-UI_UM_config`, **GitHub Latest**) — "UI cleanup + user manual + ChirpStack tooling", shipped 2026-06-18 (UI / docs / tooling only — no protocol/routing change; `BridgeConfig` schema v4 unchanged). Lineage: v8.2/v8.2.1 LBT/CAD routing → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 variants → v8.4 ABP encoder → v8.4.1 UI_UM_config. v8.1 = prior dual-SX1262 baseline. |
-| **Active cycle** | **v8.5 "2xiao_4sx1262"** — branch `dev-2xiao-4sx1262` (off `main`@`0a036d0`, tip `fbd64e3`). Combine TWO Xiao dual-SX1262 bridges into ONE **sub-GHz** 4-radio bridge over a UART crossover (host + co-processor). **Stages A–E done + the F scrub done; all envs build green.** `BENCH-v9.0.md` is the bench plan. Awaiting: owner finalizes the bench list + runs it → remaining docs + tag v8.5 (owner-gated). See the v8.5 section below. **OTAA deferred** until after this. |
+| **Production line** | `main` @ **v9.0** (`aa47c66`, tag `v9.0`, **GitHub Latest**, shipped 2026-06-20) — **"four-radio bridge (2xiao_4sx1262)"**: two Xiao over a UART crossover → 4 sub-GHz SX1262 radios (master R1/R2 + co-processor R3/R4) with a per-radio routing matrix; **fully backwards-compatible** (single Xiao = original 2-radio bridge; `BridgeConfig` schema **v4→v5** migrates 2-radio configs). Lineage: v8.2/v8.2.1 LBT/CAD → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 → v8.4 ABP encoder → v8.4.1 UI_UM_config → **v9.0 2xiao_4sx1262**. |
+| **Active cycle** | **none — v9.0 SHIPPED 2026-06-20** (cycle was "v8.5 2xiao_4sx1262"; renamed v8.5→v9.0 at release since R2→R4 is a major change). `dev-2xiao-4sx1262` ff-merged → `main`@`aa47c66`; tag `v9.0` force-moved off the old LR1121 commit (16329b4→aa47c66) + pushed; GitHub release **Latest** w/ 4 master bins (v1.0/v1.1 × app+vanilla-factory). Co-proc = build-from-source. **Next: OTAA** (own release; A3/B3 bench + the deferred garble/auto-resend eyeball ride along there). |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
 | **Default build flag** | `LR1121_RX_AUDIT_RUN=0` in `platformio.ini` (clean state) |
 
-## ⭐ v8.5 — "2xiao_4sx1262" (IN PROGRESS, started 2026-06-18)
+## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
+
+> **Shipped as v9.0** (`aa47c66`, tag `v9.0`, GitHub Latest, 4 master bins). The cycle below
+> was developed under the working name "v8.5"; at release it was renamed **v9.0** (the R2→R4 jump
+> is a major change). Final release work on top of the staged cycle: removed the standalone README
+> "Four radios" section and **wove** the 4-radio content into the existing README sections per owner
+> guidance (tagline, intro, routing-matrix bullet, what's-new→v9.0, parts, UART-crossover wiring
+> table, key points, co-proc CLI, master/co-proc instructions) + the 4-radio photo
+> (`images/4-radio-dual-xiao.jpg`); CONFIG-USER-MANUAL §1+§4 four-radio notes; boot banner →
+> "XIAO ESP32S3 SX1262 Cross-Protocol Bridge (v9.0)" (dropped "Dual"); CHANGELOG v9.0; BENCH-v8.5.md
+> → BENCH-v9.0.md. Two backwards-compat code fixes shipped: RemoteRadio fails fast when the co-proc
+> was never seen (no 10 s stall on a 2-radio build with R3/R4 mistakenly enabled), and the portal
+> hides routing-matrix checkboxes for None radios. ⚠️ **DO NOT generate a 4-radio README section as
+> its own top-level block** — owner reaction "train wreck"; weave new content into the existing
+> structure (see [[feedback-grayhatguy-repo-conventions]]).
 
 Combine **two Xiao dual-SX1262 bridges** into **one 4-radio bridge**, the two Xiaos joined by a **UART
 crossover**. Reuses the UART crossover from the abandoned `T_LORA_QUAD_ROUTE` branch (which paired a Xiao
