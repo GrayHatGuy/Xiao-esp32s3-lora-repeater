@@ -119,7 +119,22 @@ arrive and BOTH apply. The intermittent missing console line is purely a **USB-C
 under the reboot burst** (proof: `READY` line printed only 1/5 yet the re-push — gated on that very
 READY — fired 5/5), NOT a link or recovery failure → confirm C1 recovery by the `cfg ok` lines that DO
 arrive / by traffic, not by every status line. An experimental 3 s settle delay was tried and reverted
-(unnecessary — the host→co-proc config direction is reliable without it). **Still pending (gating): Test
+(unnecessary — the host→co-proc config direction is reliable without it).
+
+**▶ Console anti-garble logging fix (`41f7323`, 2026-06-19).** Owner reported the same mid-line
+interleaving in the normal serial monitor (multiple FreeRTOS tasks doing raw `Serial.printf` at once —
+only the `evt=` lines were mutexed; the per-packet `MeshDecoderDebug::print` dump + `[coproc]`/`[UartLink]`/
+`[R*]`/`[link]` status lines were not). New `src/SerialLog.{h,cpp}` = one shared RECURSIVE console mutex
+(`logf()` atomic line + `lock()/unlock()` to bracket a multi-line block). `blogf()` re-pointed onto it
+(old `logMutex` dropped); the decoder dump bracketed; all task-context status prints + the rare NodeDB-evict
+/ LoRaWAN-FCnt-error lines routed through it; boot/setup prints left raw (single-threaded). Added
+`Serial.setTxBufferSize(4096)` before `Serial.begin()` to absorb bursts (HWCDC no-host path stays
+non-blocking → no stall risk). Builds green all 4 envs; 1 adversarial-review agent = no deadlock / no
+lock-ordering inversion / co-proc unaffected / `setTxBufferSize`-before-`begin` correct. **NOTE:** the
+de-garble can't be fault-injected on the bench (needs concurrent dual-radio MT+MC traffic) → **owner to
+eyeball `pio device monitor` during traffic** to confirm lines stop interleaving. (My pyserial multi-reset
+tally is NOT a valid garble/drop instrument — its `READY 1/5` etc. are DTR/open-close capture artifacts,
+unchanged by the buffer; the prints provably execute. Use a real monitor.) **Still pending (gating): Test
 B (LoRaWAN)** incl. the B3 RX2 downlink-listener.
 v8.5 is **sub-GHz only** (4× SX1262); all 2.4 GHz/LR1121/T-Lora-Dual
 refs scrubbed (`6cce3da`, incl. the wire `band` field). **`BENCH-v8.5.md`** = the bench plan (gating =
