@@ -7,6 +7,7 @@
 #include "BridgeConfig.h"       // mtNodeId() = this device's C2 id
 #include "LoRaWANCrypto.h"      // aesEcb / aesCmac / cryptFrmPayload / selfTest
 #include "SerialLog.h"          // serialized console (C2 runs in radioTask context)
+#include "CameraNode.h"         // Phase 2: OV2640 capture (self-gated BRIDGE_ROLE_CAMERA)
 #include <string.h>
 
 namespace CamC2 {
@@ -263,11 +264,13 @@ uint8_t executeCommand(uint8_t cmd, const uint8_t *args, size_t argLen,
             extra = writeStatus(ackOut + 1, ackCap - 1);
             break;
         case CMD_START_CAPTURE: {
-            // Phase 2: esp_camera_fb_get() + write JPEG to SD, return real filename.
-            const char *fn = "stub.jpg";
+            char fn[40]; uint16_t w = 0, h = 0;
+            size_t n = CameraNode::ready() ? CameraNode::snap(fn, sizeof(fn), &w, &h) : 0;
+            if (n == 0) { res = RES_NOCAM; break; }   // no camera / capture failed
             size_t fl = strlen(fn);
-            if (fl + 1 <= ackCap) { memcpy(ackOut + 1, fn, fl); extra = fl; }
-            SerialLog::logf("[CamC2] (stub) START_CAPTURE -> %s\n", fn);
+            if (1 + fl <= ackCap) { memcpy(ackOut + 1, fn, fl); extra = fl; }
+            SerialLog::logf("[CamC2] CAPTURE %ux%u %uB -> %s\n",
+                            (unsigned)w, (unsigned)h, (unsigned)n, fn);
             break;
         }
         case CMD_RECORD: {

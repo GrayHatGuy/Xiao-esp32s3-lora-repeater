@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — LoRaCam (branch `lora_cam_xiao`, NOT merged to main)
+
+**Status: Phase 1 DONE + Phase 2a DONE, both proven on silicon 2026-06-28 (branch pushed `origin/lora_cam_xiao`,
+not merged — owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
++ microSD on the rear B2B 40-pin) + a perimeter-pin **Wio-SX1262** edge radio. Commands ride an encrypted,
+sender-whitelisted, replay-protected binary frame on a `PROTO_CUSTOM` radio (sync `0x33`); design of record
+[`LORACAM-SPEC.md`](LORACAM-SPEC.md), bench guide [`BENCH-CAMC2.md`](BENCH-CAMC2.md). **Stock repeater builds
+stay byte-identical** (`xiao_esp32s3` = 865781 B) — all new code is `#if defined(BRIDGE_ROLE_CAMERA) ||
+defined(BRIDGE_CAM_COMMANDER)`.
+
+- **Phase 1 — C2 security core.** New `src/CamC2.{h,cpp}` (frame
+  `[ver0xC2][type][senderId:4][recipientId:4][seq:4][ciphertext][cmac:8]`, AES-CTR **encrypt-then-MAC** with an
+  8-byte truncated AES-CMAC reusing `LoRaWANCrypto`, keys domain-separated from the per-peer PSK, constant-time
+  tag compare, fail-closed boot self-test) + `src/CamC2Config.{h,cpp}` (a `c2auth` NVS per-peer whitelist +
+  persist-on-accept fail-closed anti-replay + a reboot-safe block-reserved TX sequence). One guarded hook in
+  `ingestAndFanout()` (PROTO_CUSTOM) + `CamC2::begin()` in setup. Offline tool `tools/cam-c2.py`
+  (gen/verify/selftest). **Adversarially reviewed sound** (6-lens crypto review). **End-to-end proven:** a signed
+  command crosses real LoRa, the cam authenticates + executes it, and ACKs back.
+- **Phase 2a — camera capture.** New `src/CameraNode.{h,cpp}` (OV2640 init for the XIAO S3 Sense via
+  `esp_camera`) wired into `executeCommand`: a `snap` command captures a real JPEG (proven: 800×600, ~14 KB) and
+  the ACK reports it. The example's LED-flash pin (GPIO21 = microSD CS) is deliberately not driven.
+- **Build envs.** `xiao_loracam` (product), `bench_camc2` (cam) + `bench_camc2_cmdr` (commander) for the
+  two-board bench; bench provisioning via `BRIDGE_C2_MY_ID` / `BRIDGE_C2_PEER_ID/_KEY/_PRIMARY`. A do-no-harm
+  `LORA_RADIO{1,2}_DISABLE` build-flag seam disables a radio slot (the camera build disables R1, whose B2B pins
+  the camera occupies).
+- **Not yet done:** microSD persistence (Phase 2b — save the JPEG + return the real filename over the shared SPI
+  bus + `spiMutex`), video record, and the always-on SoftAP portal (live video + config + LoRa-messaging — Phase 3).
+
 ## v9.0 — four-radio bridge (2xiao_4sx1262)
 
 **Status: SHIPPED 2026-06-20 (tag `v9.0`).** Two Xiao boards can now be linked over a UART

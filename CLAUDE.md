@@ -73,11 +73,21 @@ Sense daughterboard both want the XIAO underside → **flying-leads prototype**.
   re-enumerates (COM18→COM19) — and after flashing, a clean **power-cycle WITHOUT BOOT** to RUN the app (else
   it sits in `boot:0x22 DOWNLOAD`). `cap.py --reset` works on a healthy board; the wedged one needed the manual steps.
 
-**🔄 Phase 2 (IN PROGRESS) — camera + SD, real `executeCommand()`:** wire `esp_camera` (OV2640) + microSD into
-`CamC2::executeCommand` so snap/record/stop actually capture to SD and the ACK carries the real filename
-(replacing the `stub.jpg`/`stub.avi` placeholders). SD shares the radio SPI bus → take `spiMutex`, keep J3
-intact; reconcile SD-lib vs radio SCK/MOSI; **disable the camera example's GPIO21/22 LED-flash** (GPIO21 = SD CS).
-Brown-out interlock (don't TX during `esp_camera_init`). **Phase 3 (after):** always-on SoftAP portal = MJPEG
+**✅ Phase 2a DONE + PROVEN ON SILICON (2026-06-28) — camera capture on a LoRa command.** New
+`src/CameraNode.{h,cpp}` = OV2640 init for the XIAO S3 Sense via `esp_camera` (links from the **bundled core, no
+lib_dep**; the example's LED-flash pin **GPIO21 is NOT driven — it's the microSD CS**; degrades to
+`ready()==false` with no daughterboard; SVGA default), wired into `executeCommand` (CMD_START_CAPTURE) +
+`CameraNode::begin()` in setup BEFORE the radio tasks (camera-init inrush ≠ TX, brown-out). **Proven:** `s` from
+the commander → cam `[CamC2] CAPTURE 800x600 14315B -> snap_…jpg` + `evt=C2CMD cmd=1 res=0` → ACK. **Camera EMI
+does NOT block radio RX** (`g` works with the camera running, rssi −58). Cam env 931741 B (27.9%); stock still
+865781 B (do-no-harm). Bench note: a freshly-flashed cam can miss the FIRST commands until it settles — let it
+fully boot.
+
+**🔄 Phase 2b (NEXT) — microSD persistence + record:** `SD.begin(21, <radio HSPI SPIClass>)` + wrap every SD op
+in the existing `spiMutex` (the radio releases the bus during on-air TX so SD writes slot into the gaps); keep
+J3 intact; reconcile SD-lib vs radio SCK/MOSI; save the JPEG and return the real filename (replacing the PSRAM
+descriptor); then video record (`r`, still a stub). **Needs a microSD card inserted (owner has none in yet).**
+**Phase 3 (after):** always-on SoftAP portal = MJPEG
 video + config + LoRa-messaging + pairing UI; **decide then** whether the portal's direct `executeCommand` honors
 the `s_ok` fail-closed latch (review MED item). Deferred: NVS-DoS telemetry surface. **NOT merged to main — owner-gated.**
 

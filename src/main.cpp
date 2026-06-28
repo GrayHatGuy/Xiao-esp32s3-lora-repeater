@@ -46,6 +46,7 @@
 #include "RemoteRadio.h"       // R3/R4 = SX1262 on the second XIAO over the link
 #include "SerialLog.h"         // one serialized console path (anti-garble)
 #include "CamC2.h"             // LoRaCam C2 codec (role-gated; empty in stock builds)
+#include "CameraNode.h"        // LoRaCam Phase 2: OV2640 capture (gated BRIDGE_ROLE_CAMERA)
 #include <esp_mac.h>
 
 // Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
@@ -1566,6 +1567,13 @@ void setup()
     // self-test, and wire the route-queue emit seam. Fail-closed — a failed self-test
     // leaves CamC2::ready()==false so no signed command can actuate over LoRa.
     CamC2::begin(camC2Emit);
+#endif
+
+#if defined(BRIDGE_ROLE_CAMERA)
+    // LoRaCam Phase 2: bring up the OV2640 (degrades to ready()==false if no Sense
+    // daughterboard is attached). Done here, before the radio tasks spawn, so the
+    // heavy camera-init inrush doesn't overlap a LoRa TX (brown-out mitigation).
+    CameraNode::begin();
 #endif
 
 #if BRIDGE_LW_ENCODE
