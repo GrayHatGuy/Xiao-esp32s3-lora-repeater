@@ -333,6 +333,18 @@ static void loadDefaults() {
     s_cfg.radio[3].protocol = protocolFromSync((uint8_t)LORA_RADIO4_SYNC_WORD);
 #endif
 
+    // LoRaCam (camera role): on a XIAO ESP32-S3 Sense, the camera/mic daughterboard
+    // occupies the B2B 40-pin header that R1 drives (GPIO38-42), so a camera build
+    // MUST disable R1 and use only the edge radio R2. These optional flags force a
+    // local slot to PROTO_NONE at first boot. Do-no-harm: only applied when defined
+    // (stock builds never define them, so this compiles out → byte-identical).
+#ifdef LORA_RADIO1_DISABLE
+    s_cfg.radio[0].protocol = PROTO_NONE;
+#endif
+#ifdef LORA_RADIO2_DISABLE
+    s_cfg.radio[1].protocol = PROTO_NONE;
+#endif
+
     // Optional PER-RADIO channel name/key first-boot overrides (v8.4.1 for R1/R2,
     // extended to R3/R4 in v8.5). The BRIDGE_MT_*/BRIDGE_MC_* defaults above are
     // shared by protocol, so two same-protocol radios would otherwise collide on

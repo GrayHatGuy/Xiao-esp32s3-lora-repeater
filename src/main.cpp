@@ -45,6 +45,7 @@
 #include "UartLink.h"          // inter-XIAO UART crossover transport (v8.5)
 #include "RemoteRadio.h"       // R3/R4 = SX1262 on the second XIAO over the link
 #include "SerialLog.h"         // one serialized console path (anti-garble)
+#include "CamC2.h"             // LoRaCam C2 codec (role-gated; empty in stock builds)
 #include <esp_mac.h>
 
 // Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
@@ -1014,6 +1015,17 @@ static void rawRepeatForDest(const RadioChannel &dstChan, int destIdx,
 // Decode a received packet ONCE, run the loop/dup guard, and fan it out to every
 // (other) enabled destination's queue. No transmit happens here — the
 // destinations' schedulers do that — so the source radio returns to RX.
+#if defined(BRIDGE_ROLE_CAMERA) || defined(BRIDGE_CAM_COMMANDER)
+// Outbound seam handed to CamC2: record our own emission's hash so its on-air echo
+// is dropped by the Custom dedup, then queue it on the destination radio (the
+// radioTask scheduler CAD-gates + transmits). Mirrors enqueueAbpUplink's tail.
+static bool camC2Emit(int radioIdx, const uint8_t *buf, size_t len) {
+    if (radioIdx < 0 || radioIdx >= NR) return false;
+    DedupCache::record(DedupCache::hash(buf, len, 0));
+    return g_routeQ[radioIdx].push(buf, len);
+}
+#endif
+
 static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
 {
     const RadioChannel &srcChan = g_chan[srcIdx];
@@ -1124,6 +1136,17 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
 #endif
         return;
     }
+
+#if defined(BRIDGE_ROLE_CAMERA) || defined(BRIDGE_CAM_COMMANDER)
+    // LoRaCam C2: a frame on a PROTO_CUSTOM radio may be an encrypted, signed,
+    // sender-whitelisted command / ACK / beacon. handleInbound() returns true only
+    // for a fully-authenticated, addressed-to-us, non-replay frame (already acted
+    // on); a non-C2 Custom frame returns false and falls through to normal handling.
+    if (BridgeConfig::radioProtocol(srcIdx) == BridgeConfig::PROTO_CUSTOM &&
+        CamC2::handleInbound(srcIdx, buf, len)) {
+        return;
+    }
+#endif
 
 #if BRIDGE_LW_ENCODE
     // Custom raw-LoRa source (e.g. a proprietary weather station): no built-in
@@ -1538,6 +1561,13 @@ void setup()
     // Bridge configuration: NVS first, build-flag defaults otherwise.
     BridgeConfig::begin();
 
+#if defined(BRIDGE_ROLE_CAMERA) || defined(BRIDGE_CAM_COMMANDER)
+    // LoRaCam C2: load the peer whitelist + replay/seq counters, run the crypto
+    // self-test, and wire the route-queue emit seam. Fail-closed — a failed self-test
+    // leaves CamC2::ready()==false so no signed command can actuate over LoRa.
+    CamC2::begin(camC2Emit);
+#endif
+
 #if BRIDGE_LW_ENCODE
     // ABP P2: load the per-source LoRaWAN ABP device table + persisted FCnts.
     LoRaWANConfig::begin();
@@ -1827,6 +1857,25 @@ void setup()
 // ============================================================
 void loop()
 {
+#if defined(BRIDGE_CAM_COMMANDER) && defined(BRIDGE_C2_PEER_ID)
+    // Bench commander: type a key in the serial monitor to send a signed C2 command
+    // to the paired cam (BRIDGE_C2_PEER_ID), transmitted on R2 (the Custom 0x33 radio).
+    //   s = snap photo    r = record 30 s    x = stop    g = get status
+    while (Serial.available()) {
+        int c = Serial.read();
+        uint8_t cmd = CamC2::CMD_NONE; uint8_t args[2]; size_t argLen = 0;
+        switch (c) {
+            case 's': cmd = CamC2::CMD_START_CAPTURE; break;
+            case 'r': cmd = CamC2::CMD_RECORD; args[0] = 30; args[1] = 0; argLen = 2; break;
+            case 'x': cmd = CamC2::CMD_STOP; break;
+            case 'g': cmd = CamC2::CMD_GET_STATUS; break;
+            default:  continue;   // ignore newlines / unmapped keys
+        }
+        CamC2::sendCommand(1 /*R2*/, (uint32_t)(BRIDGE_C2_PEER_ID), cmd,
+                           argLen ? args : nullptr, argLen);
+    }
+#endif
+
     // Self-heal the co-processor link. The co-proc sends MSG_READY at every boot
     // and then sits idle until it receives CFG_RADIO. If it resets (brown-out,
     // re-flash, reseated cable) after we already configured it at startup, it

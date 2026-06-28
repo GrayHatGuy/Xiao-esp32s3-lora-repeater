@@ -9,7 +9,7 @@
 Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, MeshCore, and (stub) Reticulum networks across two radios sharing one SPI bus.
 
 - **Repo:** https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater
-- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\Xiao-esp32s3-lora-repeater – dev_2xiao_4sx1262` (note: spaces + an en-dash `–`; renamed 2026-06-18 from `…- main dev-ABP-lorawan`)
+- **Local path:** `C:\Users\6r4yh\workspace\Platformio\Projects\lora_cam_xiao` (renamed 2026-06-28 from `…repeater – dev_2xiao_4sx1262`; on branch `lora_cam_xiao`)
 - **Owner:** GrayHatGuy — `grayhatguyllc@protonmail.com`
 - **Contest:** Seeed/Meshtastic Build-Off 2026, issue #2 at `Seeed-Projects/meshtastic-build-off-2026`
 
@@ -19,10 +19,67 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 |---|---|
 | **Production line** | `main` @ **v9.0** (`aa47c66`, tag `v9.0`, **GitHub Latest**, shipped 2026-06-20) — **"four-radio bridge (2xiao_4sx1262)"**: two Xiao over a UART crossover → 4 sub-GHz SX1262 radios (master R1/R2 + co-processor R3/R4) with a per-radio routing matrix; **fully backwards-compatible** (single Xiao = original 2-radio bridge; `BridgeConfig` schema **v4→v5** migrates 2-radio configs). Lineage: v8.2/v8.2.1 LBT/CAD → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 → v8.4 ABP encoder → v8.4.1 UI_UM_config → **v9.0 2xiao_4sx1262**. |
 | **Active cycle** | **none — v9.0 SHIPPED 2026-06-20** (cycle was "v8.5 2xiao_4sx1262"; renamed v8.5→v9.0 at release since R2→R4 is a major change). `dev-2xiao-4sx1262` ff-merged → `main`@`aa47c66`; tag `v9.0` force-moved off the old LR1121 commit (16329b4→aa47c66) + pushed; GitHub release **Latest** w/ **8 bins** — 4 master (`xiao-dual-sx1262-v9.0-{v1.0,v1.1}-{app,vanilla-factory}`) + 4 co-proc (`xiao-coproc-sx1262-v9.0-{v1.0,v1.1}-{app,factory}`); release notes carry download + web-flasher + build-from-source for both boards. **Next: OTAA** (own release; A3/B3 bench + the deferred garble/auto-resend eyeball ride along there). |
+| **Active branch (NOT main)** | **`lora_cam_xiao`** — LoRaCam (camera + LoRa-commanded edge radio); Phase-1 C2 core **proven end-to-end on silicon 2026-06-28**, pushed to `origin/lora_cam_xiao`, **NOT merged to main** (owner-gated). See the LoRaCam section below. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
 | **Default build flag** | `LR1121_RX_AUDIT_RUN=0` in `platformio.ini` (clean state) |
+
+## ⭐ LoRaCam — camera + LoRa-commanded edge radio (ACTIVE branch `lora_cam_xiao`, NOT merged)
+
+A LoRa-commanded camera built ON the v9.0 bridge firmware: a XIAO ESP32-S3 **Sense** (OV2640 cam + mic +
+microSD on the rear B2B 40-pin) + a **perimeter-pin Wio-SX1262** edge radio. Commanded over LoRa — encrypted,
+sender-whitelisted, replay-protected — and (later) a SoftAP web portal with live video + config + messaging.
+Branch `lora_cam_xiao` off `main`@`24528ad` (v9.0). Design of record: `LORACAM-SPEC.md`; bench guide
+`BENCH-CAMC2.md`; HW handoff `C:\Users\6r4yh\XIAO-Sense-Wio-SX1262-Compatibility-Handoff.md`.
+
+**Locked design (LORACAM-SPEC §9):** SoftAP portal · per-sender PSK + allowlist auth · microSD on the shared
+SPI bus (spiMutex) · binary C2 on a `PROTO_CUSTOM` radio (sync **0x33**) · encrypt-then-MAC reusing
+`LoRaWANCrypto` (AES-CTR + 8-byte CMAC, keys derived from the PSK) · the cam is an **edge node of the repeater
+mesh** (a repeater raw-repeats Custom frames → commander→repeater→cam works for free); three roles = edge cam
+(responder) / repeater = commander (ships dormant in the standard build, ABP-encoder pattern) / standalone
+self-mastered (cam's own portal). Two deployment modes (standalone vs paired) chosen at provisioning.
+
+**HW (handoff, confirmed in-firmware):** the camera occupies the B2B pins R1 uses (GPIO38-42) → a camera build
+MUST disable R1 and use only the EDGE radio R2 (V1.0 map NSS=GPIO5/DIO1=GPIO2/RST=GPIO3/BUSY=GPIO4 + SPI
+D8/D9/D10). microSD CS=GPIO21 shares the SPI bus. TX capped **+20 dBm**. Mechanical: the Wio baseboard and the
+Sense daughterboard both want the XIAO underside → **flying-leads prototype**. **Wiring CONFIRMED on silicon**
+(R2 reads its chip ID, `[Radio2-Edge] ready sync 0x33`).
+
+**✅ Phase 1 DONE + PROVEN ON SILICON (2026-06-28) — the C2 security core.**
+- New: `src/CamC2.{h,cpp}` (frame `[ver0xC2][type][senderId:4][recipientId:4][seq:4][ct][cmac:8]`,
+  encrypt-then-MAC, constant-time tag compare, fail-closed boot self-test `ready()`, responder + commander +
+  beacon), `src/CamC2Config.{h,cpp}` (`c2auth` NVS whitelist + persist-on-accept fail-closed anti-replay +
+  reboot-safe block-reserved tx seq), `tools/cam-c2.py` (offline gen/verify/selftest, reuses lw-verify crypto).
+  Shared-code touch = ONE guarded hook in `ingestAndFanout()` (PROTO_CUSTOM branch, before the LW-ENCODE block)
+  + `CamC2::begin(camC2Emit)` in setup + the `camC2Emit` seam (dedup-record + `g_routeQ` push). Everything
+  `#if defined(BRIDGE_ROLE_CAMERA)||defined(BRIDGE_CAM_COMMANDER)` → **stock builds byte-identical (do-no-harm
+  proven: `xiao_esp32s3` = 865781 B unchanged)**. `BridgeConfig.cpp` gained a do-no-harm `LORA_RADIO{1,2}_DISABLE`
+  seam (forces a slot PROTO_NONE).
+- **Adversarially verified SOUND** (6-lens crypto review): MAC coverage / encrypt-then-MAC / key derivation /
+  no nonce reuse / replay+whitelist ordering / memory safety. Pre-flight fixes: 1-based-seq first-frame bug,
+  `ackCap<1` guard, log-noise demoted off the `evt=` stream; `R_OK` enum → `RES_*` (POSIX `<unistd.h>` collision);
+  the seed sat after `begin()`'s no-NVS early-return (skipped on erased boards) → restructured to guard reads.
+- **Build envs:** `xiao_loracam` (product: R1 off, R2 Custom 0x33, MAC-derived id, portal-provisioned) ·
+  `bench_camc2` (cam, autosave, fixed id **0xCA00** + seeded peer 0xC0DE) · `bench_camc2_cmdr` (commander,
+  `-DBRIDGE_CAM_COMMANDER`, id **0xC0DE** + peer 0xCA00, serial trigger `s/r/x/g`). Bench provisioning flags:
+  `BRIDGE_C2_MY_ID` (fixed C2 id, since MAC ids aren't known at build time), `BRIDGE_C2_PEER_ID/_KEY/_PRIMARY`.
+- **END-TO-END ROUND-TRIP on real LoRa:** cam COM14 (`bench_camc2`) + commander = a dual-SX1262 bridge COM19
+  (`bench_camc2_cmdr`). `g` → CMDR `evt=C2TX to=0x0000ca00 cmd=6 seq=1` → CAM `evt=RX rssi=-61 snr=11` +
+  `evt=C2CMD from=0x0000c0de cmd=6 seq=1 res=0` (authenticated+executed) → signed ACK → CMDR `evt=C2RX type=2`.
+  Frame sizes match spec (cmd 23B, ACK 31B). Driver: `C:\Users\6r4yh\c2cmd_test.py <cam> <cmdr> <key>`.
+  ⚠️ **Native-USB flashing gotchas (carry forward):** a board whose running firmware wedges esptool
+  (`PermissionError 31`) needs **manual download mode** (hold BOOT, tap RESET, release) — the port
+  re-enumerates (COM18→COM19) — and after flashing, a clean **power-cycle WITHOUT BOOT** to RUN the app (else
+  it sits in `boot:0x22 DOWNLOAD`). `cap.py --reset` works on a healthy board; the wedged one needed the manual steps.
+
+**🔄 Phase 2 (IN PROGRESS) — camera + SD, real `executeCommand()`:** wire `esp_camera` (OV2640) + microSD into
+`CamC2::executeCommand` so snap/record/stop actually capture to SD and the ACK carries the real filename
+(replacing the `stub.jpg`/`stub.avi` placeholders). SD shares the radio SPI bus → take `spiMutex`, keep J3
+intact; reconcile SD-lib vs radio SCK/MOSI; **disable the camera example's GPIO21/22 LED-flash** (GPIO21 = SD CS).
+Brown-out interlock (don't TX during `esp_camera_init`). **Phase 3 (after):** always-on SoftAP portal = MJPEG
+video + config + LoRa-messaging + pairing UI; **decide then** whether the portal's direct `executeCommand` honors
+the `s_ok` fail-closed latch (review MED item). Deferred: NVS-DoS telemetry surface. **NOT merged to main — owner-gated.**
 
 ## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
 
