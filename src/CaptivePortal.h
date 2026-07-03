@@ -22,10 +22,28 @@
 
 #pragma once
 
+#if defined(BRIDGE_ROLE_CAMERA)
+#include <WebServer.h>
+#endif
+
 namespace CaptivePortal {
 
 // Block-and-serve. Does not return — exits via ESP.restart() once the user
 // saves the form.
 void begin();
+
+#if defined(BRIDGE_ROLE_CAMERA)
+// Phase 3 reuse: the always-on portal (CamPortal) serves the SAME config form
+// without the blocking first-flash flow. serverRef() is the file-static :80
+// WebServer instance — CamPortal makes it the active server, registers its own
+// routes on it, and pumps handleClient(). serveConfigForm()/serveConfigSave()
+// render + parse the existing form (one source of truth); CamPortal registers
+// them behind the portal login. A save still ESP.restart()s (radios init once at
+// boot), which is correct. These are camera-only additions — stock builds compile
+// this file identically (do-no-harm).
+WebServer &serverRef();
+void serveConfigForm();   // GET: render + send the config form
+void serveConfigSave();   // POST: validate, persist, reboot (== the captive save)
+#endif
 
 }  // namespace CaptivePortal

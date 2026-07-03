@@ -10,6 +10,16 @@
 namespace CameraNode {
 
 static bool s_ok = false;
+static SemaphoreHandle_t s_camMutex = nullptr;   // serialize snap() vs MJPEG stream
+
+bool lockCamera(uint32_t ms) {
+    if (!s_camMutex) return true;                // not yet created (single-threaded init)
+    return xSemaphoreTake(s_camMutex, pdMS_TO_TICKS(ms)) == pdTRUE;
+}
+
+void unlockCamera() {
+    if (s_camMutex) xSemaphoreGive(s_camMutex);
+}
 
 void begin() {
     camera_config_t c = {};
@@ -46,6 +56,7 @@ void begin() {
     }
     sensor_t *s = esp_camera_sensor_get();
     if (s) s->set_framesize(s, FRAMESIZE_SVGA);   // sensible default snap size (800x600)
+    if (!s_camMutex) s_camMutex = xSemaphoreCreateMutex();
     s_ok = true;
     SerialLog::logf("[CameraNode] OV2640 ready (sensor PID=0x%x) default SVGA\n",
                     s ? (unsigned)s->id.PID : 0u);
@@ -59,8 +70,15 @@ size_t snap(char *nameOut, size_t nameCap, uint16_t *wOut, uint16_t *hOut) {
     if (nameCap) nameOut[0] = '\0';
     if (!s_ok) return 0;
 
+    // Serialize with the portal's MJPEG stream (Phase 3) — both pull frame buffers
+    // from the same sensor. A stream frame send is short; 1 s is generous headroom.
+    if (!lockCamera(1000)) {
+        SerialLog::logf("[CameraNode] snap: camera busy (stream) — capture skipped\n");
+        return 0;
+    }
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
+        unlockCamera();
         SerialLog::logf("[CameraNode] esp_camera_fb_get() returned null — capture failed\n");
         return 0;
     }
@@ -75,6 +93,7 @@ size_t snap(char *nameOut, size_t nameCap, uint16_t *wOut, uint16_t *hOut) {
              (unsigned)fb->width, (unsigned)fb->height, (unsigned)len);
 
     esp_camera_fb_return(fb);
+    unlockCamera();
     return len;
 }
 

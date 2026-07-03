@@ -458,6 +458,22 @@ static void migrateV4toV5(const PersistedV4 &v4) {
     s_cfg.radio[1].routeMask = (uint8_t)(1u << 0);
 }
 
+// LoRaCam: a build-flag radio disable is a HARDWARE constraint (the camera owns
+// R1's B2B pins), so it must hold against ANY loaded/saved config — not just the
+// first-boot defaults. Every begin() load/migration path copies a stored blob
+// OVER the loadDefaults() seam, so a blob saved with R1 active (e.g. edited via
+// the portal form) would otherwise re-enable R1 and fight the camera on reboot.
+// Re-applied after every blob load and before every save. Do-no-harm: compiles
+// out unless the flag is defined (stock builds never define it).
+static void applyBuildDisables() {
+#ifdef LORA_RADIO1_DISABLE
+    s_cfg.radio[0].protocol = PROTO_NONE;
+#endif
+#ifdef LORA_RADIO2_DISABLE
+    s_cfg.radio[1].protocol = PROTO_NONE;
+#endif
+}
+
 void begin() {
     // loadDefaults() fully populates s_cfg (all NUM_RADIOS slots) with
     // build-flag defaults; the migration paths below overwrite only the fields
@@ -553,9 +569,11 @@ void begin() {
                       (unsigned)blobSize);
     }
     prefs.end();
+    applyBuildDisables();   // hardware constraint wins over any loaded blob
 }
 
 void save() {
+    applyBuildDisables();   // never persist a hardware-disabled slot as active
     s_cfg.version    = SCHEMA_VERSION;
     s_cfg.configured = 1;
     Preferences prefs;

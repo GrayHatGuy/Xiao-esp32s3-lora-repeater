@@ -19,7 +19,7 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 |---|---|
 | **Production line** | `main` @ **v9.0** (`aa47c66`, tag `v9.0`, **GitHub Latest**, shipped 2026-06-20) — **"four-radio bridge (2xiao_4sx1262)"**: two Xiao over a UART crossover → 4 sub-GHz SX1262 radios (master R1/R2 + co-processor R3/R4) with a per-radio routing matrix; **fully backwards-compatible** (single Xiao = original 2-radio bridge; `BridgeConfig` schema **v4→v5** migrates 2-radio configs). Lineage: v8.2/v8.2.1 LBT/CAD → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 → v8.4 ABP encoder → v8.4.1 UI_UM_config → **v9.0 2xiao_4sx1262**. |
 | **Active cycle** | **none — v9.0 SHIPPED 2026-06-20** (cycle was "v8.5 2xiao_4sx1262"; renamed v8.5→v9.0 at release since R2→R4 is a major change). `dev-2xiao-4sx1262` ff-merged → `main`@`aa47c66`; tag `v9.0` force-moved off the old LR1121 commit (16329b4→aa47c66) + pushed; GitHub release **Latest** w/ **8 bins** — 4 master (`xiao-dual-sx1262-v9.0-{v1.0,v1.1}-{app,vanilla-factory}`) + 4 co-proc (`xiao-coproc-sx1262-v9.0-{v1.0,v1.1}-{app,factory}`); release notes carry download + web-flasher + build-from-source for both boards. **Next: OTAA** (own release; A3/B3 bench + the deferred garble/auto-resend eyeball ride along there). |
-| **Active branch (NOT main)** | **`lora_cam_xiao`** — LoRaCam (camera + LoRa-commanded edge radio); Phase-1 C2 core **proven end-to-end on silicon 2026-06-28**, pushed to `origin/lora_cam_xiao`, **NOT merged to main** (owner-gated). See the LoRaCam section below. |
+| **Active branch (NOT main)** | **`lora_cam_xiao`** — LoRaCam (camera + LoRa-commanded edge radio); Phase 1 + 2a proven on silicon 2026-06-28; **Phase 3 always-on web portal BENCH-PROVEN on silicon 2026-07-03 — all gating tests pass** (`BENCH-PHASE3.md`). **NOT merged to main** (owner-gated). Open: first-flash product provisioning = open AP (follow-up), Phase 2b SD (needs a card). See the LoRaCam section below. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -83,13 +83,49 @@ does NOT block radio RX** (`g` works with the camera running, rssi −58). Cam e
 865781 B (do-no-harm). Bench note: a freshly-flashed cam can miss the FIRST commands until it settles — let it
 fully boot.
 
-**🔄 Phase 2b (NEXT) — microSD persistence + record:** `SD.begin(21, <radio HSPI SPIClass>)` + wrap every SD op
-in the existing `spiMutex` (the radio releases the bus during on-air TX so SD writes slot into the gaps); keep
-J3 intact; reconcile SD-lib vs radio SCK/MOSI; save the JPEG and return the real filename (replacing the PSRAM
-descriptor); then video record (`r`, still a stub). **Needs a microSD card inserted (owner has none in yet).**
-**Phase 3 (after):** always-on SoftAP portal = MJPEG
-video + config + LoRa-messaging + pairing UI; **decide then** whether the portal's direct `executeCommand` honors
-the `s_ok` fail-closed latch (review MED item). Deferred: NVS-DoS telemetry surface. **NOT merged to main — owner-gated.**
+**✅✅ Phase 3 BENCH-PROVEN ON SILICON 2026-07-03 — ALL GATING TESTS PASS** (protocol + full results:
+`BENCH-PHASE3.md`; rig = cam COM14 + the quad-rig host XIAO as commander COM19 + a Pixel as WiFi client;
+its R3/R4 stay None so the co-proc idles). Highlights: WPA2+login+captive all enforced · live MJPEG + snap
+during stream · **R1 sabotage neutralized on silicon** (saved R1=MT → blob `proto=0`, boot `Radio1 = None`) ·
+**5/5 C2 commands decoded while streaming video** (WiFi does NOT corrupt LoRa RX) · messaging both directions
+incl. commander `m` → phone UI · pairing lifecycle unpair→`not-whitelisted`→re-pair→`res=0`. Two bench-found
+fixes flashed + re-verified: stream retries on a null frame (was: one null ended the stream → frozen `<img>`);
+page reloads the stream on `visibilitychange` (Android kills MJPEG on screen sleep, no error event). Skipped
+(owner): AP-passphrase change (shares the proven save path) + Wave-5 soaks/specials. Bench cam creds: portal
+login changed to an owner-chosen password (WiFi passphrase still `loracam-portal`); cam long name now ends
+`-p3`. Owner-chosen scope: **always-on** WPA2 SoftAP · **WPA2 + a separate portal login** ·
+**everything in one push** (video + config + messaging + pairing). New files: `src/CamPortal.{h,cpp}` (WPA2 AP +
+login-gated synchronous `WebServer` on :80, cookie sessions, pumped from a dedicated FreeRTOS task — the cam's
+`loop()` is otherwise idle), `src/CamStream.{h,cpp}` (an `esp_http_server` on **:81** for the MJPEG stream — its
+OWN translation unit because `esp_http_server.h` and `WebServer.h` both define `HTTP_GET`; the stream is gated by
+a `?sid=` token), `src/CamPortalConfig.{h,cpp}` (AP passphrase + salted-SHA-256 login in its own `camportal` NVS
+namespace — no schema bump). Portal tabs: **Live video** (MJPEG `<img>` + `/jpg`), **Camera** (snap/record/stop/
+status → direct `executeCommand`), **Config** (reuses the captive form verbatim via new camera-gated
+`CaptivePortal::serveConfigForm()/serveConfigSave()` — one source of truth; a save reboots since radios init once),
+**Messages** (new signed/encrypted `T_MSG` C2 frame type + an inbound ring + `CamC2::sendMessage()`), **Pairing**
+(edit the `c2auth` peer whitelist), **Security** (change WPA2 pass + login). `CameraNode` gained a camera mutex so
+a stream frame and a C2 `snap` can't race on `esp_camera`. **s_ok decision (the flagged MED review item):** the
+portal's local actuation is gated by the **portal login + WPA2**, deliberately NOT by the LoRa-path crypto
+self-test latch — the camera hardware works regardless of C2 crypto state. Build: cam `bench_camc2` 978625 B /
+`xiao_loracam` 978073 B; **stock `xiao_esp32s3` still 865781 B (do-no-harm preserved, byte-for-byte)**. Portal
+build-flag defaults `BRIDGE_PORTAL_USER/_PASS/_AP_PASS` (bench = admin / loracam-admin / loracam-portal).
+**Pre-bench fixes 2026-07-03** (from the 90-test bench-plan red-team, see `BENCH-PHASE3.md`): ① **R1-reactivation
+bug FIXED** — `BridgeConfig::begin()` copied a saved blob verbatim and never re-applied `LORA_RADIO1_DISABLE`
+(the seam ran only in `loadDefaults()`), so a portal save with R1 active would boot R1 onto the camera's B2B
+pins; new `applyBuildDisables()` re-forces the flag-disabled slots to PROTO_NONE after EVERY blob load/migration
+and before every save (stock still byte-identical — the helper compiles empty without the flags). ② **Commander
+T_MSG hook ADDED** — `CamC2::sendMessage()` is now role-shared, the commander prints inbound T_MSG as
+`evt=C2MSG … text="…"`, and the bench serial loop gained `m` = send a test message → the master→cam messaging
+path (portal ring) is benchable. ⚠️ Still open (accepted, follow-up): **first-flash provisioning on a product
+build is an OPEN AP** (unconfigured boot enters the old passwordless `CaptivePortal::begin()` before the WPA2
+portal exists; bench autosave masks it — fix rides a follow-up cycle). **Bench = DONE 2026-07-03, all gating
+tests pass** (see the BENCH-PROVEN block above + `BENCH-PHASE3.md` results).
+
+**🔄 Phase 2b (DEFERRED, needs an SD card) — microSD persistence + record:** `SD.begin(21, <radio HSPI SPIClass>)`
++ wrap every SD op in the existing `spiMutex` (the radio releases the bus during on-air TX so SD writes slot into
+the gaps); keep J3 intact; reconcile SD-lib vs radio SCK/MOSI; save the JPEG and return the real filename
+(replacing the PSRAM descriptor); then video record (`r`/`record`, still a stub). **Needs a microSD card inserted
+(owner has none in yet).** Deferred: NVS-DoS telemetry surface. **NOT merged to main — owner-gated.**
 
 ## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
 

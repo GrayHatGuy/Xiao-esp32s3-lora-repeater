@@ -37,7 +37,13 @@ constexpr size_t  MAX_PAYLOAD = 64;     // plaintext payload cap (keeps frames s
 constexpr size_t  MIN_FRAME   = HDR_LEN + TAG_LEN;               // 22
 constexpr size_t  MAX_FRAME   = HDR_LEN + MAX_PAYLOAD + TAG_LEN; // 86
 
-enum Type : uint8_t { T_CMD = 1, T_ACK = 2, T_EVT = 3, T_BEACON = 4 };
+enum Type : uint8_t { T_CMD = 1, T_ACK = 2, T_EVT = 3, T_BEACON = 4, T_MSG = 5 };
+
+// Phase 3: a free-text message carried (encrypted + signed) over the same C2
+// channel — operator chat between the cam and its whitelisted master(s), surfaced
+// in the portal. The text is the (encrypted) payload; cap below leaves room for
+// the header + tag inside MAX_PAYLOAD.
+constexpr size_t MSG_TEXT_MAX = 48;
 
 enum Cmd : uint8_t {
     CMD_NONE = 0, CMD_START_CAPTURE = 1, CMD_RECORD = 2, CMD_STOP = 3,
@@ -61,6 +67,11 @@ bool ready();              // crypto self-test passed — fail-closed gate for a
 // so the caller stops normal Custom handling.
 bool handleInbound(int radioIdx, const uint8_t *buf, size_t len);
 
+// Phase 3 messaging — sign + queue a T_MSG to one whitelisted peer. Shared by BOTH
+// roles: the cam's portal sends to its master, and the commander's bench serial key
+// ('m') sends to the cam (which fills the cam portal's inbound message ring).
+bool sendMessage(int radioIdx, uint32_t peerId, const char *text);
+
 #if defined(BRIDGE_ROLE_CAMERA)
 // Shared actuation point: the local portal calls this DIRECTLY (local trust); the
 // LoRa path calls it ONLY after auth/whitelist/replay. Fills the ACK payload
@@ -72,6 +83,17 @@ uint8_t executeCommand(uint8_t cmd, const uint8_t *args, size_t argLen,
 // under that master's key — a single broadcast frame can't be MAC-verified by
 // multiple per-master keys without a shared fleet key; see LORACAM-SPEC §1A note).
 void emitBeacon(int radioIdx);
+
+// Phase 3 messaging (portal-driven). A received T_MSG (decrypted + authenticated)
+// is stored in a small ring; the portal reads it. (sendMessage is role-shared —
+// declared above.)
+struct Message {
+    uint32_t fromId;                 // sender's C2 id
+    uint32_t atSec;                  // local millis()/1000 at receipt
+    char     text[MSG_TEXT_MAX + 1]; // NUL-terminated UTF-8
+};
+size_t          messageCount();              // number held (<= ring capacity)
+const Message  &message(int i);              // i=0 is the NEWEST
 #endif
 
 #if defined(BRIDGE_CAM_COMMANDER)

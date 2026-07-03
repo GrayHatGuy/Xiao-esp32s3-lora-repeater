@@ -2,8 +2,9 @@
 
 ## Unreleased — LoRaCam (branch `lora_cam_xiao`, NOT merged to main)
 
-**Status: Phase 1 DONE + Phase 2a DONE, both proven on silicon 2026-06-28 (branch pushed `origin/lora_cam_xiao`,
-not merged — owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
+**Status: Phase 1 + Phase 2a proven on silicon 2026-06-28; Phase 3 (always-on web portal) BENCH-PROVEN on
+silicon 2026-07-03 — all gating tests pass (`BENCH-PHASE3.md`; branch `lora_cam_xiao`, NOT merged —
+owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
 + microSD on the rear B2B 40-pin) + a perimeter-pin **Wio-SX1262** edge radio. Commands ride an encrypted,
 sender-whitelisted, replay-protected binary frame on a `PROTO_CUSTOM` radio (sync `0x33`); design of record
 [`LORACAM-SPEC.md`](LORACAM-SPEC.md), bench guide [`BENCH-CAMC2.md`](BENCH-CAMC2.md). **Stock repeater builds
@@ -21,12 +22,35 @@ defined(BRIDGE_CAM_COMMANDER)`.
 - **Phase 2a — camera capture.** New `src/CameraNode.{h,cpp}` (OV2640 init for the XIAO S3 Sense via
   `esp_camera`) wired into `executeCommand`: a `snap` command captures a real JPEG (proven: 800×600, ~14 KB) and
   the ACK reports it. The example's LED-flash pin (GPIO21 = microSD CS) is deliberately not driven.
+- **Phase 3 — always-on web portal (BENCH-PROVEN on silicon 2026-07-03, `BENCH-PHASE3.md`).** New `src/CamPortal.{h,cpp}`
+  (a WPA2 SoftAP + a login-gated synchronous `WebServer` on :80) and `src/CamStream.{h,cpp}` (an
+  `esp_http_server` on :81 dedicated to the MJPEG stream — its own translation unit because `esp_http_server.h`
+  and `WebServer.h` both define `HTTP_GET`). The portal serves: **live video** (MJPEG `<img>` + `/jpg` snapshot),
+  **camera control** (snap / record / stop / status via direct `executeCommand`, local-trust — gated by the
+  portal login, not the LoRa crypto latch), **config** (reuses the existing captive form verbatim via new
+  camera-gated `CaptivePortal::serveConfigForm()/serveConfigSave()` entry points — one source of truth; a save
+  reboots), **messaging** (a new signed/encrypted `T_MSG` C2 frame type + an inbound ring; chat with whitelisted
+  masters), and **pairing** (manage the `c2auth` peer whitelist) + a **Security** page (change the WPA2 passphrase
+  + portal login). New `src/CamPortalConfig.{h,cpp}` stores the AP passphrase + a salted-SHA-256 login in its own
+  `camportal` NVS namespace (no `BridgeConfig` schema bump). Cookie-based sessions; the :81 stream is gated by a
+  `?sid=` token. `CameraNode` gained a camera mutex so a stream frame and a C2 `snap` can't race on `esp_camera`.
+  Pumped from a dedicated FreeRTOS task. Cam env 978 KB (27.9%→29.3%); **stock still 865781 B (do-no-harm)**.
 - **Build envs.** `xiao_loracam` (product), `bench_camc2` (cam) + `bench_camc2_cmdr` (commander) for the
-  two-board bench; bench provisioning via `BRIDGE_C2_MY_ID` / `BRIDGE_C2_PEER_ID/_KEY/_PRIMARY`. A do-no-harm
-  `LORA_RADIO{1,2}_DISABLE` build-flag seam disables a radio slot (the camera build disables R1, whose B2B pins
-  the camera occupies).
+  two-board bench; bench provisioning via `BRIDGE_C2_MY_ID` / `BRIDGE_C2_PEER_ID/_KEY/_PRIMARY` and the portal
+  defaults `BRIDGE_PORTAL_USER/_PASS/_AP_PASS`. A do-no-harm `LORA_RADIO{1,2}_DISABLE` build-flag seam disables a
+  radio slot (the camera build disables R1, whose B2B pins the camera occupies).
+- **Phase-3 hardening (2026-07-03, from the bench-plan red-team + the bench itself).** ① `BridgeConfig` now
+  re-applies `LORA_RADIO{1,2}_DISABLE` after every NVS blob load/migration and before every save
+  (`applyBuildDisables()`) — a saved config can no longer re-enable R1 onto the camera's B2B pins (proven on
+  silicon: saved R1=Meshtastic persisted as `proto=0`). ② The commander gained a `T_MSG` hook (`m` serial key +
+  inbound-message print) — messaging proven both directions on air. ③ The :81 stream retries transient null
+  frames instead of ending (a frozen `<img>` needed a manual refresh). ④ The portal reloads the stream on
+  `visibilitychange` (Android kills the MJPEG connection on screen sleep with no error event). Stock build
+  verified byte-identical (865781 B) after all four.
 - **Not yet done:** microSD persistence (Phase 2b — save the JPEG + return the real filename over the shared SPI
-  bus + `spiMutex`), video record, and the always-on SoftAP portal (live video + config + LoRa-messaging — Phase 3).
+  bus + `spiMutex`), video record (the `record` command is still a stub), securing first-flash provisioning on a
+  product build (today an unconfigured `xiao_loracam` provisions over the OLD open captive portal before the WPA2
+  portal exists), and the skipped/deferred bench items (AP-passphrase change, Wave-5 soaks/specials).
 
 ## v9.0 — four-radio bridge (2xiao_4sx1262)
 

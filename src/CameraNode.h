@@ -31,6 +31,13 @@ bool   sdPresent();    // Phase 2b: a mounted microSD on the shared SPI bus
 // the frame dimensions.
 size_t snap(char *nameOut, size_t nameCap, uint16_t *wOut, uint16_t *hOut);
 
+// Phase 3: serialize esp_camera access between a C2 snap() and the portal's MJPEG
+// stream (both call esp_camera_fb_get/return on the same sensor). snap() takes the
+// lock internally; the stream handler brackets its own fb_get/return with these.
+// lockCamera() returns false if the lock can't be taken within ms (caller skips).
+bool lockCamera(uint32_t ms);
+void unlockCamera();
+
 }  // namespace CameraNode
 
 #endif  // BRIDGE_ROLE_CAMERA

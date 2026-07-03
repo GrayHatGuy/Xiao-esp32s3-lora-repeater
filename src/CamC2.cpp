@@ -17,6 +17,27 @@ static bool   s_ok   = false;       // crypto self-test latch (fail-closed)
 static uint8_t s_lastCmd = CMD_NONE;
 static uint8_t s_lastRes = RES_OK;
 
+#if defined(BRIDGE_ROLE_CAMERA)
+// Phase 3: a small ring of recently-received operator messages (T_MSG), surfaced
+// by the portal. Written from the radioTask (handleInbound), read from loop()
+// (the portal) — single writer, the read is a value copy, so a plain ring is fine.
+static constexpr size_t MSG_RING = 12;
+static Message s_msgs[MSG_RING];
+static size_t  s_msgCount = 0;      // total stored (saturates at MSG_RING)
+static size_t  s_msgHead  = 0;      // index of the next write slot
+
+static void storeMessage(uint32_t from, const uint8_t *txt, size_t n) {
+    Message &m = s_msgs[s_msgHead];
+    m.fromId = from;
+    m.atSec  = (uint32_t)(millis() / 1000UL);
+    size_t k = (n < MSG_TEXT_MAX) ? n : MSG_TEXT_MAX;
+    if (k) memcpy(m.text, txt, k);
+    m.text[k] = '\0';
+    s_msgHead = (s_msgHead + 1) % MSG_RING;
+    if (s_msgCount < MSG_RING) s_msgCount++;
+}
+#endif
+
 // --- little-endian helpers --------------------------------------------------
 static inline void put32le(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
@@ -220,9 +241,23 @@ bool handleInbound(int radioIdx, const uint8_t *buf, size_t len) {
         }
         return true;
     }
+    if (type == T_MSG) {
+        storeMessage(sender, plain, plen);
+        SerialLog::logf("evt=C2MSG radio=%d from=0x%08lx seq=%lu len=%u\n",
+                        radioIdx, (unsigned long)sender, (unsigned long)seq, (unsigned)plen);
+        return true;
+    }
 #endif
 
 #if defined(BRIDGE_CAM_COMMANDER)
+    if (type == T_MSG) {
+        // Phase 3 bench: surface an operator message from the cam on the serial
+        // console (plain is decrypted but NOT NUL-terminated — bound with plen).
+        SerialLog::logf("evt=C2MSG radio=%d from=0x%08lx seq=%lu text=\"%.*s\"\n",
+                        radioIdx, (unsigned long)sender, (unsigned long)seq,
+                        (int)plen, (const char *)plain);
+        return true;
+    }
     if (type == T_ACK || type == T_BEACON || type == T_EVT) {
         SerialLog::logf("evt=C2RX radio=%d from=0x%08lx type=%u seq=%lu len=%u\n",
                         radioIdx, (unsigned long)sender, (unsigned)type,
@@ -321,7 +356,45 @@ void emitBeacon(int radioIdx) {
     }
 }
 
+// --- Phase 3 messaging (ring — portal-facing) --------------------------------
+
+size_t messageCount() { return s_msgCount; }
+
+const Message &message(int i) {
+    // i = 0 is the newest; newest sits one before the write head.
+    size_t idx = (s_msgHead + MSG_RING - 1 - (size_t)i) % MSG_RING;
+    return s_msgs[idx];
+}
+
 #endif  // BRIDGE_ROLE_CAMERA
+
+// --- Phase 3 messaging (send — role-shared) ----------------------------------
+// The cam's portal messages its master; the commander's bench 'm' key messages
+// the cam. Only shared statics are used, so one implementation serves both roles.
+
+bool sendMessage(int radioIdx, uint32_t peerId, const char *text) {
+    if (!s_ok || !s_emit || !text) return false;
+    int idx;
+    const CamC2Config::Peer *pr = CamC2Config::resolve(peerId, idx);
+    if (!pr) {
+        SerialLog::logf("evt=C2DROP reason=no-such-peer id=0x%08lx\n", (unsigned long)peerId);
+        return false;
+    }
+    size_t n = strlen(text);
+    if (n > MSG_TEXT_MAX) n = MSG_TEXT_MAX;
+
+    uint32_t myId  = myC2Id();
+    uint32_t txSeq = CamC2Config::nextTxSeq();
+    if (txSeq == CamC2Config::SEQ_INVALID) return false;
+
+    uint8_t frame[MAX_FRAME];
+    size_t fn = buildFrame(T_MSG, myId, peerId, txSeq, pr->psk,
+                           (const uint8_t *)text, n, frame, sizeof(frame));
+    if (!fn) return false;
+    SerialLog::logf("evt=C2TX radio=%d to=0x%08lx type=msg seq=%lu len=%u\n",
+                    radioIdx, (unsigned long)peerId, (unsigned long)txSeq, (unsigned)n);
+    return s_emit(radioIdx, frame, fn);
+}
 
 #if defined(BRIDGE_CAM_COMMANDER)
 

@@ -1018,6 +1018,13 @@ static void handleSave() {
     ESP.restart();
 }
 
+#if defined(BRIDGE_ROLE_CAMERA)
+// --- Phase 3 reuse entry points (see CaptivePortal.h) -----------------------
+WebServer &serverRef() { return s_http; }
+void serveConfigForm() { handleRoot(); }
+void serveConfigSave() { handleSave(); }
+#endif
+
 void begin() {
     char ssid[24];
     snprintf(ssid, sizeof(ssid), "LoRa-Bridge-%02X",

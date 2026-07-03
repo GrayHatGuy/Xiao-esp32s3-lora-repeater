@@ -47,6 +47,7 @@
 #include "SerialLog.h"         // one serialized console path (anti-garble)
 #include "CamC2.h"             // LoRaCam C2 codec (role-gated; empty in stock builds)
 #include "CameraNode.h"        // LoRaCam Phase 2: OV2640 capture (gated BRIDGE_ROLE_CAMERA)
+#include "CamPortal.h"         // LoRaCam Phase 3: always-on web portal (gated BRIDGE_ROLE_CAMERA)
 #include <esp_mac.h>
 
 // Build a LoraConfig for one radio (index 0..NUM_RADIOS-1) from the live
@@ -1858,6 +1859,13 @@ void setup()
     }
     if (spawned == 0)
         Serial.println("[setup] WARNING: no radios enabled — bridge idle.");
+
+#if defined(BRIDGE_ROLE_CAMERA)
+    // LoRaCam Phase 3: bring up the always-on web portal (WPA2 SoftAP + login).
+    // After the radios so WiFi init never contends with the SX1262 begin() probes;
+    // it self-spawns a task to pump HTTP, so loop() stays the bridge's.
+    CamPortal::begin();
+#endif
 }
 
 // ============================================================
@@ -1869,8 +1877,14 @@ void loop()
     // Bench commander: type a key in the serial monitor to send a signed C2 command
     // to the paired cam (BRIDGE_C2_PEER_ID), transmitted on R2 (the Custom 0x33 radio).
     //   s = snap photo    r = record 30 s    x = stop    g = get status
+    //   m = send a T_MSG operator message (Phase 3 — fills the cam portal's ring)
     while (Serial.available()) {
         int c = Serial.read();
+        if (c == 'm') {
+            CamC2::sendMessage(1 /*R2*/, (uint32_t)(BRIDGE_C2_PEER_ID),
+                               "bench msg from commander");
+            continue;
+        }
         uint8_t cmd = CamC2::CMD_NONE; uint8_t args[2]; size_t argLen = 0;
         switch (c) {
             case 's': cmd = CamC2::CMD_START_CAPTURE; break;
