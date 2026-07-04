@@ -1150,6 +1150,38 @@ static void ingestAndFanout(int srcIdx, const uint8_t *buf, size_t len)
     }
 #endif
 
+#if defined(BRIDGE_CUSTOM_REPEAT)
+    // LoRaCam multi-hop: a repeater raw-repeats a Custom (e.g. C2 command/ACK)
+    // frame to same-channel destination radios on OTHER frequencies, so a
+    // commander -> repeater -> cam hop works (the cam need not hear the commander
+    // directly). Reuses the MT/MC raw-repeat machinery; Custom bytes go out
+    // verbatim (rawRepeatForDest only rewrites Meshtastic relay fields). Loop-safe
+    // via the shared DedupCache. Gated by this build flag so the stock bridge
+    // stays byte-identical and its Custom->ABP path is untouched (a repeater build
+    // enables this flag and does not route Custom to a LoRaWAN radio).
+    if (BridgeConfig::radioProtocol(srcIdx) == BridgeConfig::PROTO_CUSTOM) {
+        if (DedupCache::seenAndRecord(DedupCache::hash(buf, len, 0))) {
+            blogf("ts=%lu evt=DROP radio=%s proto=Custom drop=loop-dup\n",
+                  (unsigned long)millis(), srcTag);
+            return;
+        }
+        bool any = false;
+        for (int j = 0; j < NR; j++) {
+            if (j == srcIdx) continue;
+            if (!g_radioEnabled[j] || !g_radio[j]) continue;
+            if (!(g_routeMask[srcIdx] & (1u << j))) continue;      // routing matrix
+            if (sameChannel(srcChan, g_chan[j])) {                 // freq-agnostic
+                rawRepeatForDest(g_chan[j], j, srcTag, /*srcId=*/0, buf, len);
+                any = true;
+            }
+        }
+        if (!any)
+            blogf("ts=%lu evt=DROP radio=%s proto=Custom drop=no-custom-repeat-dest\n",
+                  (unsigned long)millis(), srcTag);
+        return;
+    }
+#endif
+
 #if BRIDGE_LW_ENCODE
     // Custom raw-LoRa source (e.g. a proprietary weather station): no built-in
     // decoder, but if a destination radio is a keyed LoRaWAN ABP encoder, wrap

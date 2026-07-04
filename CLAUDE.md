@@ -159,6 +159,22 @@ defaults …` → `[CamPortal] SoftAP "LoRaCam-60" WPA2 up` with NO "entering ca
 ⚠️ **`pio run -t erase` wipes the WHOLE flash (app included) — always follow it with `-t upload`** (a bare erase
 left the board boot-looping `invalid header: 0xffffffff`).
 
+**✅ Multi-hop C2 (commander → repeater → cam) BUILT + PROVEN ON SILICON 2026-07-04.** The routing code did NOT
+raw-repeat Custom frames — a standard bridge ABP-wraps or DROPS them (`drop=no-lw-abp-dest`), so a repeater
+would drop a C2 command (the spec's "works for free" was unimplemented for the Custom/C2 path). Added a
+**flag-gated Custom same-channel raw-repeat** in `ingestAndFanout` (`#if defined(BRIDGE_CUSTOM_REPEAT)`, placed
+after the C2 hook and before the LW-ABP block): dedup, then `rawRepeatForDest` to same-channel routed dests,
+then return. Reuses the existing MT/MC raw-repeat machinery (`sameChannel` is freq-agnostic — [main.cpp:962];
+`rawRepeatForDest` leaves non-Meshtastic bytes verbatim). **Stock byte-identical (865781 B)** — the flag is off
+for every stock/cam/commander env. New bench envs: `bench_repeater_custom` (a plain bridge, R1 Custom 0x33 @905
+↔ R2 Custom 0x33 @906.875, channel "loracam", route R1↔R2, flag on, autosave) + `bench_camc2_cmdr_905`
+(commander moved to 905). **Bench (3 boards, frequency split so the cam on 906.875 CANNOT hear the commander on
+905):** cmdr `evt=C2TX` @905 → repeater `evt=RX R1 … QUEUE R1→R2 mode=raw` → cam `evt=C2CMD res=0` @906.875 →
+ACK relayed R2→R1 → cmdr `evt=C2RX`. **Negative control** (reset the repeater, send during its boot): cmdr
+transmits, cam SILENT; repeater up → full round-trip — so the cam is reachable ONLY via the repeater. Rig: cam
+COM14 (`bench_camc2`) + repeater COM13 + commander COM19, both repeater/commander = quad-rig hosts using their
+two LOCAL radios (co-proc idle). Driver `scratchpad/hop_test.py` + `neg_test.py`.
+
 ## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
 
 > **Shipped as v9.0** (`aa47c66`, tag `v9.0`, GitHub Latest, 4 master bins). The cycle below

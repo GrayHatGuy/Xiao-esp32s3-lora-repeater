@@ -67,9 +67,20 @@ defined(BRIDGE_CAM_COMMANDER)`.
   (like the :81 stream), `/photo` accepts a cookie OR the token and returns 401 (not a 302) on failure, with
   `Content-Disposition: attachment`. The card write itself was never wrong (proven by a hexdump of the on-card
   bytes — a lesson that ground truth beats code analysis).
-- **Not yet done:** securing first-flash provisioning on a product build (today an unconfigured `xiao_loracam`
-  provisions over the OLD open captive portal before the WPA2 portal exists), and the skipped/deferred bench
-  items (AP-passphrase change, Wave-5 soaks/specials).
+- **First-flash provisioning security (PROVEN on silicon 2026-07-04).** A camera build no longer exposes the
+  legacy OPEN captive portal (passwordless AP + unauthenticated `/save`); an unconfigured camera persists its
+  build-flag defaults and boots straight to the WPA2 + login portal. The non-camera stock path is the untouched
+  `#else` (byte-identical, 865781 B). Proven: a wiped `xiao_loracam` first-boots to `SoftAP … WPA2 up` with no
+  captive/open-AP line.
+- **Multi-hop C2 relay (commander → repeater → cam; PROVEN on silicon 2026-07-04).** The bridge did not
+  raw-repeat Custom frames (it ABP-wraps or drops them), so a repeater dropped C2 commands. Added a flag-gated
+  Custom same-channel raw-repeat (`BRIDGE_CUSTOM_REPEAT`) in `ingestAndFanout`, reusing the MT/MC raw-repeat
+  machinery; off for every stock/cam/commander env (stock stays byte-identical). New bench envs
+  `bench_repeater_custom` + `bench_camc2_cmdr_905`. Proven on a 3-board frequency-split rig (cam 906.875 can't
+  hear the commander on 905): command and ACK both relayed through the repeater, and a negative control (repeater
+  reset mid-test) confirmed the cam is reachable ONLY via the repeater.
+- **Not yet done:** the skipped/deferred bench items (AP-passphrase change, Wave-5 soaks/specials); promoting
+  `BRIDGE_CUSTOM_REPEAT` from a bench flag to a portal-configurable repeater option; the merge-to-main decision.
 
 ## v9.0 — four-radio bridge (2xiao_4sx1262)
 
