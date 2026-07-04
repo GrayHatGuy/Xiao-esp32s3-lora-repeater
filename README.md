@@ -12,7 +12,7 @@ Xiao ESP32S3 LoRa cross-band repeater — **two SX1262 radios on one Xiao**, or 
 
 ## Introduction / Background
 
-A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles. **Optionally, two of these boards can be linked over a short UART crossover to expand the bridge to four radios** — one Xiao acts as the *master* (its captive portal owns the config for all four radios) and the second as a *radio co-processor* — for a four-radio omnidirectional repeater. A single Xiao still runs as the original two-radio bridge with no changes; see **Parts**, **Wiring**, and the [config user manual](CONFIG-USER-MANUAL.md) for the four-radio option.
+A bidirectional LoRa mesh bridge running on a single Seeed Xiao ESP32S3 Sense with two Seeed Wio SX1262 shields stacked back-to-back — one mated to the Xiao's edge pins, the other to the 40-pin B2B header. The two radios share one SPI bus through a FreeRTOS mutex and each run in their own task pinned to a separate ESP32-S3 core, so they can transmit and receive in parallel on completely different RF profiles. **Optionally, two of these boards can be linked over a short UART crossover to expand the bridge to four radios** — one Xiao acts as the *master* (its captive portal owns the config for all four radios) and the second as a *radio co-processor* — for a four-radio omnidirectional repeater. A single Xiao still runs as the original two-radio bridge with no changes; see **Parts**, **Wiring**, and the [config user manual](CONFIG-USER-MANUAL.md) for the four-radio option. The same firmware also builds a **LoRa-commanded camera** — a XIAO ESP32S3 Sense (OV2640 + microSD) plus one edge SX1262, with an always-on WPA2 web portal, signed LoRa command-and-control, and photo/video capture to the SD; see **[LoRaCam](#loracam--lora-commanded-camera)**.
 
 Each radio carries its own protocol **and** its own channel. The bridge relays packets received on one radio out the other — *cross-protocol* (e.g. Meshtastic↔MeshCore) or *same-protocol between two channels* (e.g. a private channel bridged to the public one). Each radio runs one of six protocols: **Meshtastic**, **MeshCore**, **Reticulum**, **LoRaWAN** (keyless tap + keyed ABP uplink encoder), **Custom** (any user-defined RF plan / sync word), or **None** (radio disabled). Everything — region, per-radio protocol, RF plan (frequency, bandwidth, spreading factor, coding rate, sync word, TX power), channels and identity — is configured through the WiFi captive portal; see the **[config user manual](CONFIG-USER-MANUAL.md)** for a field-by-field walkthrough and compile-time preloading. A single `.bin` flashed with no build flags first-boots straight into the portal, so no PlatformIO build is needed to deploy.
 
@@ -40,7 +40,7 @@ Every received packet is decoded once, run through a content-hash loop/dup guard
 
 All crypto runs on the ESP-IDF's built-in mbedTLS — no extra library dependencies beyond `jgromes/RadioLib` (pinned `7.7.0`).
 
-**What's new in each release:** see [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. The latest is **v9.0 — the optional four-radio bridge**: link a second Xiao over a UART crossover for **four sub-GHz SX1262 radios** driven by a per-radio routing matrix, while a single Xiao stays **fully backwards-compatible** as the original two-radio bridge (R3/R4 default to disabled — see **[Wiring](#wiring)** and the [config user manual](CONFIG-USER-MANUAL.md)). It builds on the **v8.4 LoRaWAN ABP uplink encoder** ([v8.4 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan)) — **hardware-verified on air** (Meshtastic *and* MeshCore → valid ABP uplinks, decrypt-verified, MIC-valid; only live-ChirpStack ingestion remaining — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)) — and the **[v8.3.1 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3.1)** (Radio-2 V1.0/V1.1 fix). Design + bench docs: [`CONFIG-USER-MANUAL.md`](CONFIG-USER-MANUAL.md), [`BENCH-v9.0.md`](BENCH-v9.0.md) (four-radio bench), [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
+**What's new in each release:** see [`CHANGELOG.md`](CHANGELOG.md) for the full per-version changelog. The latest is **v10.0 — LoRaCam**: the same firmware now builds a **LoRa-commanded camera** — a XIAO ESP32S3 Sense (OV2640 + microSD) plus one hand-wired edge SX1262, with encrypted / sender-whitelisted / replay-protected LoRa command-and-control, signed photo & video capture to microSD, and an always-on WPA2 web portal (live MJPEG, snap/record, SD browser, config, pairing) — plus an optional multi-hop C2 relay. All camera code is build-flag-gated (`-DBRIDGE_ROLE_CAMERA`), so the stock bridge binaries stay **byte-identical**; see **[LoRaCam](#loracam--lora-commanded-camera)**, [`LORACAM-SPEC.md`](LORACAM-SPEC.md) and [`BENCH-PHASE3.md`](BENCH-PHASE3.md). Prior release **v9.0 — the optional four-radio bridge**: link a second Xiao over a UART crossover for **four sub-GHz SX1262 radios** driven by a per-radio routing matrix, while a single Xiao stays **fully backwards-compatible** as the original two-radio bridge (R3/R4 default to disabled — see **[Wiring](#wiring)** and the [config user manual](CONFIG-USER-MANUAL.md)). It builds on the **v8.4 LoRaWAN ABP uplink encoder** ([v8.4 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.4-ABP-lorawan)) — **hardware-verified on air** (Meshtastic *and* MeshCore → valid ABP uplinks, decrypt-verified, MIC-valid; only live-ChirpStack ingestion remaining — [`BENCH-RESULTS.md`](BENCH-RESULTS.md)) — and the **[v8.3.1 release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/tag/v8.3.1)** (Radio-2 V1.0/V1.1 fix). Design + bench docs: [`CONFIG-USER-MANUAL.md`](CONFIG-USER-MANUAL.md), [`BENCH-v9.0.md`](BENCH-v9.0.md) (four-radio bench), [`ABP-LORAWAN-SPEC.md`](ABP-LORAWAN-SPEC.md).
 
 **Per-protocol summary** — the bridge dispatches by **LoRa sync word**; each radio is assigned a protocol in the portal, and a received packet is decoded once, run through the content-hash loop/dup guard, re-encoded for the *other* radio's protocol, and queued for a CAD-gated non-blocking transmit. Source identity is preserved/reconstructed across the bridge (see [`V8.2-SPEC.md`](V8.2-SPEC.md)).
 
@@ -179,6 +179,80 @@ the serial log:
 [diag] R2 edge module = V1.0  (NSS=5 DIO1=2 RST=3 BUSY=4 RF_SW=6)
 ```
 
+## LoRaCam — LoRa-commanded camera
+
+**A camera that runs on this same firmware.** LoRaCam is a build variant (`-DBRIDGE_ROLE_CAMERA`) that turns a **XIAO ESP32S3 Sense** — the OV2640 camera, mic and microSD slot already on its rear B2B daughterboard — plus **one Wio SX1262 edge radio** into a LoRa-commanded, WiFi-viewable camera node. It reuses the bridge's radio stack, crypto, captive-config form and do-no-harm gating wholesale; every camera line is compiled only under the camera flag, so the stock bridge binaries stay **byte-identical** (`xiao_esp32s3` = 865781 B). Design of record: [`LORACAM-SPEC.md`](LORACAM-SPEC.md); bench evidence: [`BENCH-PHASE3.md`](BENCH-PHASE3.md), [`BENCH-CAMC2.md`](BENCH-CAMC2.md).
+
+Three ways to use it:
+
+- **Standalone** — the camera's own always-on **WPA2 web portal** does everything: live MJPEG video, snap / record / stop, browse the microSD, and the full radio/identity config form. No second device.
+- **Paired** — a LoRa **commander** (any spare XIAO + Wio SX1262 on the same Custom `0x33` channel) sends *signed* commands over LoRa when the camera is out of WiFi range. Encrypted, sender-whitelisted, replay-protected.
+- **Multi-hop** — a plain bridge relays those C2 frames commander → repeater → camera, so the camera needn't hear the commander directly (build flag `-DBRIDGE_CUSTOM_REPEAT`, off by default).
+
+**Command-and-control** rides an encrypted binary frame on a **Custom sync-word `0x33`** radio: AES-CTR encrypt-then-MAC with an 8-byte AES-CMAC, a per-peer PSK, and a monotonic replay counter — a valid tag *is* the whitelist. Commands are snap photo, record video, stop, get status, plus operator text messaging. Media itself never travels over LoRa (airtime/duty forbid it) — LoRa carries only the command, the result, and the filename; the portal serves the actual JPEG/AVI. A signed `snap` writes a real 800×600 JPEG to `/loracam/IMG_%05u.jpg` and returns the filename in the ACK; `record` writes an MJPEG-AVI to `/loracam/VID_%05u.avi` (~5 fps, plays in VLC). The microSD shares the radio's SPI bus (CS = GPIO21), serialized by the same mutex.
+
+### Parts — LoRaCam
+
+| Part | Notes |
+|------|-------|
+| [Seeed XIAO ESP32S3 **Sense**](https://www.seeedstudio.com/XIAO-ESP32S3-Sense-p-5639.html) | The Sense daughterboard carries the OV2640 camera, mic **and** microSD — snaps onto the rear 40-pin B2B connector, no wiring |
+| [Wio SX1262 for Xiao (edge-pin)](https://www.seeedstudio.com/Wio-SX1262-for-XIAO-p-6379.html) | The single LoRa radio (R2). **Hand-wired with flying leads**, not stacked — see below |
+| LoRa antenna (u.FL) tuned for your ISM band | **Fit it before power-on** — the node beacons on boot; TX into a missing antenna risks the PA |
+| microSD card | Photo/video storage; formatted FAT32 |
+| USB-C cable | Power, programming, serial monitor |
+
+> The B2B (Radio 1) slot is **occupied by the camera/mic bus** (GPIO38–42), so a camera build runs **Radio 1 disabled** and uses only the edge radio. The camera daughterboard and the edge radio's baseboard both want the XIAO's underside, so the edge radio can't stack — it is **hand-wired with 9 flying leads** to the XIAO's edge pins.
+
+### Wiring — LoRaCam (9 flying leads)
+
+Wire the **Wio SX1262 edge module** to the XIAO's edge pins. This is the **same R2 pin map** as the bridge's edge radio ([Wiring](#wiring) above) — flying leads instead of a stacked header. The map below is **V1.0**; for a **V1.1** module use the V1.1 Radio-2 column from the [Wiring table](#wiring) and build with `-DWIO_SX1262_REV=11`. Leave **RF_SW open** (unconnected). The camera, mic and microSD need **no wires** — they're on the rear daughterboard.
+
+| Wio SX1262 edge pad | → | XIAO pin (V1.0) | Notes |
+|---------------------|---|-----------------|-------|
+| 3V3  | → | 3V3         | |
+| GND  | → | GND         | |
+| SCK  | → | D8 (GPIO7)  | shared SPI bus (also the microSD's) |
+| MISO | → | D9 (GPIO8)  | shared |
+| MOSI | → | D10 (GPIO9) | shared |
+| NSS  | → | D4 (GPIO5)  | radio chip select |
+| BUSY | → | D3 (GPIO4)  | |
+| RST  | → | D2 (GPIO3)  | |
+| DIO1 | → | D1 (GPIO2)  | RX-done interrupt |
+| RF_SW | | *(leave open)* | not connected |
+
+> ⚠️ **Fit the u.FL antenna before first power-on** — the node TXes a beacon autonomously on boot. A camera-init inrush + TX ramp + SD write can brown-out the 3V3 rail; add bulk capacitance on 3V3 if you see resets.
+
+### Build & flash — LoRaCam
+
+The camera is its own PlatformIO env, `xiao_loracam`. A fresh board **first-boots straight into the WPA2 portal** (no open AP). For a **V1.1** edge module add `-DWIO_SX1262_REV=11`.
+
+```bash
+# V1.0 edge module (default):
+pio run -e xiao_loracam -t upload --upload-port COMx
+# then open the serial monitor to see the AP come up:
+pio device monitor --port COMx
+```
+
+> ⚠️ `pio run -t erase` wipes the **whole** flash (app included) — always follow it with `-t upload`.
+
+### Using it — the web portal
+
+1. **Join the camera's WiFi.** SSID `LoRaCam-XX` (`XX` = low byte of the MAC-derived node id), WPA2 passphrase `loracam-portal` (change it on the Security tab).
+2. **Open** `http://192.168.4.1` and **log in** — default `admin` / `loracam-admin`.
+3. **Home** — live MJPEG video, with **snap / record / stop / status** buttons and operator messaging.
+4. **Photos** — browse, view, download or delete the photos and videos on the microSD.
+5. **Config** — the full radio / identity form (the same one the bridge captive portal serves); **Pairing** — manage the trusted-commander whitelist; **Security** — change the WiFi passphrase and the portal login.
+
+The full field-by-field walkthrough — every portal screen, its build flag, and example setups — is in the [config user manual](CONFIG-USER-MANUAL.md).
+
+### Pairing a LoRa commander
+
+To command the camera over LoRa (out of WiFi range), pair a **commander** — any spare XIAO + Wio SX1262 on the same Custom `0x33` channel. On the camera's **Pairing** page, add the commander's 8-hex C2 id and the shared 32-hex PSK, and mark it **Primary**. On the commander, whitelist the camera with the **same** key. Thereafter the commander mints signed commands and the camera ACKs unicast to whoever sent them; beacons broadcast to any in-range whitelisted commander. For a bench pair, the `bench_camc2` (camera) and `bench_camc2_cmdr` (commander) envs come pre-provisioned — in the commander's serial monitor, type `s` = snap, `r` = record 30 s, `x` = stop, `g` = get-status, `m` = message. Bench record: [`BENCH-CAMC2.md`](BENCH-CAMC2.md).
+
+### Multi-hop
+
+A plain bridge can relay C2 frames **commander → repeater → camera**, so the camera never has to hear the commander directly. Build the relay with `-DBRIDGE_CUSTOM_REPEAT` (a flag-gated Custom same-channel raw-repeat, **off by default** so stock builds stay byte-identical) — set both of its radios to Custom `0x33` on the same channel, on different frequencies, and route `R1 ↔ R2`. Proven on a 3-board frequency-split rig (the camera on `906.875` cannot hear the commander on `905`; with the repeater down, the camera stays silent — a clean negative control). See [`BENCH-PHASE3.md`](BENCH-PHASE3.md) and the [config user manual](CONFIG-USER-MANUAL.md).
+
 ## Instructions
 
 > **Fastest path (no toolchain).** **First check your Radio 2 module's silkscreen revision** ([Radio 2 module revision](#radio-2-module-revision-v10-vs-v11) above) and download the **matching** `vanilla-factory` bin from the [latest release](https://github.com/GrayHatGuy/Xiao-esp32s3-lora-repeater/releases/latest): `…-v1.0-vanilla-factory.bin` for a **V1.0** Radio-2 module, `…-v1.1-vanilla-factory.bin` for **V1.1**. Connect both antennas and flash it to offset `0x0` — e.g. `esptool.py --chip esp32s3 write_flash 0x0 <bin>`, or drag it into the [ESP web flasher](https://espressif.github.io/esptool-js/) at address `0x0`. A fresh/erased device first-boots straight into the captive portal, so you can **skip to step 4** (bridge setup). The numbered steps below are for building from source.
@@ -229,6 +303,8 @@ the serial log:
 ## Roadmap
 
 ### Other future work
+
+- [x] ~~**v10.0: LoRaCam — a LoRa-commanded camera.**~~ — **done**; specced in [`LORACAM-SPEC.md`](LORACAM-SPEC.md). A XIAO ESP32S3 Sense (OV2640 + microSD) + one hand-wired edge SX1262 becomes a camera node: encrypted / sender-whitelisted / replay-protected C2 over Custom `0x33` (AES-CTR encrypt-then-MAC, 8-byte CMAC, per-peer PSK, monotonic replay counter), signed photo (`/loracam/IMG_*.jpg`) & video (`/loracam/VID_*.avi`) capture to microSD, an always-on **WPA2 web portal** (live MJPEG + snap/record/stop + SD browser + the config form + pairing + messaging), secure first-flash, and optional multi-hop C2 relay (`-DBRIDGE_CUSTOM_REPEAT`). All build-flag-gated (`-DBRIDGE_ROLE_CAMERA`) → stock bridge binaries **byte-identical**. Bench-proven on silicon ([`BENCH-PHASE3.md`](BENCH-PHASE3.md), [`BENCH-CAMC2.md`](BENCH-CAMC2.md)). See **[LoRaCam](#loracam--lora-commanded-camera)**.
 
 - [x] ~~More Meshtastic portnums bridged: `POSITION_APP` and `TELEMETRY_APP`~~ — **done**; both decoded and re-emitted as text under the existing bridge marker. Individually gated by `BRIDGE_MT_POSITION` / `BRIDGE_MT_TELEMETRY` build flags. `NODEINFO_APP` is decoded into the NodeDB and intentionally not bridged as text.
 - [x] ~~MeshCore private-channel support~~ — **done** via `MeshCoreConfig.{h,cpp}`; override `BRIDGE_MC_KEY_HEX` and `BRIDGE_MC_CHANNEL_NAME` in `platformio.ini` to point the bridge at any MC channel. The hash byte is computed automatically from `SHA-256(key)[0]`.

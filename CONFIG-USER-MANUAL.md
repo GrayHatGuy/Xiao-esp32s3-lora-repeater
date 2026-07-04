@@ -22,6 +22,7 @@ and [§8](#8-preloading-with-compile-time-build-flags) shows ready-made example 
 7. [Example setups](#7-example-setups)
 8. [Preloading with compile-time build flags](#8-preloading-with-compile-time-build-flags)
 9. [Other build flags (reference)](#9-other-build-flags-reference)
+10. [LoRaCam — camera setup, pairing & the web portal](#10-loracam--camera-setup-pairing--the-web-portal)
 
 ---
 
@@ -532,7 +533,170 @@ sanity, and TX-power range).
 
 ---
 
-*This manual covers firmware v9.0. For protocol/routing internals see
+## 10. LoRaCam — camera setup, pairing & the web portal
+
+**LoRaCam** is the same bridge firmware built as a **LoRa-commanded camera**: a Seeed
+XIAO ESP32-S3 **Sense** (OV2640 camera + mic + microSD on its rear B2B daughterboard)
+plus **one** Wio-SX1262 "for XIAO" **edge** radio hand-wired to the XIAO's edge pins.
+Because the Sense camera board occupies the underside B2B connector, **Radio 1 is
+disabled** (its GPIO38–42 pins are the camera/mic bus) and the camera build uses only
+the single **edge radio (Radio 2)**. Wiring is in the [README](README.md#loracam--lora-commanded-camera)
+(the nine flying leads follow the same **R2 V1.0 pin map** as the bridge's edge radio,
+just soldered instead of stacked); this section covers the camera's **web portal and
+its LoRa command channel** only.
+
+Everything the bridge portal does — the radio/identity form in [§3](#3-top-frame--identity-region--bridge-behaviour)–[§4](#4-per-radio-configuration) — is still here,
+reached from the camera portal's **Config** tab. What is new is an **always-on secure
+portal** with live video, on-SD photos/videos, operator messaging, and a
+trusted-commander whitelist.
+
+> All camera code is gated behind `-DBRIDGE_ROLE_CAMERA`, so the stock bridge builds
+> ([`xiao_esp32s3`](platformio.ini)) stay byte-identical — the camera is a build of the
+> same firmware, not a fork.
+
+### 10.1 Two ways to run a LoRaCam
+
+| Mode | What talks to the camera | When to use it |
+|---|---|---|
+| **Standalone** | The camera's **own WPA2 web portal** — view live video, snap/record, browse the SD card, change config. No second device. | You (or a phone/laptop) are within WiFi range of the camera. |
+| **Paired** | A LoRa **commander** (any spare XIAO + Wio-SX1262 on the same `0x33` channel) sends **signed** commands over LoRa. | The camera is out of WiFi range; you command it over the mesh instead. |
+
+The two modes coexist — a paired camera still runs its portal. **Multi-hop** ([§10.8](#108-multi-hop--commander--repeater--camera)) extends *paired* mode through a repeater when the commander can't hear the camera directly.
+
+### 10.2 Reaching the LoRaCam portal
+
+A camera build boots **straight into its always-on portal** (unlike the bridge's
+one-shot captive portal in [§1](#1-reaching-the-config-portal) — the camera portal is
+always up, and it is **WPA2-secured**, not open).
+
+1. Join the WiFi network **`LoRaCam-XX`** (`XX` = the low byte of the node ID, unique
+   per board) with the WPA2 passphrase **`loracam-portal`**.
+2. Browse to **`http://192.168.4.1`**. Any request is redirected to the portal (captive).
+3. Log in — default **`admin` / `loracam-admin`**.
+
+> **⚠ Change both defaults on first login.** The WPA2 passphrase and the portal login
+> are set on the **Security** tab ([§10.6](#106-security-tab--change-the-wpa2-passphrase--login)).
+> The build-flag defaults are `BRIDGE_PORTAL_AP_PASS` (WiFi), `BRIDGE_PORTAL_USER` /
+> `BRIDGE_PORTAL_PASS` (login) — see [§8](#8-preloading-with-compile-time-build-flags)
+> for how build flags seed first-boot values. First-flash is secure by design: an
+> unconfigured camera comes up on the **WPA2 + login** portal, never an open AP.
+
+The portal has five tabs: **Home · Photos · Config · Pairing · Security**.
+
+### 10.3 Home tab — live video, capture & messaging
+
+| Control | What it does |
+|---|---|
+| **Live video** | A live **MJPEG** stream from the OV2640 (served on port `:81`; the page embeds it as an `<img>`). |
+| **Snap** | Takes a single **800×600 JPEG**, saved to microSD as `/loracam/IMG_%05u.jpg`. |
+| **Record** | Records **MJPEG-AVI** video (~5 fps) to `/loracam/VID_%05u.avi` (plays in VLC). |
+| **Stop** | Ends an in-progress recording early. |
+| **Status** | Shows camera/SD state (SD free %, ready state) — the same status the LoRa `get-status` command returns. |
+| **Messaging** | Send/receive short operator text messages to a paired commander (see the `T_MSG` note in [§10.7](#107-pairing-tab--trust-a-commander)). |
+
+Snap works **during** a live stream (the camera serializes stream frames and captures
+through a mutex). File numbering is **reboot-safe** (it resumes from the highest
+existing file) so power-cycling never overwrites a shot.
+
+### 10.4 Photos tab — browse the SD card
+
+Lists everything under **`/loracam/`** newest-first — photos (`IMG_*.jpg`) **and** videos (`VID_*.avi`):
+
+- **View** a photo inline, or **download** either media type.
+- **Delete** a file (with a confirm).
+
+Downloads carry a one-time token so the browser's file-download handoff can't lose your
+login session. If there is **no microSD card**, snap/record still return a live JPEG
+over LoRa/stream but nothing is written and the Photos list is empty.
+
+### 10.5 Config tab — the radio & identity form
+
+The Config tab is the **same captive-portal form** documented in
+[§3](#3-top-frame--identity-region--bridge-behaviour)–[§4](#4-per-radio-configuration),
+served verbatim inside the portal (one source of truth — nothing to re-learn). Use it to
+set the camera's identity, region, and the **edge radio (Radio 2)** RF plan.
+
+- **Radio 1 is fixed to `None`** on a camera build (its pins are the camera bus) — leave
+  it disabled; a save re-forces it off automatically. Configure only **Radio 2**.
+- The camera's C2 command channel rides a **Custom** radio on sync word **`0x33`** (see
+  [§4.6, Custom](#46-custom)); leave Radio 2 on that plan unless you know why you're changing it.
+- **Saving reboots**, exactly as in [§6](#6-saving) — radios initialise once at boot.
+
+### 10.6 Security tab — change the WPA2 passphrase & login
+
+Two independent secrets, both changed here:
+
+| Field | What it protects |
+|---|---|
+| **WiFi passphrase** | The WPA2 AP (`LoRaCam-XX`). |
+| **Portal login** | The `admin` username/password gate on the portal itself. |
+
+Both are stored **hashed** in the camera's own `camportal` NVS namespace (a salted
+SHA-256 for the login) — this is separate from the radio config, so changing them does
+**not** disturb your saved radio/identity settings. **Saving here reboots the portal.**
+
+> There is **no open-AP password recovery** — a lost portal password is recovered by
+> **re-flashing** (by design). Note `pio run -t erase` wipes the whole flash including
+> the app; always follow it with `-t upload`.
+
+### 10.7 Pairing tab — trust a commander
+
+Pairing is how *standalone* becomes *paired*. It manages the **trusted-commander
+whitelist** (the `c2auth` list) — the set of LoRa senders the camera will accept
+commands from.
+
+**To pair a commander:**
+
+| Field | Value |
+|---|---|
+| **C2 id** | The commander's **8-hex** identity (e.g. `0000c0de`). |
+| **PSK** | The shared **32-hex** pre-shared key. |
+| **Primary** | Tick to mark this the primary commander. |
+
+Then, on the **commander**, whitelist *this camera* with the **same** 8-hex id (the
+camera's) and the **same** 32-hex PSK. The key must match on both ends — it is the
+shared secret for the encrypted link.
+
+**How the LoRa command channel is secured** (high level — full design in
+[`LORACAM-SPEC.md`](LORACAM-SPEC.md)):
+
+- **Encrypted, then authenticated.** Each C2 frame is AES-CTR encrypted and carries an
+  8-byte **AES-CMAC** tag; keys are derived from the per-peer PSK. A frame that fails the
+  MAC is dropped before it is acted on (encrypt-then-MAC, constant-time compare).
+- **Sender-whitelisted.** Only ids on the `c2auth` list are accepted; an unknown sender
+  is refused (`reason=not-whitelisted`).
+- **Replay-protected.** A monotonic per-peer sequence counter, persisted across reboots,
+  rejects replayed or stale frames.
+
+Commands available over this channel: **snap photo, record video, stop, get status**,
+plus operator **text messaging** (the `T_MSG` frame surfaced on the Home tab).
+
+> **Bench builds** seed a pairing for you so you can test two boards without the portal:
+> `bench_camc2` (camera, id `0xCA00`, peer `0xC0DE`) and `bench_camc2_cmdr` (commander,
+> id `0xC0DE`, peer `0xCA00`). In the **commander's** serial monitor:
+> `s`=snap · `r`=record 30 s · `x`=stop · `g`=get-status · `m`=send a message. The
+> provisioning flags are `BRIDGE_C2_MY_ID` / `BRIDGE_C2_PEER_ID` / `BRIDGE_C2_PEER_KEY` /
+> `BRIDGE_C2_PEER_PRIMARY` (see [§8](#8-preloading-with-compile-time-build-flags)).
+
+### 10.8 Multi-hop — commander → repeater → camera
+
+When the commander can't hear the camera directly, put a **repeater** between them: a
+plain bridge that **raw-repeats** the Custom `0x33` C2 frames so
+`commander → repeater → camera` works, ACKs included. This is a flag-gated feature —
+build the repeater with **`-DBRIDGE_CUSTOM_REPEAT`** (off by default, so stock bridge
+builds stay byte-identical).
+
+- The repeater is a normal 2-radio bridge on channel `loracam`, both radios **Custom,
+  sync `0x33`**, routed `R1 ↔ R2` ([§4.6](#46-custom), [§4.9](#49-routing-matrix--bridge-received-traffic-to)) — typically on **different frequencies** on each side so the hops don't collide.
+- No key is configured on the repeater — it forwards the **encrypted** C2 bytes
+  verbatim; only the camera and its paired commander hold the PSK.
+- Ready-made bench envs: **`bench_repeater_custom`** (the repeater, R1 `0x33`@905 ↔ R2
+  `0x33`@906.875) and **`bench_camc2_cmdr_905`** (the commander moved to 905 MHz for a
+  frequency-split test proving the camera is reachable *only* via the repeater).
+
+---
+
+*This manual covers firmware v10.0 (LoRaCam camera + the v9.0 four-radio bridge). For protocol/routing internals see
 [README.md](README.md#routing--protocol-support-current-functionality); for the
 LoRaWAN ABP encoder design see [ABP-LORAWAN-SPEC.md](ABP-LORAWAN-SPEC.md); for
 ChirpStack integration see [tools/chirpstack/README.md](tools/chirpstack/README.md).*
