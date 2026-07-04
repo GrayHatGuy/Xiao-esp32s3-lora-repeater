@@ -148,6 +148,17 @@ on-card header zeros from stdio seek-write reasoning); the actual SD hexdump pro
 fine and the bug was elsewhere — trust the bytes over the analysis. Deferred: NVS-DoS telemetry surface. **NOT
 merged to main — owner-gated.**
 
+**✅ First-flash provisioning security FIXED + PROVEN ON SILICON 2026-07-04 (red-team's top open finding).** A
+camera build no longer exposes the legacy OPEN captive portal (passwordless `WiFi.softAP(ssid)` + unauthenticated
+`/save`). In `main.cpp` the first-flash block is now `#if defined(BRIDGE_ROLE_CAMERA)`: an unconfigured camera
+PERSISTS its build-flag defaults and boots straight to the always-on **WPA2 + login** portal (CamPortal) instead
+of `CaptivePortal::begin()`; the non-camera stock path is the untouched `#else` (byte-identical, both v1.0+v1.1
+still 865781 B). Recovery of a lost portal password = re-flash (no open-AP recovery, by design). **Proven:** a
+wiped `xiao_loracam` (product, no autosave) first-boots `[setup] camera first-boot: persisted build-flag
+defaults …` → `[CamPortal] SoftAP "LoRaCam-60" WPA2 up` with NO "entering captive portal" line and no open AP.
+⚠️ **`pio run -t erase` wipes the WHOLE flash (app included) — always follow it with `-t upload`** (a bare erase
+left the board boot-looping `invalid header: 0xffffffff`).
+
 ## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
 
 > **Shipped as v9.0** (`aa47c66`, tag `v9.0`, GitHub Latest, 4 master bins). The cycle below

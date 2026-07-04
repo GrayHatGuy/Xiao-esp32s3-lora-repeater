@@ -1626,6 +1626,23 @@ void setup()
     //                       button is physically hidden under the radio shield.
     // The portal call is blocking — it ESP.restart()s once the form saves —
     // so the radio init below it never runs while the portal is up.
+#if defined(BRIDGE_ROLE_CAMERA)
+    // SECURITY (camera build): a camera must NEVER expose the legacy captive
+    // portal — its SoftAP is passwordless (WiFi.softAP(ssid) with no key) and its
+    // /save handler is unauthenticated, so a first-flash camera would be
+    // provisionable over the air by anyone (set node id, radios, channel keys).
+    // Instead: a camera has sensible R2 build-flag defaults, so on first boot we
+    // persist them and boot straight to the ALWAYS-ON WPA2 + login portal
+    // (CamPortal), which provisions everything securely. Reconfigure any time from
+    // that portal's Config tab; there is no open-AP recovery by design (recover a
+    // lost password by re-flashing). The default portal creds are documented and
+    // CamPortal logs a loud change-them warning at boot.
+    if (!BridgeConfig::isConfigured()) {
+        BridgeConfig::save();
+        Serial.println("[setup] camera first-boot: persisted build-flag defaults — "
+                       "provision securely via the WPA2 portal (change the default password!)");
+    }
+#else
     {
         pinMode(0, INPUT_PULLUP);
         if (!BridgeConfig::isConfigured()) {
@@ -1656,6 +1673,7 @@ void setup()
         }
         Serial.println("[setup] proceeding to bridge mode");
     }
+#endif
 
     // Per-radio enable (protocol != None).
     for (int i = 0; i < NR; i++) {
