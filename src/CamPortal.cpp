@@ -158,7 +158,8 @@ static bool requireAuth() {
 }
 
 static String navBar() {
-    return F("<div class=\"nav\"><a href=\"/\">Home</a><a href=\"/config\">Config</a>"
+    return F("<div class=\"nav\"><a href=\"/\">Home</a><a href=\"/photos\">Photos</a>"
+             "<a href=\"/config\">Config</a>"
              "<a href=\"/peers\">Pairing</a><a href=\"/sec\">Security</a>"
              "<a href=\"/logout\">Log out</a></div><hr>");
 }
@@ -353,6 +354,78 @@ static void handleMsgPost() {
     srv().send(ok ? 200 : 500, "text/plain", ok ? "sent" : "send-failed");
 }
 
+// --- Photos tab (Phase 2b — browse/view/delete the microSD captures) --------
+static void handlePhotosGet() {
+    if (!requireAuth()) return;
+    String b = F("<h1>Photos</h1>");
+    b += navBar();
+    if (!CameraNode::sdPresent()) {
+        b += F("<div class=\"warn\">No microSD card mounted. Insert a FAT32 card "
+               "(32 GB or smaller) and reboot.</div>");
+        sendPage(b);
+        return;
+    }
+    static const size_t CAP = 48;
+    CameraNode::PhotoInfo list[CAP];
+    size_t n = CameraNode::photoList(list, CAP);
+    b += F("<p class=\"t\">Card: ");
+    b += String((int)CameraNode::sdFreePct());
+    b += F("% free \xc2\xb7 newest ");
+    b += String((int)n);
+    b += F(" shown (cap ");
+    b += String((int)CAP);
+    b += F(").</p>");
+    if (n == 0) {
+        b += F("<div class=\"t\">No photos yet \xe2\x80\x94 use Snap on the Home "
+               "page or a LoRa capture command.</div>");
+    }
+    for (size_t i = 0; i < n; i++) {
+        char nm[20], kb[16];
+        snprintf(nm, sizeof(nm), "IMG_%05u.jpg", (unsigned)list[i].idx);
+        snprintf(kb, sizeof(kb), "%.1f KB", list[i].bytes / 1024.0f);
+        b += F("<div class=\"msg\"><a href=\"/photo?i=");
+        b += String((unsigned)list[i].idx);
+        b += F("\" target=\"_blank\">");
+        b += nm;
+        b += F("</a> <span class=\"t\">");
+        b += kb;
+        b += F("</span> <form style=\"display:inline\" method=\"POST\" action=\"/photodel\" "
+               "onsubmit=\"return confirm('Delete ");
+        b += nm;
+        b += F("?')\"><input type=\"hidden\" name=\"i\" value=\"");
+        b += String((unsigned)list[i].idx);
+        b += F("\"><button style=\"padding:.1em .6em;background:#a00\">delete</button>"
+               "</form></div>");
+    }
+    sendPage(b);
+}
+
+static void handlePhotoGet() {
+    if (!requireAuth()) return;
+    uint32_t idx = (uint32_t)srv().arg("i").toInt();
+    uint8_t *buf = nullptr;
+    size_t len = CameraNode::photoRead(idx, &buf);
+    if (!len) {
+        srv().send(404, "text/plain", "no such photo");
+        return;
+    }
+    char nm[20];
+    snprintf(nm, sizeof(nm), "IMG_%05u.jpg", (unsigned)idx);
+    srv().sendHeader("Content-Disposition", String("inline; filename=") + nm);
+    srv().setContentLength(len);
+    srv().send(200, "image/jpeg", "");
+    srv().sendContent((const char *)buf, len);
+    free(buf);
+}
+
+static void handlePhotoDelete() {
+    if (!requireAuth()) return;
+    uint32_t idx = (uint32_t)srv().arg("i").toInt();
+    CameraNode::photoDelete(idx);
+    srv().sendHeader("Location", "/photos");
+    srv().send(302, "text/plain", "deleted");
+}
+
 // --- config (reuse the captive form, behind login) --------------------------
 static void handleConfigGet()  { if (!requireAuth()) return; CaptivePortal::serveConfigForm(); }
 static void handleConfigPost() { if (!requireAuth()) return; CaptivePortal::serveConfigSave(); }
@@ -536,6 +609,9 @@ void begin() {
     h.on("/msg",    HTTP_POST, handleMsgPost);
     h.on("/peers",  HTTP_GET,  handlePeersGet);
     h.on("/peers",  HTTP_POST, handlePeersPost);
+    h.on("/photos",   HTTP_GET,  handlePhotosGet);
+    h.on("/photo",    HTTP_GET,  handlePhotoGet);
+    h.on("/photodel", HTTP_POST, handlePhotoDelete);
     h.on("/sec",    HTTP_GET,  handleSecGet);
     h.on("/sec",    HTTP_POST, handleSecPost);
     h.onNotFound(handleNotFound);

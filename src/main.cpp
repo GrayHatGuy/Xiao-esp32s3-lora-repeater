@@ -1708,6 +1708,13 @@ void setup()
     // 0x2A then 0x00). Deasserting here is safe and idempotent with the ctor.
     pinMode(R1_NSS, OUTPUT); digitalWrite(R1_NSS, HIGH);
     pinMode(R2_NSS, OUTPUT); digitalWrite(R2_NSS, HIGH);
+#if defined(BRIDGE_ROLE_CAMERA)
+    // Phase 2b: the microSD shares the bus (CS=GPIO21). Park its CS HIGH too, for
+    // the same reason — a floating SD CS could drive MISO during a radio's begin()
+    // and corrupt detection. The card is mounted (CameraNode::beginStorage) only
+    // AFTER the radios are up, below.
+    pinMode(21, OUTPUT); digitalWrite(21, HIGH);
+#endif
 
     // Echo the compiled-in Radio-2 edge-module pin map so a serial log always
     // self-identifies which board revision this firmware was built for. If
@@ -1861,6 +1868,11 @@ void setup()
         Serial.println("[setup] WARNING: no radios enabled — bridge idle.");
 
 #if defined(BRIDGE_ROLE_CAMERA)
+    // Phase 2b: mount the microSD on the shared SPI bus now the radios are
+    // detected + listening (so the card never drives MISO during radio begin()).
+    // Every SD op holds spiMutex; graceful no-op if no card is inserted.
+    CameraNode::beginStorage(spiMutex);
+
     // LoRaCam Phase 3: bring up the always-on web portal (WPA2 SoftAP + login).
     // After the radios so WiFi init never contends with the SX1262 begin() probes;
     // it self-spawns a task to pump HTTP, so loop() stays the bridge's.

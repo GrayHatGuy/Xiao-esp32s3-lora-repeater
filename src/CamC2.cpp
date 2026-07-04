@@ -277,8 +277,8 @@ bool handleInbound(int radioIdx, const uint8_t *buf, size_t len) {
 static size_t writeStatus(uint8_t *out, size_t cap) {
     if (cap < 8) return 0;
     uint32_t uptime = (uint32_t)(millis() / 1000UL);
-    out[0] = 100;                          // battery %  (Phase 2: real ADC)
-    out[1] = 100;                          // SD free %  (Phase 2: real SD)
+    out[0] = 100;                          // battery %  (future: real ADC)
+    out[1] = CameraNode::sdFreePct();      // SD free % (0xFF = no card mounted)
     put32le(out + 2, uptime);
     out[6] = s_lastCmd;
     out[7] = s_lastRes;

@@ -24,7 +24,23 @@ namespace CameraNode {
 
 void   begin();        // esp_camera_init for the XIAO S3 Sense; sets ready()
 bool   ready();        // true if the OV2640 initialised OK
-bool   sdPresent();    // Phase 2b: a mounted microSD on the shared SPI bus
+
+// Phase 2b: mount the microSD (CS=GPIO21) on the SHARED SPI bus. Every SD
+// operation holds busMutex (the radios' spiMutex) — the card and the SX1262
+// coexist on SCK/MISO/MOSI. Call from setup() AFTER SPI.begin() + the mutex
+// exist. No card / mount failure degrades gracefully (snaps stay in PSRAM).
+void    beginStorage(SemaphoreHandle_t busMutex);
+bool    sdPresent();   // true if a card is mounted
+uint8_t sdFreePct();   // cached free % (0-100), or 0xFF = no card (status sentinel)
+
+// Phase 2b — portal Photos tab. Photos are addressed by their NUMBER (the %05u in
+// /loracam/IMG_%05u.jpg), never by a caller-supplied path, so the web layer cannot
+// be steered outside /loracam. All three hold the bus mutex internally.
+struct PhotoInfo { uint32_t idx; uint32_t bytes; };
+size_t photoList(PhotoInfo *out, size_t cap);      // newest-first; returns count
+// Read photo #idx into a heap/PSRAM buffer (caller free()s *bufOut). 0 = not found.
+size_t photoRead(uint32_t idx, uint8_t **bufOut);
+bool   photoDelete(uint32_t idx);
 
 // Capture one JPEG. Returns the byte length (0 on failure). Fills nameOut with a
 // filename (a real SD path once Phase 2b lands, else a synthetic descriptor) and

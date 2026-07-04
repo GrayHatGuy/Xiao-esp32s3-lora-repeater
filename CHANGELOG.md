@@ -2,9 +2,9 @@
 
 ## Unreleased — LoRaCam (branch `lora_cam_xiao`, NOT merged to main)
 
-**Status: Phase 1 + Phase 2a proven on silicon 2026-06-28; Phase 3 (always-on web portal) BENCH-PROVEN on
-silicon 2026-07-03 — all gating tests pass (`BENCH-PHASE3.md`; branch `lora_cam_xiao`, NOT merged —
-owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
+**Status: Phase 1 + Phase 2a proven on silicon 2026-06-28; Phase 3 (always-on web portal) BENCH-PROVEN
+2026-07-03 — all gating tests pass (`BENCH-PHASE3.md`); Phase 2b photo-save + Photos tab PROVEN 2026-07-04
+(branch `lora_cam_xiao`, NOT merged — owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
 + microSD on the rear B2B 40-pin) + a perimeter-pin **Wio-SX1262** edge radio. Commands ride an encrypted,
 sender-whitelisted, replay-protected binary frame on a `PROTO_CUSTOM` radio (sync `0x33`); design of record
 [`LORACAM-SPEC.md`](LORACAM-SPEC.md), bench guide [`BENCH-CAMC2.md`](BENCH-CAMC2.md). **Stock repeater builds
@@ -47,8 +47,16 @@ defined(BRIDGE_CAM_COMMANDER)`.
   frames instead of ending (a frozen `<img>` needed a manual refresh). ④ The portal reloads the stream on
   `visibilitychange` (Android kills the MJPEG connection on screen sleep with no error event). Stock build
   verified byte-identical (865781 B) after all four.
-- **Not yet done:** microSD persistence (Phase 2b — save the JPEG + return the real filename over the shared SPI
-  bus + `spiMutex`), video record (the `record` command is still a stub), securing first-flash provisioning on a
+- **Phase 2b — microSD photo persistence + a portal Photos tab (PROVEN on silicon 2026-07-04).** The microSD
+  (CS=GPIO21) mounts on the SHARED radio SPI bus (`CameraNode::beginStorage(spiMutex)`, SD CS parked HIGH during
+  radio detection like the radios' own NSS); every SD operation holds `spiMutex`, lock order camera→bus. A snap
+  now writes `/loracam/IMG_%05u.jpg` and the LoRa ACK carries the REAL path (the PSRAM descriptor remains the
+  no-card fallback; a short write is deleted, not left as a stub file); numbering resumes across reboots by
+  directory scan; the status beacon's SD-free byte is real (`0xFF` = no card). New portal **Photos** tab: newest-
+  first listing (cap 48), view/download, delete-with-confirm — photos are addressed by index, never by a caller
+  path. Proven: 16 GB card, two LoRa captures → `IMG_00001/00002.jpg` (~16.7 KB), reboot resumed at 00003, both
+  JPEGs viewed from the portal. Stock build still byte-identical (865781 B; SD/FS are camera-gated).
+- **Not yet done:** video record (the `record` command is still a stub), securing first-flash provisioning on a
   product build (today an unconfigured `xiao_loracam` provisions over the OLD open captive portal before the WPA2
   portal exists), and the skipped/deferred bench items (AP-passphrase change, Wave-5 soaks/specials).
 
