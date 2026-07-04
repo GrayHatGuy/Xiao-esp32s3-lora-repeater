@@ -22,6 +22,7 @@ static const int      SD_CS = 21;               // Sense microSD chip-select (GP
 static SemaphoreHandle_t s_busMutex = nullptr;  // the radios' spiMutex (shared bus)
 static bool     s_sdOk      = false;
 static uint32_t s_nextIdx   = 1;                // next /loracam/IMG_%05u.jpg
+static uint32_t s_nextVid   = 1;                // next /loracam/VID_%05u.avi
 static uint8_t  s_sdFreePct = 0xFF;             // 0xFF sentinel = no card
 
 static bool busLock(uint32_t ms) {
@@ -49,7 +50,7 @@ void beginStorage(SemaphoreHandle_t busMutex) {
     }
     if (!SD.exists("/loracam")) SD.mkdir("/loracam");
 
-    // Resume numbering across reboots: highest existing IMG_<n> + 1.
+    // Resume numbering across reboots: highest existing IMG_<n> / VID_<n> + 1.
     File dir = SD.open("/loracam");
     if (dir && dir.isDirectory()) {
         File e;
@@ -60,6 +61,8 @@ void beginStorage(SemaphoreHandle_t busMutex) {
             unsigned idx;
             if (sscanf(base, "IMG_%u", &idx) == 1 && idx >= s_nextIdx)
                 s_nextIdx = idx + 1;
+            else if (sscanf(base, "VID_%u", &idx) == 1 && idx >= s_nextVid)
+                s_nextVid = idx + 1;
             e.close();
         }
         dir.close();
@@ -77,8 +80,9 @@ uint8_t sdFreePct() { return s_sdFreePct; }
 
 // --- Photos tab helpers (see CameraNode.h) -----------------------------------
 
-static void photoPath(uint32_t idx, char *out, size_t cap) {
-    snprintf(out, cap, "/loracam/IMG_%05u.jpg", (unsigned)idx);
+static void mediaPath(uint32_t idx, bool vid, char *out, size_t cap) {
+    snprintf(out, cap, vid ? "/loracam/VID_%05u.avi" : "/loracam/IMG_%05u.jpg",
+             (unsigned)idx);
 }
 
 size_t photoList(PhotoInfo *out, size_t cap) {
@@ -92,17 +96,19 @@ size_t photoList(PhotoInfo *out, size_t cap) {
             const char *base = strrchr(nm, '/');
             base = base ? base + 1 : nm;
             unsigned idx;
-            if (sscanf(base, "IMG_%u", &idx) == 1) {
-                PhotoInfo pi = { (uint32_t)idx, (uint32_t)e.size() };
-                if (n < cap) {
-                    out[n++] = pi;
-                } else {
-                    // Full: replace the smallest index so the newest `cap` survive.
-                    size_t mn = 0;
-                    for (size_t i = 1; i < n; i++)
-                        if (out[i].idx < out[mn].idx) mn = i;
-                    if (pi.idx > out[mn].idx) out[mn] = pi;
-                }
+            uint8_t vid = 0;
+            if (sscanf(base, "IMG_%u", &idx) == 1)      vid = 0;
+            else if (sscanf(base, "VID_%u", &idx) == 1) vid = 1;
+            else { e.close(); continue; }
+            PhotoInfo pi = { (uint32_t)idx, (uint32_t)e.size(), vid };
+            if (n < cap) {
+                out[n++] = pi;
+            } else {
+                // Full: replace the smallest index so the newest `cap` survive.
+                size_t mn = 0;
+                for (size_t i = 1; i < n; i++)
+                    if (out[i].idx < out[mn].idx) mn = i;
+                if (pi.idx > out[mn].idx) out[mn] = pi;
             }
             e.close();
         }
@@ -119,41 +125,222 @@ size_t photoList(PhotoInfo *out, size_t cap) {
     return n;
 }
 
-size_t photoRead(uint32_t idx, uint8_t **bufOut) {
-    if (bufOut) *bufOut = nullptr;
-    if (!s_sdOk || !bufOut || !busLock(2000)) return 0;
+// Streaming read (portal task is the only caller — one open file at a time).
+static File s_rd;
+
+size_t photoOpen(uint32_t idx, bool vid) {
+    if (!s_sdOk || !busLock(2000)) return 0;
     char path[32];
-    photoPath(idx, path, sizeof(path));
-    File f = SD.open(path, FILE_READ);
-    size_t len = 0;
-    if (f) {
-        size_t sz = f.size();
-        // A JPEG from this sensor is tens of KB; 2 MB is a sanity ceiling, not a
-        // target. Buffer from PSRAM when present so big reads never squeeze heap.
-        if (sz > 0 && sz <= 2 * 1024 * 1024) {
-            uint8_t *buf = (uint8_t *)(psramFound() ? ps_malloc(sz) : malloc(sz));
-            if (buf && f.read(buf, sz) == sz) {
-                *bufOut = buf;
-                len = sz;
-            } else if (buf) {
-                free(buf);
-            }
-        }
-        f.close();
-    }
+    mediaPath(idx, vid, path, sizeof(path));
+    if (s_rd) s_rd.close();
+    s_rd = SD.open(path, FILE_READ);
+    size_t sz = s_rd ? s_rd.size() : 0;
     busUnlock();
-    return len;
+    return sz;
 }
 
-bool photoDelete(uint32_t idx) {
+size_t photoReadChunk(uint8_t *dst, size_t cap) {
+    if (!s_rd || !dst || !busLock(2000)) return 0;
+    size_t n = s_rd.read(dst, cap);
+    busUnlock();
+    return n;
+}
+
+void photoClose() {
+    if (!s_rd) return;
+    if (busLock(2000)) { s_rd.close(); busUnlock(); }
+}
+
+bool photoDelete(uint32_t idx, bool vid) {
     if (!s_sdOk || !busLock(2000)) return false;
     char path[32];
-    photoPath(idx, path, sizeof(path));
+    mediaPath(idx, vid, path, sizeof(path));
     bool ok = SD.remove(path);
     if (ok) refreshFreePct();
     busUnlock();
     if (ok) SerialLog::logf("[CameraNode] deleted %s\n", path);
     return ok;
+}
+
+// --- Phase 2b: MJPEG-AVI video recorder ---------------------------------------
+// A minimal single-stream AVI: RIFF header (placeholders patched at finalize) +
+// 'movi' 00dc chunks (one JPEG frame each, even-padded) + an idx1 index. Plays in
+// VLC / desktop players / phones. Frames are paced at ~5 fps — comfortable for a
+// 4 MHz shared SPI bus with the radios and the portal stream still live.
+
+static const uint32_t REC_FRAME_MS  = 200;      // ~5 fps target
+static const size_t   REC_MAX_FRAMES = 3000;    // hard cap (~10 min at 5 fps)
+
+static volatile bool s_recActive = false;
+static volatile bool s_recStop   = false;
+static uint16_t  s_recSecs = 30;
+static uint32_t  s_recIdx  = 0;                 // VID number being written
+
+struct IdxEnt { uint32_t off, len; };           // '00dc' offset (rel. 'movi') + size
+
+static void put32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void putFcc(uint8_t *p, const char *f) { memcpy(p, f, 4); }
+
+// Fixed 224-byte header up to and including the 'movi' LIST fourcc. Placeholder
+// fields (sizes / counts / timing) are patched in recFinalize().
+static void writeAviHeader(File &f, uint16_t w, uint16_t h) {
+    uint8_t hd[224];
+    memset(hd, 0, sizeof(hd));
+    putFcc(hd + 0, "RIFF");                       // [4] riffSize @4 (patched)
+    putFcc(hd + 8, "AVI ");
+    putFcc(hd + 12, "LIST"); put32(hd + 16, 192); putFcc(hd + 20, "hdrl");
+    putFcc(hd + 24, "avih"); put32(hd + 28, 56);
+    // avih: usPerFrame@32 (patch), flags@44=HASINDEX, totalFrames@48 (patch),
+    // streams@56=1, width@64, height@68.
+    put32(hd + 44, 0x10);
+    put32(hd + 56, 1);
+    put32(hd + 64, w); put32(hd + 68, h);
+    putFcc(hd + 88, "LIST"); put32(hd + 92, 116); putFcc(hd + 96, "strl");
+    putFcc(hd + 100, "strh"); put32(hd + 104, 56);
+    putFcc(hd + 108, "vids"); putFcc(hd + 112, "MJPG");
+    // strh: dwScale@128 (patch = usPerFrame), dwRate@132 = 1e6 -> fps = rate/scale,
+    // dwLength@140 (patch = frames), rcFrame right/bottom @ 160/162.
+    put32(hd + 132, 1000000);
+    hd[160] = (uint8_t)w; hd[161] = (uint8_t)(w >> 8);
+    hd[162] = (uint8_t)h; hd[163] = (uint8_t)(h >> 8);
+    putFcc(hd + 164, "strf"); put32(hd + 168, 40);
+    put32(hd + 172, 40);                          // biSize
+    put32(hd + 176, w); put32(hd + 180, h);
+    hd[184] = 1;                                  // biPlanes
+    hd[186] = 24;                                 // biBitCount
+    putFcc(hd + 188, "MJPG");                     // biCompression
+    put32(hd + 192, (uint32_t)w * h * 3);         // biSizeImage (nominal)
+    putFcc(hd + 212, "LIST");                     // [216] moviSize (patched)
+    putFcc(hd + 220, "movi");
+    f.write(hd, sizeof(hd));
+}
+
+static void recTask(void *) {
+    char path[32];
+    mediaPath(s_recIdx, true, path, sizeof(path));
+
+    IdxEnt *idx = (IdxEnt *)(psramFound() ? ps_malloc(REC_MAX_FRAMES * sizeof(IdxEnt))
+                                          : malloc(REC_MAX_FRAMES * sizeof(IdxEnt)));
+    File f;
+    bool open = false;
+    if (idx && busLock(3000)) {
+        f = SD.open(path, FILE_WRITE);
+        open = (bool)f;
+        busUnlock();
+    }
+    if (!open) {
+        SerialLog::logf("[CameraNode] REC: open %s failed\n", path);
+        if (idx) free(idx);
+        s_recActive = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uint32_t frames = 0, moviBytes = 4;           // 'movi' fourcc counts in the LIST
+    uint16_t fw = 0, fh = 0;
+    bool hdrDone = false;
+    const uint32_t t0 = millis();
+    const uint32_t deadline = t0 + (uint32_t)s_recSecs * 1000UL;
+    SerialLog::logf("[CameraNode] REC start %s (%us)\n", path, (unsigned)s_recSecs);
+
+    while (!s_recStop && millis() < deadline && frames < REC_MAX_FRAMES) {
+        uint32_t tf = millis();
+        if (lockCamera(500)) {
+            camera_fb_t *fb = esp_camera_fb_get();
+            if (fb) {
+                if (busLock(2000)) {
+                    if (!hdrDone) {
+                        fw = (uint16_t)fb->width; fh = (uint16_t)fb->height;
+                        writeAviHeader(f, fw, fh);
+                        hdrDone = true;
+                    }
+                    uint32_t clen = fb->len;
+                    uint8_t ch[8];
+                    putFcc(ch, "00dc"); put32(ch + 4, clen);
+                    idx[frames].off = moviBytes;              // rel. 'movi' fourcc
+                    idx[frames].len = clen;
+                    f.write(ch, 8);
+                    f.write(fb->buf, clen);
+                    if (clen & 1) { uint8_t z = 0; f.write(&z, 1); clen++; }
+                    moviBytes += 8 + clen;
+                    frames++;
+                    busUnlock();
+                }
+                esp_camera_fb_return(fb);
+            }
+            unlockCamera();
+        }
+        uint32_t spent = millis() - tf;
+        if (spent < REC_FRAME_MS) vTaskDelay(pdMS_TO_TICKS(REC_FRAME_MS - spent));
+    }
+
+    // Finalize: patch sizes/counts, append idx1, close. Zero frames -> delete.
+    // NEVER use f.size() mid-write here: it can lag the stdio write buffer
+    // (bench finding — the recorded riffSize came out short and VLC rejected
+    // the file). Every byte written is counted arithmetically instead, and the
+    // write position is already at EOF for the idx1 append (no seek needed).
+    uint32_t elapsedMs = millis() - t0;
+    if (busLock(5000)) {
+        if (frames == 0) {
+            f.close();
+            SD.remove(path);
+        } else {
+            uint32_t usPerFrame = (elapsedMs * 1000UL) / frames;
+            uint8_t e16[16];
+            putFcc(e16, "idx1"); put32(e16 + 4, frames * 16);
+            f.write(e16, 8);
+            for (uint32_t i = 0; i < frames; i++) {
+                putFcc(e16, "00dc"); put32(e16 + 4, 0x10);    // AVIIF_KEYFRAME
+                put32(e16 + 8, idx[i].off); put32(e16 + 12, idx[i].len);
+                f.write(e16, 16);
+            }
+            // header 224 + movi chunks (moviBytes counts the 'movi' fourcc's 4) +
+            // idx1 header 8 + 16 per entry.
+            uint32_t total = 224 + (moviBytes - 4) + 8 + frames * 16;
+            uint8_t v4[4];
+            put32(v4, total - 8);       f.seek(4);   f.write(v4, 4);   // riffSize
+            put32(v4, usPerFrame);      f.seek(32);  f.write(v4, 4);   // avih usPerFrame
+            put32(v4, frames);          f.seek(48);  f.write(v4, 4);   // avih totalFrames
+            put32(v4, usPerFrame);      f.seek(128); f.write(v4, 4);   // strh dwScale
+            put32(v4, frames);          f.seek(140); f.write(v4, 4);   // strh dwLength
+            put32(v4, moviBytes);       f.seek(216); f.write(v4, 4);   // movi LIST size
+            f.close();
+            refreshFreePct();
+        }
+        busUnlock();
+    }
+    if (idx) free(idx);
+    SerialLog::logf("[CameraNode] REC done %s: %u frames in %lu ms (%.1f fps) %s\n",
+                    path, (unsigned)frames, (unsigned long)elapsedMs,
+                    frames ? (frames * 1000.0f) / elapsedMs : 0.0f,
+                    frames ? "" : "— empty, removed");
+    s_recActive = false;
+    vTaskDelete(NULL);
+}
+
+bool recordActive() { return s_recActive; }
+void recordStop()   { s_recStop = true; }
+
+bool recordStart(uint16_t seconds, char *nameOut, size_t nameCap) {
+    if (nameCap) nameOut[0] = '\0';
+    if (!s_ok || !s_sdOk || s_recActive) return false;
+    if (seconds < 5)   seconds = 5;
+    if (seconds > 300) seconds = 300;
+    s_recSecs = seconds;
+    s_recIdx  = s_nextVid++;
+    s_recStop = false;
+    s_recActive = true;
+    char path[32];
+    mediaPath(s_recIdx, true, path, sizeof(path));
+    if (xTaskCreatePinnedToCore(recTask, "CamRec", 6144, nullptr, 1, nullptr, 0) != pdPASS) {
+        s_recActive = false;
+        return false;
+    }
+    snprintf(nameOut, nameCap, "%s", path);
+    return true;
 }
 
 bool lockCamera(uint32_t ms) {

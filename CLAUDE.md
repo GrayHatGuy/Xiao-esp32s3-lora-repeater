@@ -19,7 +19,7 @@ Multi-protocol LoRa mesh bridge on Seeed Xiao ESP32-S3. Bridges Meshtastic, Mesh
 |---|---|
 | **Production line** | `main` @ **v9.0** (`aa47c66`, tag `v9.0`, **GitHub Latest**, shipped 2026-06-20) — **"four-radio bridge (2xiao_4sx1262)"**: two Xiao over a UART crossover → 4 sub-GHz SX1262 radios (master R1/R2 + co-processor R3/R4) with a per-radio routing matrix; **fully backwards-compatible** (single Xiao = original 2-radio bridge; `BridgeConfig` schema **v4→v5** migrates 2-radio configs). Lineage: v8.2/v8.2.1 LBT/CAD → v8.3 keyless LoRaWAN → v8.3.1 R2 V1.0/V1.1 → v8.4 ABP encoder → v8.4.1 UI_UM_config → **v9.0 2xiao_4sx1262**. |
 | **Active cycle** | **none — v9.0 SHIPPED 2026-06-20** (cycle was "v8.5 2xiao_4sx1262"; renamed v8.5→v9.0 at release since R2→R4 is a major change). `dev-2xiao-4sx1262` ff-merged → `main`@`aa47c66`; tag `v9.0` force-moved off the old LR1121 commit (16329b4→aa47c66) + pushed; GitHub release **Latest** w/ **8 bins** — 4 master (`xiao-dual-sx1262-v9.0-{v1.0,v1.1}-{app,vanilla-factory}`) + 4 co-proc (`xiao-coproc-sx1262-v9.0-{v1.0,v1.1}-{app,factory}`); release notes carry download + web-flasher + build-from-source for both boards. **Next: OTAA** (own release; A3/B3 bench + the deferred garble/auto-resend eyeball ride along there). |
-| **Active branch (NOT main)** | **`lora_cam_xiao`** — LoRaCam (camera + LoRa-commanded edge radio); Phase 1 + 2a proven 2026-06-28; **Phase 3 portal BENCH-PROVEN 2026-07-03 (all gating tests, `BENCH-PHASE3.md`); Phase 2b photo-save + portal Photos tab PROVEN 2026-07-04** (LoRa snap → real `/loracam/IMG_xxxxx.jpg` on a 16 GB card → viewed from the portal). **NOT merged to main** (owner-gated). Open: video record (stub) · first-flash provisioning = open AP (follow-up). See the LoRaCam section below. |
+| **Active branch (NOT main)** | **`lora_cam_xiao`** — LoRaCam (camera + LoRa-commanded edge radio); Phase 1 + 2a proven 2026-06-28; **Phase 3 portal BENCH-PROVEN 2026-07-03 (all gating tests, `BENCH-PHASE3.md`); Phase 2b COMPLETE + PROVEN 2026-07-04** (LoRa snap → real `/loracam/IMG_xxxxx.jpg`; LoRa record → MJPEG-AVI `/loracam/VID_xxxxx.avi` that plays in VLC; portal Photos tab view/download/delete). **NOT merged to main** (owner-gated). Open: first-flash provisioning = open AP (follow-up); merge-to-main call. See the LoRaCam section below. |
 | **Investigation branch** | `lr1121-phase1` |
 | **Branch tip** | Check with `git rev-parse lr1121-phase1` |
 | **Snapshot tag (shared with Seeed)** | `lr1121-bringup-2026-05-26` — mutable, force-push acceptable; bump after material commits |
@@ -121,8 +121,7 @@ build is an OPEN AP** (unconfigured boot enters the old passwordless `CaptivePor
 portal exists; bench autosave masks it — fix rides a follow-up cycle). **Bench = DONE 2026-07-03, all gating
 tests pass** (see the BENCH-PROVEN block above + `BENCH-PHASE3.md` results).
 
-**✅ Phase 2b PHOTO-SAVE + PHOTOS TAB PROVEN ON SILICON 2026-07-04** (video record still a stub — the one
-remaining 2b piece). microSD (CS=GPIO21) mounts on the SHARED SPI bus via `CameraNode::beginStorage(spiMutex)`
+**✅ Phase 2b COMPLETE + PROVEN ON SILICON 2026-07-04 — photo save, video record, and the portal Photos tab.** microSD (CS=GPIO21) mounts on the SHARED SPI bus via `CameraNode::beginStorage(spiMutex)`
 (called after radio bring-up; the SD CS is parked HIGH next to the radios' NSS parks so it can't corrupt radio
 detection); **every SD op holds `spiMutex`**; lock order is always camera→bus (only `snap()` nests, no
 inversion). Snap now writes `/loracam/IMG_%05u.jpg` and returns the REAL path in the LoRa ACK (PSRAM descriptor
@@ -132,8 +131,22 @@ tab:** list newest-first (cap 48, by-INDEX addressing — the web layer never to
 (`/photo?i=N`, bus-locked read into PSRAM then served off-bus), delete with confirm. **Proven on the bench:**
 16 GB card mounted (`14893 MB, 99% free`); 2 LoRa `s` commands → `saved /loracam/IMG_0000{1,2}.jpg` (~16.7 KB)
 with the real path in the ACK; reboot → `next=IMG_00003.jpg`; owner VIEWED both JPEGs from the Photos tab
-(validity proof). Cam env 1050797 B (31.4%); **stock still 865781 B byte-identical** (SD/FS libs are
-camera-gated). Deferred: NVS-DoS telemetry surface. **NOT merged to main — owner-gated.**
+(validity proof). **Video record (`r`/CMD_RECORD):** an async `recTask` captures JPEG frames ~5 fps into a
+standard **MJPEG-AVI** `/loracam/VID_%05u.avi` (hand-built RIFF: avih/strh/strf + `00dc` chunks + `idx1`); the
+ACK returns the filename immediately, `x`/CMD_STOP finalizes early; Photos tab lists videos beside photos.
+**Proven:** `r`→`x` wrote a 61-frame/12 s clip; the on-card 900 KB AVI passed a strict RIFF validator with all
+61 frames decoding as 800×600 JPEGs, and it plays in VLC. Cam env 1054881 B (31.6%); **stock still 865781 B
+byte-identical** (SD/FS camera-gated).
+**Two bench-found fixes (shipped + re-verified):** ① video finalize used `f.size()` mid-write (lags the stdio
+buffer) → total is now counted arithmetically. ② **Portal media DOWNLOAD lost its session cookie** — a `.avi`
+forces a browser download handoff (Android) that dropped the cookie, so `/photo` 302'd to `/login` and the
+**login HTML got saved as the .avi** (this was the "corrupt 1.3 KB download", NOT a recorder bug — proven by a
+card hexdump). Fix: media links carry a `?sid=` token (like the :81 stream), `/photo` accepts cookie OR token
+(`requireAuthMedia`) and returns **401 not 302** so a failed download errors loudly; `Content-Disposition:
+attachment`. ⚠️ **Debugging lesson:** a multi-agent code audit confidently mis-diagnosed the recorder (predicted
+on-card header zeros from stdio seek-write reasoning); the actual SD hexdump proved the header patches commit
+fine and the bug was elsewhere — trust the bytes over the analysis. Deferred: NVS-DoS telemetry surface. **NOT
+merged to main — owner-gated.**
 
 ## ⭐ v8.5 → SHIPPED as v9.0 "2xiao_4sx1262" (2026-06-20)
 

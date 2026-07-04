@@ -157,6 +157,20 @@ static bool requireAuth() {
     return false;
 }
 
+// Auth for media GETs the browser may fetch via its download manager, which can
+// drop the session cookie (a .avi forces a download handoff — observed on Android:
+// the cookie-less request 302'd to /login and the login HTML got saved as the
+// file). Accept EITHER a live cookie session OR a valid ?sid= query token — the
+// same scheme the :81 stream uses. On failure, 401 (not a 302) so a bad download
+// fails loudly instead of silently saving the login page.
+static bool requireAuthMedia() {
+    if (currentSession()) return true;
+    String q = srv().arg("sid");
+    if (q.length() == 32 && sessionValid(q.c_str())) return true;
+    srv().send(401, "text/plain", "login required");
+    return false;
+}
+
 static String navBar() {
     return F("<div class=\"nav\"><a href=\"/\">Home</a><a href=\"/photos\">Photos</a>"
              "<a href=\"/config\">Config</a>"
@@ -326,14 +340,18 @@ static void handleCmd() {
     uint8_t res = CamC2::executeCommand(cmd, al ? args : nullptr, al, ack, sizeof(ack), ackLen);
 
     String out = "result=" + String(res) + (res == 0 ? " (ok)" : " (error)");
-    if (cmd == CamC2::CMD_START_CAPTURE && res == 0 && ackLen > 1) {
-        out += "\nfile=";
+    if ((cmd == CamC2::CMD_START_CAPTURE || cmd == CamC2::CMD_RECORD ||
+         cmd == CamC2::CMD_STOP) && res == 0 && ackLen > 1) {
+        out += (cmd == CamC2::CMD_STOP) ? "\nstate=" : "\nfile=";
         for (size_t i = 1; i < ackLen; i++) out += (char)ack[i];
+        if (cmd == CamC2::CMD_RECORD)
+            out += "\n(recording in the background — see Photos when done)";
     } else if (cmd == CamC2::CMD_GET_STATUS && ackLen >= 8) {
         uint32_t up = (uint32_t)ack[3] | ((uint32_t)ack[4] << 8) |
                       ((uint32_t)ack[5] << 16) | ((uint32_t)ack[6] << 24);
-        out += "\nbattery=" + String(ack[1]) + "%  sdFree=" + String(ack[2]) +
-               "%  uptime=" + String(up) + "s  lastCmd=" + String(ack[7]);
+        out += "\nbattery=" + String(ack[1]) + "%  sd=" +
+               (ack[2] == 0xFF ? String("none") : String(ack[2]) + "% free") +
+               "  uptime=" + String(up) + "s  lastCmd=" + String(ack[7]);
     }
     srv().send(200, "text/plain", out);
 }
@@ -357,6 +375,7 @@ static void handleMsgPost() {
 // --- Photos tab (Phase 2b — browse/view/delete the microSD captures) --------
 static void handlePhotosGet() {
     if (!requireAuth()) return;
+    String sid = cookieSid();     // embed in media links (survives a download handoff)
     String b = F("<h1>Photos</h1>");
     b += navBar();
     if (!CameraNode::sdPresent()) {
@@ -380,11 +399,19 @@ static void handlePhotosGet() {
                "page or a LoRa capture command.</div>");
     }
     for (size_t i = 0; i < n; i++) {
+        bool vid = list[i].vid != 0;
         char nm[20], kb[16];
-        snprintf(nm, sizeof(nm), "IMG_%05u.jpg", (unsigned)list[i].idx);
-        snprintf(kb, sizeof(kb), "%.1f KB", list[i].bytes / 1024.0f);
+        snprintf(nm, sizeof(nm), vid ? "VID_%05u.avi" : "IMG_%05u.jpg",
+                 (unsigned)list[i].idx);
+        if (list[i].bytes >= 1024 * 1024)
+            snprintf(kb, sizeof(kb), "%.1f MB", list[i].bytes / (1024.0f * 1024.0f));
+        else
+            snprintf(kb, sizeof(kb), "%.1f KB", list[i].bytes / 1024.0f);
         b += F("<div class=\"msg\"><a href=\"/photo?i=");
         b += String((unsigned)list[i].idx);
+        if (vid) b += F("&v=1");
+        b += F("&sid=");
+        b += sid;
         b += F("\" target=\"_blank\">");
         b += nm;
         b += F("</a> <span class=\"t\">");
@@ -394,6 +421,8 @@ static void handlePhotosGet() {
         b += nm;
         b += F("?')\"><input type=\"hidden\" name=\"i\" value=\"");
         b += String((unsigned)list[i].idx);
+        b += F("\"><input type=\"hidden\" name=\"v\" value=\"");
+        b += vid ? F("1") : F("0");
         b += F("\"><button style=\"padding:.1em .6em;background:#a00\">delete</button>"
                "</form></div>");
     }
@@ -401,27 +430,46 @@ static void handlePhotosGet() {
 }
 
 static void handlePhotoGet() {
-    if (!requireAuth()) return;
+    if (!requireAuthMedia()) return;
     uint32_t idx = (uint32_t)srv().arg("i").toInt();
-    uint8_t *buf = nullptr;
-    size_t len = CameraNode::photoRead(idx, &buf);
+    bool vid = srv().arg("v") == "1";
+    size_t len = CameraNode::photoOpen(idx, vid);
     if (!len) {
-        srv().send(404, "text/plain", "no such photo");
+        srv().send(404, "text/plain", "no such file");
         return;
     }
     char nm[20];
-    snprintf(nm, sizeof(nm), "IMG_%05u.jpg", (unsigned)idx);
-    srv().sendHeader("Content-Disposition", String("inline; filename=") + nm);
+    snprintf(nm, sizeof(nm), vid ? "VID_%05u.avi" : "IMG_%05u.jpg", (unsigned)idx);
+    // 'attachment' so a .avi the browser can't render inline saves with the right
+    // name instead of a confused view. setContentLength => a real Content-Length
+    // header (not chunked), so the client gets exactly `len` bytes.
+    srv().sendHeader("Content-Disposition", String("attachment; filename=") + nm);
     srv().setContentLength(len);
-    srv().send(200, "image/jpeg", "");
-    srv().sendContent((const char *)buf, len);
-    free(buf);
+    srv().send(200, vid ? "video/x-msvideo" : "image/jpeg", "");
+    // Serve in chunks: the bus mutex is held only inside each read, so a slow WiFi
+    // client never pins the radios' SPI bus for the whole transfer. A 0-length read
+    // is EOF or a transient bus-lock miss — retry briefly rather than truncating the
+    // file (photoReadChunk already waits up to 2 s for the lock per call).
+    uint8_t *buf = (uint8_t *)malloc(8192);
+    if (buf) {
+        size_t left = len;
+        int stall = 0;
+        while (left) {
+            size_t n = CameraNode::photoReadChunk(buf, 8192);
+            if (!n) { if (++stall > 10) break; continue; }
+            stall = 0;
+            srv().sendContent((const char *)buf, n);
+            left -= (n <= left) ? n : left;
+        }
+        free(buf);
+    }
+    CameraNode::photoClose();
 }
 
 static void handlePhotoDelete() {
     if (!requireAuth()) return;
     uint32_t idx = (uint32_t)srv().arg("i").toInt();
-    CameraNode::photoDelete(idx);
+    CameraNode::photoDelete(idx, srv().arg("v") == "1");
     srv().sendHeader("Location", "/photos");
     srv().send(302, "text/plain", "deleted");
 }

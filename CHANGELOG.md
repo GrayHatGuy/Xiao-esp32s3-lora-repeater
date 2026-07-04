@@ -3,8 +3,8 @@
 ## Unreleased — LoRaCam (branch `lora_cam_xiao`, NOT merged to main)
 
 **Status: Phase 1 + Phase 2a proven on silicon 2026-06-28; Phase 3 (always-on web portal) BENCH-PROVEN
-2026-07-03 — all gating tests pass (`BENCH-PHASE3.md`); Phase 2b photo-save + Photos tab PROVEN 2026-07-04
-(branch `lora_cam_xiao`, NOT merged — owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
+2026-07-03 — all gating tests pass (`BENCH-PHASE3.md`); Phase 2b (photos + video record + Photos tab)
+PROVEN 2026-07-04 (branch `lora_cam_xiao`, NOT merged — owner-gated).** A LoRa-commanded camera built on the v9.0 bridge: a XIAO ESP32-S3 **Sense** (OV2640
 + microSD on the rear B2B 40-pin) + a perimeter-pin **Wio-SX1262** edge radio. Commands ride an encrypted,
 sender-whitelisted, replay-protected binary frame on a `PROTO_CUSTOM` radio (sync `0x33`); design of record
 [`LORACAM-SPEC.md`](LORACAM-SPEC.md), bench guide [`BENCH-CAMC2.md`](BENCH-CAMC2.md). **Stock repeater builds
@@ -56,9 +56,20 @@ defined(BRIDGE_CAM_COMMANDER)`.
   first listing (cap 48), view/download, delete-with-confirm — photos are addressed by index, never by a caller
   path. Proven: 16 GB card, two LoRa captures → `IMG_00001/00002.jpg` (~16.7 KB), reboot resumed at 00003, both
   JPEGs viewed from the portal. Stock build still byte-identical (865781 B; SD/FS are camera-gated).
-- **Not yet done:** video record (the `record` command is still a stub), securing first-flash provisioning on a
-  product build (today an unconfigured `xiao_loracam` provisions over the OLD open captive portal before the WPA2
-  portal exists), and the skipped/deferred bench items (AP-passphrase change, Wave-5 soaks/specials).
+- **Phase 2b — video record (PROVEN on silicon 2026-07-04).** The `record` command is no longer a stub: an async
+  `recTask` captures JPEG frames at ~5 fps into a standard MJPEG-AVI (`/loracam/VID_%05u.avi`, hand-built RIFF
+  with an `idx1` index); the LoRa ACK returns the filename immediately, `stop` finalizes early, and the Photos
+  tab lists/serves videos alongside photos. A `r`→`x` clip (61 frames / 12 s) validated with a strict RIFF parser
+  (all 61 frames decode as 800×600 JPEGs) and plays in VLC. Two bench-found fixes shipped: (1) the finalize used
+  `f.size()` mid-write (lags the stdio buffer) → the total is now counted arithmetically; (2) **portal media
+  downloads lost their session cookie** — a browser `.avi` download handoff (Android) dropped the cookie, so
+  `/photo` redirected to `/login` and saved the login HTML as the file; media links now carry a `?sid=` token
+  (like the :81 stream), `/photo` accepts a cookie OR the token and returns 401 (not a 302) on failure, with
+  `Content-Disposition: attachment`. The card write itself was never wrong (proven by a hexdump of the on-card
+  bytes — a lesson that ground truth beats code analysis).
+- **Not yet done:** securing first-flash provisioning on a product build (today an unconfigured `xiao_loracam`
+  provisions over the OLD open captive portal before the WPA2 portal exists), and the skipped/deferred bench
+  items (AP-passphrase change, Wave-5 soaks/specials).
 
 ## v9.0 — four-radio bridge (2xiao_4sx1262)
 

@@ -309,16 +309,25 @@ uint8_t executeCommand(uint8_t cmd, const uint8_t *args, size_t argLen,
             break;
         }
         case CMD_RECORD: {
-            uint16_t dur = (argLen >= 2) ? (uint16_t)(args[0] | (args[1] << 8)) : 0;
-            const char *fn = "stub.avi";
+            uint16_t dur = (argLen >= 2) ? (uint16_t)(args[0] | (args[1] << 8)) : 30;
+            if (!CameraNode::ready() || !CameraNode::sdPresent()) { res = RES_NOCAM; break; }
+            if (CameraNode::recordActive())                       { res = RES_BUSY;  break; }
+            char fn[40];
+            if (!CameraNode::recordStart(dur, fn, sizeof(fn)))    { res = RES_ERR;   break; }
             size_t fl = strlen(fn);
-            if (fl + 1 <= ackCap) { memcpy(ackOut + 1, fn, fl); extra = fl; }
-            SerialLog::logf("[CamC2] (stub) RECORD %us -> %s\n", (unsigned)dur, fn);
+            if (1 + fl <= ackCap) { memcpy(ackOut + 1, fn, fl); extra = fl; }
+            SerialLog::logf("[CamC2] RECORD %us -> %s (async)\n", (unsigned)dur, fn);
             break;
         }
-        case CMD_STOP:
-            SerialLog::logf("[CamC2] (stub) STOP\n");
+        case CMD_STOP: {
+            bool was = CameraNode::recordActive();
+            if (was) CameraNode::recordStop();
+            const char *st = was ? "rec-stop" : "idle";
+            size_t fl = strlen(st);
+            if (1 + fl <= ackCap) { memcpy(ackOut + 1, st, fl); extra = fl; }
+            SerialLog::logf("[CamC2] STOP (%s)\n", st);
             break;
+        }
         case CMD_SET_QUALITY:
         case CMD_SET_FRAMESIZE:
             if (argLen < 1) res = RES_BADARG;
